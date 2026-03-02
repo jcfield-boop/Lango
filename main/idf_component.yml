@@ -9,3 +9,6 @@ dependencies:
   ## mDNS for langoustine.local hostname resolution
   espressif/mdns:
     version: ">=1.2.0"
+  ## UVC (USB Video Class) driver for USB webcam support
+  espressif/usb_host_libuvc:
+    version: ">=0.1.0"

@@ -14,11 +14,14 @@
 #include "audio/stt_client.h"
 #include "audio/tts_client.h"
 #include "telegram/telegram_bot.h"
+#include "camera/uvc_camera.h"
+#include "memory/psram_alloc.h"
 
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <dirent.h>
+#include <sys/stat.h>
 #include "esp_log.h"
 #include "esp_console.h"
 #include "esp_system.h"
@@ -558,6 +561,48 @@ static int cmd_cron_start(int argc, char **argv)
     return 1;
 }
 
+/* --- capture command --- */
+static int cmd_capture(int argc, char **argv)
+{
+    if (!uvc_camera_is_connected()) {
+        printf("No USB webcam detected.\n");
+        return 1;
+    }
+
+    uint8_t *buf = ps_malloc(LANG_CAMERA_BUF_SIZE);
+    if (!buf) {
+        printf("Out of PSRAM.\n");
+        return 1;
+    }
+
+    printf("Capturing...\n");
+    size_t jpeg_len = 0;
+    esp_err_t err = uvc_camera_capture(buf, LANG_CAMERA_BUF_SIZE,
+                                       &jpeg_len, LANG_CAMERA_CAPTURE_TIMEOUT_MS);
+    if (err != ESP_OK) {
+        printf("Capture failed: %s\n", esp_err_to_name(err));
+        free(buf);
+        return 1;
+    }
+
+    /* Save to LittleFS */
+    struct stat st;
+    if (stat(LANG_CAMERA_CAPTURE_DIR, &st) != 0) {
+        mkdir(LANG_CAMERA_CAPTURE_DIR, 0755);
+    }
+    FILE *f = fopen(LANG_CAMERA_CAPTURE_PATH, "wb");
+    if (f) {
+        fwrite(buf, 1, jpeg_len, f);
+        fclose(f);
+        printf("Captured %u bytes → %s\n", (unsigned)jpeg_len, LANG_CAMERA_CAPTURE_PATH);
+    } else {
+        printf("Captured %u bytes but failed to save.\n", (unsigned)jpeg_len);
+    }
+
+    free(buf);
+    return 0;
+}
+
 /* --- tool_exec command --- */
 static int cmd_tool_exec(int argc, char **argv)
 {
@@ -871,6 +916,14 @@ esp_err_t serial_cli_init(void)
         .command = "restart", .help = "Restart the device", .func = &cmd_restart
     };
     esp_console_cmd_register(&restart_cmd);
+
+    /* capture */
+    esp_console_cmd_t capture_cmd = {
+        .command = "capture",
+        .help    = "Capture JPEG from USB webcam → /lfs/captures/latest.jpg",
+        .func    = &cmd_capture,
+    };
+    esp_console_cmd_register(&capture_cmd);
 
     ESP_ERROR_CHECK(esp_console_start_repl(repl));
     ESP_LOGI(TAG, "Serial CLI started");

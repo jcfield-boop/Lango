@@ -15,6 +15,7 @@
 #include "tools/tool_wifi_scan.h"
 #include "tools/tool_rss.h"
 #include "tools/tool_rule.h"
+#include "tools/tool_capture_image.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -22,7 +23,7 @@
 
 static const char *TAG = "tools";
 
-#define MAX_TOOLS 30
+#define MAX_TOOLS 32
 
 static mimi_tool_t s_tools[MAX_TOOLS];
 static int s_tool_count = 0;
@@ -471,6 +472,26 @@ esp_err_t tool_registry_init(void)
         .execute = tool_rule_delete_execute,
     };
     register_tool(&rd);
+
+    /* Register capture_image */
+    mimi_tool_t ci = {
+        .name = "capture_image",
+        .description =
+            "Capture a JPEG photo from the connected USB webcam and describe what it shows. "
+            "Use when the user asks what you see, requests a photo, or needs visual context. "
+            "Returns a natural-language description from the Claude vision API. "
+            "The image is also saved to " LANG_CAMERA_CAPTURE_PATH " and "
+            "served at GET /camera/latest.jpg.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"prompt\":{\"type\":\"string\","
+            "\"description\":\"Custom vision prompt (optional). "
+            "Default: \\\"Describe what you see in this image in detail.\\\"\"}}"
+            ",\"required\":[]}",
+        .execute = tool_capture_image_execute,
+    };
+    register_tool(&ci);
 
     build_tools_json();
 

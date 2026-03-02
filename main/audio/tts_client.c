@@ -1,6 +1,7 @@
 #include "tts_client.h"
 #include "langoustine_config.h"
 #include "memory/psram_alloc.h"
+#include "audio/i2s_audio.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -281,6 +282,11 @@ esp_err_t tts_generate(const char *text, char *id_out)
     xSemaphoreGive(s_cache_lock);
 
     ESP_LOGI(TAG, "TTS cached: id=%s, %u bytes", id_out, (unsigned)bb.len);
+
+#if LANG_I2S_AUDIO_ENABLED
+    i2s_audio_play_wav(bb.data, bb.len);
+#endif
+
     return ESP_OK;
 }
 

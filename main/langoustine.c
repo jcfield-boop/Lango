@@ -30,6 +30,8 @@
 #include "skills/skill_loader.h"
 #include "rules/rule_engine.h"
 #include "telegram/telegram_bot.h"
+#include "audio/i2s_audio.h"
+#include "camera/uvc_camera.h"
 #include "mdns.h"
 
 static const char *TAG = "langoustine";
@@ -90,6 +92,7 @@ static void bootstrap_dirs(void)
         LANG_LFS_SKILLS_DIR,
         LANG_LFS_TTS_CACHE_DIR,
         "/lfs/console",
+        LANG_CAMERA_CAPTURE_DIR,
         NULL
     };
     for (int i = 0; dirs[i]; i++) {
@@ -209,6 +212,13 @@ void app_main(void)
     ESP_ERROR_CHECK(init_littlefs());
     bootstrap_dirs();
     bootstrap_defaults();
+
+#if LANG_I2S_AUDIO_ENABLED
+    ESP_ERROR_CHECK(i2s_audio_init());
+#endif
+
+    /* UVC camera — best-effort; continues if no webcam is connected */
+    uvc_camera_init();
 
     /* Initialize subsystems */
     ESP_ERROR_CHECK(message_bus_init());

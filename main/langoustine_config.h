@@ -89,6 +89,19 @@
 #define LANG_DEFAULT_TTS_MODEL       "playai-tts"
 #define LANG_DEFAULT_TTS_VOICE       "Fritz-PlayAI"
 
+/* I2S Audio — shared BCLK/LRCLK for speaker + mic */
+#define LANG_I2S_BCLK    15   /* to MAX98357A BCLK + INMP441 SCK  */
+#define LANG_I2S_LRCLK   16   /* to MAX98357A LRC  + INMP441 WS   */
+#define LANG_I2S_DOUT    17   /* to MAX98357A DIN                  */
+#define LANG_I2S_DIN     18   /* from INMP441 SD                   */
+
+/* I2C bus (camera SCCB + future PCA9685 servos) */
+#define LANG_I2C_SDA      9
+#define LANG_I2C_SCL     10
+
+/* Enable local speaker playback via MAX98357A after TTS generation */
+#define LANG_I2S_AUDIO_ENABLED  1
+
 /* Message Bus */
 #define LANG_BUS_QUEUE_LEN           16
 #define LANG_OUTBOUND_STACK          (6 * 1024)
@@ -115,6 +128,13 @@
 #define LANG_CRON_CHECK_INTERVAL_MS  (10 * 1000)
 #define LANG_HEARTBEAT_FILE          "/lfs/HEARTBEAT.md"
 #define LANG_HEARTBEAT_INTERVAL_MS   (30 * 60 * 1000)
+
+/* UVC Camera (USB webcam on GPIO 19/20) */
+#define LANG_CAMERA_BUF_SIZE            (64 * 1024) /* PSRAM: max JPEG frame */
+#define LANG_CAMERA_CAPTURE_TIMEOUT_MS  3000
+#define LANG_CAMERA_CAPTURE_DIR         "/lfs/captures"
+#define LANG_CAMERA_CAPTURE_PATH        "/lfs/captures/latest.jpg"
+#define LANG_VISION_MAX_TOKENS          512
 
 /* Web Search */
 #define LANG_TAVILY_BUF_SIZE         (16 * 1024)

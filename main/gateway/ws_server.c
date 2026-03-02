@@ -440,6 +440,30 @@ static esp_err_t tts_serve_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── GET /camera/latest.jpg — serve last captured webcam image ── */
+
+static esp_err_t camera_latest_handler(httpd_req_t *req)
+{
+    FILE *f = fopen(LANG_CAMERA_CAPTURE_PATH, "rb");
+    if (!f) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No image captured yet");
+        return ESP_OK;
+    }
+
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+    char buf[512];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        if (httpd_resp_send_chunk(req, buf, (ssize_t)n) != ESP_OK) break;
+    }
+    fclose(f);
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
 /* ── File name → LittleFS path mapping ──────────────────────── */
 
 static const char *name_to_path(const char *name)
@@ -1109,6 +1133,10 @@ esp_err_t ws_server_start(void)
     /* TTS audio serve (wildcard: /tts/ID) */
     httpd_uri_t tts_uri = { .uri = "/tts/*", .method = HTTP_GET, .handler = tts_serve_handler };
     httpd_register_uri_handler(s_server, &tts_uri);
+
+    /* Latest webcam image */
+    httpd_uri_t camera_uri = { .uri = "/camera/latest.jpg", .method = HTTP_GET, .handler = camera_latest_handler };
+    httpd_register_uri_handler(s_server, &camera_uri);
 
     /* File read/write */
     httpd_uri_t file_get_uri = { .uri = "/api/file", .method = HTTP_GET, .handler = file_get_handler };
