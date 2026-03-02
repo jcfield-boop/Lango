@@ -15,9 +15,13 @@ header h1{font-size:1.05rem;color:#7ec8e3;font-weight:600}
 #status-badge{font-size:0.75rem;color:#777;margin-left:4px}
 #status-badge.recording{color:#e37e7e}
 #status-badge.processing{color:#c8e37e}
-#status-badge.thinking{color:#7ec8e3}
+#status-badge.thinking,#status-badge.llm_thinking{color:#7ec8e3}
 #status-badge.speaking{color:#b07ee3}
-a.console-link{margin-left:auto;color:#555;font-size:0.75rem;text-decoration:none}
+#status-badge.stt_processing{color:#c8e37e}
+#status-badge.tts_generating{color:#b07ee3}
+#mode-toggle{margin-left:auto;font-size:0.72rem;color:#555;cursor:pointer;border:1px solid #333;padding:3px 8px;border-radius:12px;background:none;white-space:nowrap}
+#mode-toggle:hover{color:#aaa;border-color:#555}
+a.console-link{color:#444;font-size:0.75rem;text-decoration:none;padding:3px 0}
 a.console-link:hover{color:#7ec8e3}
 #transcript{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
 .msg-row{display:flex;flex-direction:column;gap:3px;max-width:85%}
@@ -27,22 +31,22 @@ a.console-link:hover{color:#7ec8e3}
 .msg-row.user .msg-bubble{background:#1a3a5c;color:#b8daff;border-bottom-right-radius:4px}
 .msg-row.assistant .msg-bubble{background:#252525;color:#e0e0e0;border-bottom-left-radius:4px}
 .msg-row.assistant .msg-bubble.streaming{opacity:0.75}
-.msg-row.assistant .msg-bubble .cursor{display:inline-block;width:2px;height:1em;background:#7ec8e3;vertical-align:text-bottom;animation:blink 0.8s infinite}
+.cursor{display:inline-block;width:2px;height:1em;background:#7ec8e3;vertical-align:text-bottom;animation:blink 0.8s infinite}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
-.msg-label{font-size:0.7rem;color:#555;padding:0 4px}
-.tts-btn{background:none;border:none;color:#555;cursor:pointer;font-size:0.8rem;padding:2px 4px}
-.tts-btn:hover{color:#b07ee3}
+.tts-replay{background:none;border:none;color:#555;cursor:pointer;font-size:0.85rem;padding:0 4px;vertical-align:middle}
+.tts-replay:hover{color:#b07ee3}
 #error-bar{background:#5a1f1f;color:#ffaaaa;font-size:0.8rem;padding:6px 16px;flex-shrink:0;display:none}
-#ptt-area{background:#1e1e1e;border-top:1px solid #333;padding:16px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:12px}
+#ptt-area{background:#1e1e1e;border-top:1px solid #333;padding:14px 16px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:10px}
 #text-row{display:flex;width:100%;gap:8px;max-width:600px}
 #text-input{flex:1;background:#252525;color:#ddd;border:1px solid #444;padding:8px 12px;border-radius:20px;font-size:0.9rem;outline:none;font-family:inherit}
 #text-input:focus{border-color:#555}
 #send-btn{background:#1a3a5c;color:#b8daff;border:none;border-radius:20px;padding:8px 16px;cursor:pointer;font-size:0.9rem}
 #send-btn:hover{background:#234e7a}
-#ptt-btn{width:72px;height:72px;border-radius:50%;border:3px solid #444;background:#1e1e1e;cursor:pointer;font-size:2rem;transition:all .15s;touch-action:none;user-select:none;-webkit-user-select:none;display:flex;align-items:center;justify-content:center;color:#aaa}
-#ptt-btn:hover{border-color:#666;color:#ddd}
+#ptt-btn{width:68px;height:68px;border-radius:50%;border:3px solid #444;background:#1e1e1e;cursor:pointer;font-size:1.9rem;transition:all .15s;touch-action:none;user-select:none;-webkit-user-select:none;display:flex;align-items:center;justify-content:center;color:#aaa}
+#ptt-btn:hover:not([disabled]){border-color:#666;color:#ddd}
 #ptt-btn.active{border-color:#e37e7e;background:#3a1a1a;color:#e37e7e;transform:scale(1.05)}
-#ptt-hint{font-size:0.72rem;color:#444}
+#ptt-btn[disabled]{opacity:0.35;cursor:not-allowed}
+#ptt-hint{font-size:0.7rem;color:#444;text-align:center}
 </style>
 </head>
 <body>
@@ -50,7 +54,8 @@ a.console-link:hover{color:#7ec8e3}
   <span id="ws-dot"></span>
   <h1>&#x1F99E; Langoustine</h1>
   <span id="status-badge">idle</span>
-  <a class="console-link" href="/console">dev console</a>
+  <button id="mode-toggle" onclick="cycleMode()" title="Switch voice mode"></button>
+  <a class="console-link" href="/console">dev</a>
 </header>
 <div id="error-bar"></div>
 <div id="transcript"></div>
@@ -61,207 +66,312 @@ a.console-link:hover{color:#7ec8e3}
     <button id="send-btn" onclick="sendText()">&#x27A4;</button>
   </div>
   <button id="ptt-btn" title="Hold to speak (or hold Space)">&#x1F3A4;</button>
-  <div id="ptt-hint">hold to speak &nbsp;&middot;&nbsp; space</div>
+  <div id="ptt-hint"></div>
 </div>
 <script>
-var ws,reconnectTimer=null;
-var chatId='ws_'+Math.floor(Math.random()*99999);
-var recorder=null,recording=false;
-var streamBubble=null,lastTtsId=null;
-var dot=document.getElementById('ws-dot');
-var statusBadge=document.getElementById('status-badge');
-var transcript=document.getElementById('transcript');
-var pttBtn=document.getElementById('ptt-btn');
-var errBar=document.getElementById('error-bar');
+/* ── Feature detection ── */
+var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+var hasSpeechRec = !!SpeechRec;
+var hasSpeechSynth = !!(window.speechSynthesis);
+var hasMediaRec = !!(window.MediaRecorder && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+
+/* Modes:
+ *   'browser' — SpeechRecognition + speechSynthesis (Chrome/Edge, best)
+ *   'device'  — MediaRecorder → device Groq STT/TTS
+ *   'text'    — no mic at all
+ */
+var modes = [];
+if (hasSpeechRec && hasSpeechSynth) modes.push('browser');
+if (hasMediaRec) modes.push('device');
+modes.push('text');
+var modeIdx = 0;
+var mode = modes[0];
+
+function modeLabel(m){
+  if (m === 'browser') return '&#x1F4BB; Browser voice (Web Speech API)';
+  if (m === 'device')  return '&#x1F4F1; Device voice (Groq STT/TTS)';
+  return '&#x2328; Text only';
+}
+function cycleMode(){
+  modeIdx = (modeIdx + 1) % modes.length;
+  mode = modes[modeIdx];
+  applyMode();
+}
+function applyMode(){
+  document.getElementById('mode-toggle').innerHTML = modeLabel(mode);
+  var btn = document.getElementById('ptt-btn');
+  var hint = document.getElementById('ptt-hint');
+  if (mode === 'text') {
+    btn.disabled = true;
+    hint.textContent = 'text mode';
+  } else {
+    btn.disabled = false;
+    if (mode === 'browser') {
+      hint.textContent = 'click or hold space — uses browser mic';
+    } else {
+      hint.textContent = 'hold to speak \u00B7 space \u2014 streams to device';
+    }
+  }
+}
+applyMode();
 
 /* ── WebSocket ── */
+var ws, reconnectTimer=null;
+var chatId = 'ws_' + Math.floor(Math.random() * 99999);
+var dot = document.getElementById('ws-dot');
+var statusBadge = document.getElementById('status-badge');
+var transcript = document.getElementById('transcript');
+var errBar = document.getElementById('error-bar');
+
 function connect(){
-  clearTimeout(reconnectTimer);reconnectTimer=null;
-  if(ws){ws.onclose=null;try{ws.close()}catch(e){}}
-  dot.className='';
-  ws=new WebSocket('ws://'+location.host+'/ws');
-  ws.binaryType='arraybuffer';
-  ws.onopen=function(){dot.className='on';setStatus('idle')};
-  ws.onclose=function(){
-    dot.className='err';setStatus('offline');
-    reconnectTimer=setTimeout(connect,4000);
+  clearTimeout(reconnectTimer); reconnectTimer = null;
+  if (ws){ ws.onclose = null; try{ ws.close(); }catch(e){} }
+  dot.className = '';
+  ws = new WebSocket('ws://' + location.host + '/ws');
+  ws.onopen  = function(){ dot.className = 'on'; setStatus('idle'); };
+  ws.onclose = function(){
+    dot.className = 'err'; setStatus('offline');
+    reconnectTimer = setTimeout(connect, 4000);
   };
-  ws.onerror=function(){};
-  ws.onmessage=function(ev){
-    if(typeof ev.data!=='string') return;
+  ws.onerror = function(){};
+  ws.onmessage = function(ev){
+    if (typeof ev.data !== 'string') return;
     try{
-      var d=JSON.parse(ev.data);
-      if(d.type==='token'&&d.chat_id===chatId) handleToken(d.content);
-      else if(d.type==='message'&&d.chat_id===chatId) handleMessage(d.content,d.tts_id);
-      else if(d.type==='status'&&d.chat_id===chatId) setStatus(d.stage);
-      else if(d.type==='error'&&d.chat_id===chatId) showError(d.code+': '+(d.message||''));
+      var d = JSON.parse(ev.data);
+      if (d.chat_id && d.chat_id !== chatId) return;
+      if      (d.type === 'token')   handleToken(d.content);
+      else if (d.type === 'message') handleMessage(d.content, d.tts_id);
+      else if (d.type === 'status')  setStatus(d.stage);
+      else if (d.type === 'error')   showError(d.code + ': ' + (d.message || ''));
     }catch(e){}
   };
 }
-setInterval(function(){if(ws&&ws.readyState===1){try{ws.send('{"type":"ping"}');}catch(e){}}},25000);
+setInterval(function(){
+  if (ws && ws.readyState === 1){ try{ ws.send('{"type":"ping"}'); }catch(e){} }
+}, 25000);
 
 /* ── Status ── */
-function setStatus(stage){
-  var labels={idle:'idle',recording:'recording...',stt_processing:'transcribing...',
-              llm_thinking:'thinking...',tts_generating:'generating audio...',speaking:'speaking...',offline:'offline'};
-  statusBadge.textContent=labels[stage]||stage;
-  statusBadge.className=stage;
+function setStatus(s){
+  var L = {idle:'idle',recording:'recording...',stt_processing:'transcribing...',
+            llm_thinking:'thinking...',tts_generating:'generating audio...',
+            speaking:'speaking...',offline:'offline'};
+  statusBadge.textContent = L[s] || s;
+  statusBadge.className   = s;
 }
-
-/* ── Error bar ── */
 function showError(msg){
-  errBar.textContent=msg;
-  errBar.style.display='block';
-  setTimeout(function(){errBar.style.display='none';},5000);
+  errBar.textContent = msg;
+  errBar.style.display = 'block';
+  setTimeout(function(){ errBar.style.display = 'none'; }, 6000);
 }
 
 /* ── Transcript helpers ── */
-function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+var streamBubble = null;
 
 function addUserBubble(text){
-  streamBubble=null;
-  var row=document.createElement('div');
-  row.className='msg-row user';
-  row.innerHTML='<div class="msg-bubble">'+esc(text)+'</div>';
+  streamBubble = null;
+  var row = document.createElement('div');
+  row.className = 'msg-row user';
+  row.innerHTML = '<div class="msg-bubble">' + esc(text) + '</div>';
   transcript.appendChild(row);
-  transcript.scrollTop=transcript.scrollHeight;
+  transcript.scrollTop = transcript.scrollHeight;
 }
 
 function startStreamBubble(){
-  streamBubble=document.createElement('div');
-  streamBubble.className='msg-bubble streaming';
-  streamBubble.innerHTML='<span class="cursor"></span>';
-  var row=document.createElement('div');
-  row.className='msg-row assistant';
-  row.appendChild(streamBubble);
+  if (streamBubble) return; // already streaming
+  var bubble = document.createElement('div');
+  bubble.className = 'msg-bubble streaming';
+  bubble.innerHTML = '<span class="cursor"></span>';
+  var row = document.createElement('div');
+  row.className = 'msg-row assistant';
+  row.appendChild(bubble);
   transcript.appendChild(row);
-  transcript.scrollTop=transcript.scrollHeight;
-  return streamBubble;
+  transcript.scrollTop = transcript.scrollHeight;
+  streamBubble = bubble;
 }
 
 function handleToken(delta){
-  if(!streamBubble) startStreamBubble();
-  /* append delta before the cursor */
-  var cursor=streamBubble.querySelector('.cursor');
-  var textNode=document.createTextNode(delta);
-  streamBubble.insertBefore(textNode,cursor);
-  transcript.scrollTop=transcript.scrollHeight;
+  if (!streamBubble) startStreamBubble();
+  var cursor = streamBubble.querySelector('.cursor');
+  streamBubble.insertBefore(document.createTextNode(delta), cursor);
+  transcript.scrollTop = transcript.scrollHeight;
 }
 
-function handleMessage(text,ttsId){
-  /* Replace streaming bubble with final text */
-  if(streamBubble){
-    var row=streamBubble.parentElement;
-    streamBubble.className='msg-bubble';
-    streamBubble.textContent=text;
-    if(ttsId){
-      var btn=document.createElement('button');
-      btn.className='tts-btn';
-      btn.title='Replay audio';
-      btn.textContent='\u25B6\uFE0F';
-      btn.onclick=function(){playTTS(ttsId)};
-      row.appendChild(btn);
+function handleMessage(text, ttsId){
+  if (streamBubble){
+    streamBubble.className = 'msg-bubble';
+    streamBubble.textContent = text;
+    if (ttsId && mode === 'device'){
+      var btn = mkReplayBtn(ttsId);
+      streamBubble.parentElement.appendChild(btn);
     }
-    streamBubble=null;
+    streamBubble = null;
   } else {
-    /* No streaming — add fresh bubble (e.g., text-only response) */
-    var row2=document.createElement('div');
-    row2.className='msg-row assistant';
-    var bubble=document.createElement('div');
-    bubble.className='msg-bubble';
-    bubble.textContent=text;
-    row2.appendChild(bubble);
-    if(ttsId){
-      var btn2=document.createElement('button');
-      btn2.className='tts-btn';
-      btn2.title='Replay audio';
-      btn2.textContent='\u25B6\uFE0F';
-      btn2.onclick=function(){playTTS(ttsId)};
-      row2.appendChild(btn2);
-    }
-    transcript.appendChild(row2);
+    var row = document.createElement('div');
+    row.className = 'msg-row assistant';
+    var bubble = document.createElement('div');
+    bubble.className = 'msg-bubble';
+    bubble.textContent = text;
+    row.appendChild(bubble);
+    if (ttsId && mode === 'device') row.appendChild(mkReplayBtn(ttsId));
+    transcript.appendChild(row);
   }
-  transcript.scrollTop=transcript.scrollHeight;
-  if(ttsId) playTTS(ttsId);
+  transcript.scrollTop = transcript.scrollHeight;
+
+  /* TTS playback */
+  if (mode === 'browser' && hasSpeechSynth) {
+    speakBrowser(text);
+  } else if (mode === 'device' && ttsId) {
+    playDeviceTTS(ttsId);
+  }
 }
 
-/* ── TTS playback ── */
-function playTTS(id){
-  lastTtsId=id;
+function mkReplayBtn(ttsId){
+  var btn = document.createElement('button');
+  btn.className = 'tts-replay';
+  btn.title = 'Replay';
+  btn.textContent = '\u25B6';
+  btn.onclick = function(){ playDeviceTTS(ttsId); };
+  return btn;
+}
+
+/* ── Browser TTS (speechSynthesis) ── */
+function speakBrowser(text){
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  var utt = new SpeechSynthesisUtterance(text);
+  utt.onstart = function(){ setStatus('speaking'); };
+  utt.onend = utt.onerror = function(){ setStatus('idle'); };
+  window.speechSynthesis.speak(utt);
+}
+
+/* ── Device TTS (Groq /tts/<id>) ── */
+function playDeviceTTS(id){
   setStatus('speaking');
-  var audio=new Audio('/tts/'+id);
-  audio.onended=function(){setStatus('idle')};
-  audio.onerror=function(){setStatus('idle')};
-  audio.play().catch(function(){setStatus('idle')});
+  var audio = new Audio('/tts/' + id);
+  audio.onended = audio.onerror = function(){ setStatus('idle'); };
+  audio.play().catch(function(){ setStatus('idle'); });
 }
 
-/* ── Text prompt ── */
+/* ── Text prompt (both modes) ── */
 function sendText(){
-  var inp=document.getElementById('text-input');
-  var text=inp.value.trim();
-  if(!text||!ws||ws.readyState!==1) return;
+  var inp = document.getElementById('text-input');
+  var text = inp.value.trim();
+  if (!text || !ws || ws.readyState !== 1) return;
   addUserBubble(text);
-  ws.send(JSON.stringify({type:'prompt',content:text,chat_id:chatId}));
+  ws.send(JSON.stringify({type:'prompt', content:text, chat_id:chatId}));
   startStreamBubble();
   setStatus('llm_thinking');
-  inp.value='';
+  inp.value = '';
 }
 
-/* ── Push-to-talk ── */
-function startRecording(){
-  if(!ws||ws.readyState!==1||recording) return;
-  navigator.mediaDevices.getUserMedia({audio:true,video:false})
-  .then(function(stream){
-    var opts={mimeType:'audio/webm;codecs=opus'};
-    try{recorder=new MediaRecorder(stream,opts)}
-    catch(e){recorder=new MediaRecorder(stream)}
-    var mime=recorder.mimeType||'audio/webm;codecs=opus';
-    recorder.ondataavailable=function(ev){
-      if(ev.data&&ev.data.size>0&&ws&&ws.readyState===1) ws.send(ev.data);
+/* ── Browser STT (SpeechRecognition) ── */
+var browserRec = null;
+var browserRecActive = false;
+
+function startBrowserSTT(){
+  if (!SpeechRec || browserRecActive) return;
+  try {
+    browserRec = new SpeechRec();
+    browserRec.lang = navigator.language || 'en-US';
+    browserRec.interimResults = false;
+    browserRec.maxAlternatives = 1;
+    browserRec.onresult = function(ev){
+      var text = ev.results[0][0].transcript.trim();
+      if (text) {
+        addUserBubble(text);
+        ws.send(JSON.stringify({type:'prompt', content:text, chat_id:chatId}));
+        startStreamBubble();
+        setStatus('llm_thinking');
+      }
     };
-    ws.send(JSON.stringify({type:'audio_start',mime:mime,chat_id:chatId}));
+    browserRec.onerror = function(ev){
+      if (ev.error !== 'no-speech') showError('Speech recognition error: ' + ev.error);
+      stopBrowserSTT();
+    };
+    browserRec.onend = function(){ stopBrowserSTT(); };
+    browserRec.start();
+    browserRecActive = true;
+    document.getElementById('ptt-btn').classList.add('active');
+    setStatus('recording');
+  } catch(e) {
+    showError('Speech recognition unavailable');
+  }
+}
+
+function stopBrowserSTT(){
+  browserRecActive = false;
+  document.getElementById('ptt-btn').classList.remove('active');
+  if (browserRec){ try{ browserRec.stop(); }catch(e){} browserRec = null; }
+  if (statusBadge.textContent === 'recording...') setStatus('idle');
+}
+
+/* ── Device audio (MediaRecorder → device Groq STT) ── */
+var recorder = null, recording = false;
+
+function startDeviceRec(){
+  if (!ws || ws.readyState !== 1 || recording) return;
+  navigator.mediaDevices.getUserMedia({audio:true, video:false})
+  .then(function(stream){
+    var opts = {mimeType:'audio/webm;codecs=opus'};
+    try{ recorder = new MediaRecorder(stream, opts); }
+    catch(e){ recorder = new MediaRecorder(stream); }
+    var mime = recorder.mimeType || 'audio/webm;codecs=opus';
+    recorder.ondataavailable = function(ev){
+      if (ev.data && ev.data.size > 0 && ws && ws.readyState === 1) ws.send(ev.data);
+    };
+    ws.send(JSON.stringify({type:'audio_start', mime:mime, chat_id:chatId}));
     recorder.start(250);
-    recording=true;
-    pttBtn.classList.add('active');
+    recording = true;
+    document.getElementById('ptt-btn').classList.add('active');
     setStatus('recording');
   })
-  .catch(function(){showError('Microphone access denied')});
+  .catch(function(){ showError('Microphone access denied'); });
 }
 
-function stopRecording(){
-  if(!recording||!recorder) return;
-  recording=false;
-  try{recorder.stop();recorder.stream.getTracks().forEach(function(t){t.stop()});}catch(e){}
-  recorder=null;
-  pttBtn.classList.remove('active');
-  /* Small delay to flush last chunk before audio_end */
+function stopDeviceRec(){
+  if (!recording || !recorder) return;
+  recording = false;
+  try{ recorder.stop(); recorder.stream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
+  recorder = null;
+  document.getElementById('ptt-btn').classList.remove('active');
   setTimeout(function(){
-    if(ws&&ws.readyState===1){
-      ws.send(JSON.stringify({type:'audio_end',chat_id:chatId}));
+    if (ws && ws.readyState === 1){
+      ws.send(JSON.stringify({type:'audio_end', chat_id:chatId}));
       startStreamBubble();
       setStatus('stt_processing');
     }
-  },120);
+  }, 120);
 }
 
-/* PTT button — touch + mouse */
-pttBtn.addEventListener('mousedown',function(e){e.preventDefault();startRecording()});
-pttBtn.addEventListener('mouseup',function(e){e.preventDefault();stopRecording()});
-pttBtn.addEventListener('mouseleave',function(){if(recording)stopRecording()});
-pttBtn.addEventListener('touchstart',function(e){e.preventDefault();startRecording()},{passive:false});
-pttBtn.addEventListener('touchend',function(e){e.preventDefault();stopRecording()},{passive:false});
-pttBtn.addEventListener('touchcancel',function(e){e.preventDefault();if(recording)stopRecording()},{passive:false});
+/* ── PTT unified handlers ── */
+function onPTTDown(){
+  if (mode === 'browser') startBrowserSTT();
+  else if (mode === 'device') startDeviceRec();
+}
+function onPTTUp(){
+  if (mode === 'browser') stopBrowserSTT();
+  else if (mode === 'device') stopDeviceRec();
+}
+
+var pttBtn = document.getElementById('ptt-btn');
+pttBtn.addEventListener('mousedown',  function(e){ e.preventDefault(); onPTTDown(); });
+pttBtn.addEventListener('mouseup',    function(e){ e.preventDefault(); onPTTUp(); });
+pttBtn.addEventListener('mouseleave', function(){ if (recording || browserRecActive) onPTTUp(); });
+pttBtn.addEventListener('touchstart', function(e){ e.preventDefault(); onPTTDown(); }, {passive:false});
+pttBtn.addEventListener('touchend',   function(e){ e.preventDefault(); onPTTUp(); }, {passive:false});
+pttBtn.addEventListener('touchcancel',function(e){ e.preventDefault(); onPTTUp(); }, {passive:false});
 
 /* Spacebar PTT */
-var spaceDown=false;
-document.addEventListener('keydown',function(e){
-  if(e.code==='Space'&&!spaceDown&&e.target.tagName!=='INPUT'){
-    e.preventDefault();spaceDown=true;startRecording();
+var spaceDown = false;
+document.addEventListener('keydown', function(e){
+  if (e.code === 'Space' && !spaceDown && e.target.tagName !== 'INPUT'){
+    e.preventDefault(); spaceDown = true; onPTTDown();
   }
 });
-document.addEventListener('keyup',function(e){
-  if(e.code==='Space'&&spaceDown){
-    e.preventDefault();spaceDown=false;stopRecording();
+document.addEventListener('keyup', function(e){
+  if (e.code === 'Space' && spaceDown){
+    e.preventDefault(); spaceDown = false; onPTTUp();
   }
 });
 
