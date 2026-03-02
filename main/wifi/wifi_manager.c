@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 
@@ -16,6 +17,7 @@ static EventGroupHandle_t s_wifi_event_group;
 static int s_retry_count = 0;
 static char s_ip_str[16] = "0.0.0.0";
 static bool s_connected = false;
+static esp_timer_handle_t s_reconnect_timer = NULL;
 
 static const char *wifi_reason_to_str(wifi_err_reason_t reason)
 {
@@ -32,6 +34,13 @@ static const char *wifi_reason_to_str(wifi_err_reason_t reason)
     case WIFI_REASON_CONNECTION_FAIL: return "CONNECTION_FAIL";
     default: return "UNKNOWN";
     }
+}
+
+static void wifi_reconnect_cb(void *arg)
+{
+    ESP_LOGI(TAG, "WiFi: retry budget exhausted, attempting reconnect");
+    s_retry_count = 0;
+    esp_wifi_connect();
 }
 
 static void event_handler(void *arg, esp_event_base_t event_base,
@@ -62,8 +71,21 @@ static void event_handler(void *arg, esp_event_base_t event_base,
             esp_wifi_connect();
             s_retry_count++;
         } else {
-            ESP_LOGE(TAG, "Failed to connect after %d retries", MIMI_WIFI_MAX_RETRY);
+            ESP_LOGE(TAG, "Failed to connect after %d retries, will retry in 60s", MIMI_WIFI_MAX_RETRY);
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+            if (!s_reconnect_timer) {
+                esp_timer_create_args_t targs = {
+                    .callback = wifi_reconnect_cb,
+                    .arg      = NULL,
+                    .name     = "wifi_reconnect",
+                };
+                esp_timer_create(&targs, &s_reconnect_timer);
+            }
+            if (s_reconnect_timer) {
+                esp_timer_stop(s_reconnect_timer);   /* cancel any pending, harmless if not running */
+                esp_timer_start_once(s_reconnect_timer, 60ULL * 1000 * 1000);
+                ESP_LOGI(TAG, "WiFi: scheduled reconnect in 60s");
+            }
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
@@ -71,6 +93,9 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "Connected! IP: %s", s_ip_str);
         s_retry_count = 0;
         s_connected = true;
+        if (s_reconnect_timer) {
+            esp_timer_stop(s_reconnect_timer);
+        }
 
         char conn_msg[48];
         snprintf(conn_msg, sizeof(conn_msg), "WiFi connected: %s", s_ip_str);

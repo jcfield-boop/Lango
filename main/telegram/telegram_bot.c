@@ -22,6 +22,10 @@ static int64_t s_last_saved_offset = -1;
 static int64_t s_last_offset_save_us = 0;
 
 #define TG_OFFSET_NVS_KEY            "update_offset"
+#define TG_ALLOWED_IDS_NVS_KEY "allowed_ids"
+#define TG_ALLOWED_MAX 8
+static char s_allowed_ids[TG_ALLOWED_MAX][24] = {{0}};
+static int  s_allowed_count = 0;
 #define TG_DEDUP_CACHE_SIZE          64
 #define TG_OFFSET_SAVE_INTERVAL_US   (5LL * 1000 * 1000)
 #define TG_OFFSET_SAVE_STEP          10
@@ -282,6 +286,33 @@ static bool tg_response_is_ok(const char *resp, const char **out_desc)
     return false;
 }
 
+static bool chat_id_is_allowed(const char *id)
+{
+    if (s_allowed_count == 0) return true;  /* empty list = open */
+    for (int i = 0; i < s_allowed_count; i++) {
+        if (strcmp(s_allowed_ids[i], id) == 0) return true;
+    }
+    return false;
+}
+
+static void save_allowed_ids_to_nvs(void)
+{
+    /* Build comma-separated string */
+    char buf[TG_ALLOWED_MAX * 24 + TG_ALLOWED_MAX] = {0};
+    int off = 0;
+    for (int i = 0; i < s_allowed_count; i++) {
+        if (i > 0) buf[off++] = ',';
+        int n = snprintf(buf + off, sizeof(buf) - off, "%s", s_allowed_ids[i]);
+        if (n > 0) off += n;
+    }
+    nvs_handle_t nvs;
+    if (nvs_open(MIMI_NVS_TG, NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_str(nvs, TG_ALLOWED_IDS_NVS_KEY, buf);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+    }
+}
+
 static void process_updates(const char *json_str)
 {
     cJSON *root = cJSON_Parse(json_str);
@@ -341,6 +372,11 @@ static void process_updates(const char *json_str)
         } else if (cJSON_IsNumber(chat_id)) {
             snprintf(chat_id_str, sizeof(chat_id_str), "%.0f", chat_id->valuedouble);
         } else {
+            continue;
+        }
+
+        if (!chat_id_is_allowed(chat_id_str)) {
+            ESP_LOGD(TAG, "Ignoring message from unlisted chat_id: %s", chat_id_str);
             continue;
         }
 
@@ -427,6 +463,30 @@ esp_err_t telegram_bot_init(void)
             s_last_saved_offset = offset;
             ESP_LOGI(TAG, "Loaded Telegram update offset: %" PRId64, s_update_offset);
         }
+
+        /* Load allowed chat IDs */
+        char allowed_buf[TG_ALLOWED_MAX * 24 + TG_ALLOWED_MAX] = {0};
+        size_t allowed_len = sizeof(allowed_buf);
+        if (nvs_get_str(nvs, TG_ALLOWED_IDS_NVS_KEY, allowed_buf, &allowed_len) == ESP_OK && allowed_buf[0]) {
+            /* Parse comma-separated list */
+            s_allowed_count = 0;
+            char *saveptr = NULL;
+            char *tok = strtok_r(allowed_buf, ",", &saveptr);
+            while (tok && s_allowed_count < TG_ALLOWED_MAX) {
+                /* trim whitespace */
+                while (*tok == ' ') tok++;
+                size_t tlen = strlen(tok);
+                while (tlen > 0 && tok[tlen-1] == ' ') { tok[--tlen] = '\0'; }
+                if (tlen > 0 && tlen < sizeof(s_allowed_ids[0])) {
+                    strncpy(s_allowed_ids[s_allowed_count], tok, sizeof(s_allowed_ids[0]) - 1);
+                    s_allowed_count++;
+                }
+                tok = strtok_r(NULL, ",", &saveptr);
+            }
+            if (s_allowed_count > 0) {
+                ESP_LOGI(TAG, "Telegram: %d allowed chat IDs loaded", s_allowed_count);
+            }
+        }
         nvs_close(nvs);
     }
 
@@ -448,6 +508,52 @@ esp_err_t telegram_bot_start(void)
         MIMI_TG_POLL_PRIO, NULL);
 
     return (ret == pdPASS) ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t telegram_add_allowed_id(const char *id)
+{
+    if (!id || id[0] == '\0') return ESP_ERR_INVALID_ARG;
+    if (strlen(id) >= sizeof(s_allowed_ids[0])) return ESP_ERR_INVALID_ARG;
+    for (int i = 0; i < s_allowed_count; i++) {
+        if (strcmp(s_allowed_ids[i], id) == 0) return ESP_OK;  /* already in list */
+    }
+    if (s_allowed_count >= TG_ALLOWED_MAX) return ESP_ERR_NO_MEM;
+    strncpy(s_allowed_ids[s_allowed_count], id, sizeof(s_allowed_ids[0]) - 1);
+    s_allowed_count++;
+    save_allowed_ids_to_nvs();
+    ESP_LOGI(TAG, "Telegram: added allowed ID: %s (%d total)", id, s_allowed_count);
+    return ESP_OK;
+}
+
+esp_err_t telegram_remove_allowed_id(const char *id)
+{
+    if (!id) return ESP_ERR_INVALID_ARG;
+    for (int i = 0; i < s_allowed_count; i++) {
+        if (strcmp(s_allowed_ids[i], id) == 0) {
+            /* Shift remaining entries down */
+            for (int j = i; j < s_allowed_count - 1; j++) {
+                strncpy(s_allowed_ids[j], s_allowed_ids[j+1], sizeof(s_allowed_ids[0]));
+            }
+            memset(s_allowed_ids[s_allowed_count - 1], 0, sizeof(s_allowed_ids[0]));
+            s_allowed_count--;
+            save_allowed_ids_to_nvs();
+            ESP_LOGI(TAG, "Telegram: removed allowed ID: %s (%d remaining)", id, s_allowed_count);
+            return ESP_OK;
+        }
+    }
+    return ESP_ERR_NOT_FOUND;
+}
+
+void telegram_list_allowed_ids(void)
+{
+    if (s_allowed_count == 0) {
+        printf("Telegram allowlist: empty (all IDs allowed)\n");
+        return;
+    }
+    printf("Telegram allowlist (%d entries):\n", s_allowed_count);
+    for (int i = 0; i < s_allowed_count; i++) {
+        printf("  [%d] %s\n", i, s_allowed_ids[i]);
+    }
 }
 
 esp_err_t telegram_send_message(const char *chat_id, const char *text)

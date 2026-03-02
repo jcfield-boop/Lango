@@ -70,7 +70,7 @@ static void audio_stt_task(void *arg)
         if (!rate_limit_ok()) {
             ESP_LOGW(TAG, "STT rate limit hit for %s", chat_id);
             ws_server_send_error(chat_id, "rate_limited", "Too many requests");
-            audio_ring_reset();
+            audio_ring_reset_for_client(chat_id);
             continue;
         }
 
@@ -88,8 +88,12 @@ static void audio_stt_task(void *arg)
             strncpy(msg.chat_id, chat_id, sizeof(msg.chat_id) - 1);
             msg.content = strdup(result.text);
             if (msg.content) {
-                message_bus_push_inbound(&msg);
-                ws_server_send_status(chat_id, "llm_thinking");
+                if (message_bus_push_inbound(&msg) != ESP_OK) {
+                    ESP_LOGW(TAG, "Inbound bus full, drop STT result for %s", chat_id);
+                    free(msg.content);
+                } else {
+                    ws_server_send_status(chat_id, "llm_thinking");
+                }
             }
         } else {
             ESP_LOGE(TAG, "STT failed: %s", esp_err_to_name(ret));
@@ -98,7 +102,7 @@ static void audio_stt_task(void *arg)
             ws_server_send_status(chat_id, "idle");
         }
 
-        audio_ring_reset();
+        audio_ring_reset_for_client(chat_id);
     }
 }
 
@@ -227,6 +231,24 @@ esp_err_t audio_ring_reset(void)
     if (!s_ring.buf) return ESP_ERR_INVALID_STATE;
 
     xSemaphoreTake(s_ring.lock, portMAX_DELAY);
+    s_ring.write_pos = 0;
+    s_ring.active    = false;
+    xSemaphoreGive(s_ring.lock);
+    return ESP_OK;
+}
+
+esp_err_t audio_ring_reset_for_client(const char *chat_id)
+{
+    if (!s_ring.buf) return ESP_ERR_INVALID_STATE;
+    if (!chat_id) return ESP_ERR_INVALID_ARG;
+
+    xSemaphoreTake(s_ring.lock, portMAX_DELAY);
+    if (s_ring.chat_id[0] != '\0' && strcmp(s_ring.chat_id, chat_id) != 0) {
+        xSemaphoreGive(s_ring.lock);
+        ESP_LOGW(TAG, "audio_ring_reset_for_client: chat_id mismatch (owner=%s, caller=%s)",
+                 s_ring.chat_id, chat_id);
+        return ESP_ERR_NOT_FOUND;
+    }
     s_ring.write_pos = 0;
     s_ring.active    = false;
     xSemaphoreGive(s_ring.lock);

@@ -23,12 +23,21 @@
 #include "esp_littlefs.h"
 #include "nvs.h"
 #include "cJSON.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "ws";
 
 #define WS_NVS_NAMESPACE "ws_config"
 #define WS_NVS_KEY_VERBOSE "verbose_logs"
 static bool s_verbose_logs = false;
+
+/* CHANGE 5: auth token */
+#define WS_NVS_KEY_AUTH_TOKEN "auth_token"
+static char s_auth_token[128] = {0};
+
+/* CHANGE 6: CORS origin */
+#define WS_NVS_KEY_CORS_ORIGIN "cors_origin"
+static char s_cors_origin[128] = "*";
 
 static httpd_handle_t s_server = NULL;
 
@@ -41,6 +50,7 @@ typedef struct {
 } ws_client_t;
 
 static ws_client_t s_clients[LANG_WS_MAX_CLIENTS];
+static SemaphoreHandle_t s_clients_lock;  /* SRAM mutex — protects s_clients[] */
 
 static ws_client_t *find_client_by_fd(int fd)
 {
@@ -107,13 +117,76 @@ static esp_err_t send_json_to_fd(int fd, const char *json_str)
     return httpd_ws_send_frame_async(s_server, fd, &pkt);
 }
 
+/* ── CHANGE 5: auth helper ──────────────────────────────────── */
+
+static bool request_is_authed(httpd_req_t *req)
+{
+    if (s_auth_token[0] == '\0') return true; /* auth disabled when token not set */
+    char hdr[160] = {0};
+    if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) == ESP_OK) {
+        if (strncmp(hdr, "Bearer ", 7) == 0 && strcmp(hdr + 7, s_auth_token) == 0) {
+            return true;
+        }
+    }
+    char query[256] = {0};
+    char token_val[128] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        if (httpd_query_key_value(query, "token", token_val, sizeof(token_val)) == ESP_OK) {
+            if (strcmp(token_val, s_auth_token) == 0) return true;
+        }
+    }
+    return false;
+}
+
+/* ── CHANGE 6: CORS helper ──────────────────────────────────── */
+
+static void apply_cors(httpd_req_t *req)
+{
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", s_cors_origin);
+}
+
+/* ── CHANGE 5: set_auth_token public function ───────────────── */
+
+void ws_server_set_auth_token(const char *token)
+{
+    if (!token) return;
+    strncpy(s_auth_token, token, sizeof(s_auth_token) - 1);
+    s_auth_token[sizeof(s_auth_token) - 1] = '\0';
+    nvs_handle_t nvs;
+    if (nvs_open(WS_NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_str(nvs, WS_NVS_KEY_AUTH_TOKEN, token);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+        ESP_LOGI(TAG, "HTTP auth token saved");
+    }
+}
+
+/* ── CHANGE 6: set_cors_origin public function ──────────────── */
+
+void ws_server_set_cors_origin(const char *origin)
+{
+    if (!origin) return;
+    strncpy(s_cors_origin, origin, sizeof(s_cors_origin) - 1);
+    s_cors_origin[sizeof(s_cors_origin) - 1] = '\0';
+    nvs_handle_t nvs;
+    if (nvs_open(WS_NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_str(nvs, WS_NVS_KEY_CORS_ORIGIN, origin);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+        ESP_LOGI(TAG, "CORS origin set to: %s", origin);
+    }
+}
+
 /* ── Public send helpers ────────────────────────────────────── */
 
 esp_err_t ws_server_send_status(const char *chat_id, const char *stage)
 {
     if (!s_server) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_clients_lock, portMAX_DELAY);
     ws_client_t *c = find_client_by_chat_id(chat_id);
-    if (!c) return ESP_ERR_NOT_FOUND;
+    int fd = c ? c->fd : -1;
+    xSemaphoreGive(s_clients_lock);
+    if (fd < 0) return ESP_ERR_NOT_FOUND;
 
     cJSON *j = cJSON_CreateObject();
     cJSON_AddStringToObject(j, "type", "status");
@@ -122,16 +195,24 @@ esp_err_t ws_server_send_status(const char *chat_id, const char *stage)
     char *s = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
     if (!s) return ESP_ERR_NO_MEM;
-    esp_err_t ret = send_json_to_fd(c->fd, s);
+    esp_err_t ret = send_json_to_fd(fd, s);
     free(s);
+    if (ret != ESP_OK) {
+        xSemaphoreTake(s_clients_lock, portMAX_DELAY);
+        remove_client(fd);
+        xSemaphoreGive(s_clients_lock);
+    }
     return ret;
 }
 
 esp_err_t ws_server_send_error(const char *chat_id, const char *code, const char *message)
 {
     if (!s_server) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_clients_lock, portMAX_DELAY);
     ws_client_t *c = find_client_by_chat_id(chat_id);
-    if (!c) return ESP_ERR_NOT_FOUND;
+    int fd = c ? c->fd : -1;
+    xSemaphoreGive(s_clients_lock);
+    if (fd < 0) return ESP_ERR_NOT_FOUND;
 
     cJSON *j = cJSON_CreateObject();
     cJSON_AddStringToObject(j, "type", "error");
@@ -141,17 +222,24 @@ esp_err_t ws_server_send_error(const char *chat_id, const char *code, const char
     char *s = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
     if (!s) return ESP_ERR_NO_MEM;
-    esp_err_t ret = send_json_to_fd(c->fd, s);
+    esp_err_t ret = send_json_to_fd(fd, s);
     free(s);
-    if (ret != ESP_OK) remove_client(c->fd);
+    if (ret != ESP_OK) {
+        xSemaphoreTake(s_clients_lock, portMAX_DELAY);
+        remove_client(fd);
+        xSemaphoreGive(s_clients_lock);
+    }
     return ret;
 }
 
 esp_err_t ws_server_send_token(const char *chat_id, const char *delta)
 {
     if (!s_server) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_clients_lock, portMAX_DELAY);
     ws_client_t *c = find_client_by_chat_id(chat_id);
-    if (!c) return ESP_ERR_NOT_FOUND;
+    int fd = c ? c->fd : -1;
+    xSemaphoreGive(s_clients_lock);
+    if (fd < 0) return ESP_ERR_NOT_FOUND;
 
     cJSON *j = cJSON_CreateObject();
     cJSON_AddStringToObject(j, "type", "token");
@@ -160,8 +248,13 @@ esp_err_t ws_server_send_token(const char *chat_id, const char *delta)
     char *s = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
     if (!s) return ESP_ERR_NO_MEM;
-    esp_err_t ret = send_json_to_fd(c->fd, s);
+    esp_err_t ret = send_json_to_fd(fd, s);
     free(s);
+    if (ret != ESP_OK) {
+        xSemaphoreTake(s_clients_lock, portMAX_DELAY);
+        remove_client(fd);
+        xSemaphoreGive(s_clients_lock);
+    }
     return ret;
 }
 
@@ -170,8 +263,14 @@ esp_err_t ws_server_send_token(const char *chat_id, const char *delta)
 static esp_err_t ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
+        if (!request_is_authed(req)) {
+            httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+            return ESP_FAIL;
+        }
         int fd = httpd_req_to_sockfd(req);
+        xSemaphoreTake(s_clients_lock, portMAX_DELAY);
         add_client(fd);
+        xSemaphoreGive(s_clients_lock);
         return ESP_OK;
     }
 
@@ -180,18 +279,24 @@ static esp_err_t ws_handler(httpd_req_t *req)
 
     esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
     if (ret != ESP_OK) {
+        xSemaphoreTake(s_clients_lock, portMAX_DELAY);
         remove_client(httpd_req_to_sockfd(req));
+        xSemaphoreGive(s_clients_lock);
         return ret;
     }
     if (ws_pkt.len == 0) {
         if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
+            xSemaphoreTake(s_clients_lock, portMAX_DELAY);
             remove_client(httpd_req_to_sockfd(req));
+            xSemaphoreGive(s_clients_lock);
         }
         return ESP_OK;
     }
 
     int fd = httpd_req_to_sockfd(req);
+    xSemaphoreTake(s_clients_lock, portMAX_DELAY);
     ws_client_t *client = find_client_by_fd(fd);
+    xSemaphoreGive(s_clients_lock);
 
     /* Handle binary audio frames */
     if (ws_pkt.type == HTTPD_WS_TYPE_BINARY) {
@@ -262,7 +367,13 @@ static esp_err_t ws_handler(httpd_req_t *req)
         if (cid_len > 0 && cid_len <= 31) {
             chat_id = chat_id_item->valuestring;
             if (client) {
-                strncpy(client->chat_id, chat_id, sizeof(client->chat_id) - 1);
+                xSemaphoreTake(s_clients_lock, portMAX_DELAY);
+                ws_client_t *c2 = find_client_by_fd(fd);
+                if (c2) {
+                    strncpy(c2->chat_id, chat_id, sizeof(c2->chat_id) - 1);
+                    client = c2;
+                }
+                xSemaphoreGive(s_clients_lock);
             }
         }
     }
@@ -296,7 +407,10 @@ static esp_err_t ws_handler(httpd_req_t *req)
         strncpy(msg.chat_id, chat_id, sizeof(msg.chat_id) - 1);
         msg.content = strdup(content_item->valuestring);
         if (msg.content) {
-            message_bus_push_inbound(&msg);
+            if (message_bus_push_inbound(&msg) != ESP_OK) {
+                ESP_LOGW(TAG, "Inbound bus full, drop WS prompt");
+                free(msg.content);
+            }
         }
 
     } else if (strcmp(msg_type, "message") == 0 &&
@@ -309,7 +423,10 @@ static esp_err_t ws_handler(httpd_req_t *req)
             strncpy(msg.chat_id, chat_id, sizeof(msg.chat_id) - 1);
             msg.content = strdup(content_item->valuestring);
             if (msg.content) {
-                message_bus_push_inbound(&msg);
+                if (message_bus_push_inbound(&msg) != ESP_OK) {
+                    ESP_LOGW(TAG, "Inbound bus full, drop WS prompt");
+                    free(msg.content);
+                }
             }
         }
 
@@ -327,7 +444,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
         audio_ring_commit(chat_id);
 
     } else if (strcmp(msg_type, "audio_abort") == 0) {
-        audio_ring_reset();
+        audio_ring_reset_for_client(chat_id);
     }
 
     cJSON_Delete(root);
@@ -386,7 +503,7 @@ static esp_err_t dev_console_handler(httpd_req_t *req)
 static esp_err_t health_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    apply_cors(req);
     httpd_resp_sendstr(req, "{\"ok\":true,\"firmware\":\"langoustine\"}");
     return ESP_OK;
 }
@@ -426,7 +543,7 @@ static esp_err_t tts_serve_handler(httpd_req_t *req)
 
     httpd_resp_set_type(req, "audio/wav");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    apply_cors(req);
 
     /* Send in 4KB chunks */
     const size_t CHUNK = 4096;
@@ -452,7 +569,7 @@ static esp_err_t camera_latest_handler(httpd_req_t *req)
 
     httpd_resp_set_type(req, "image/jpeg");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    apply_cors(req);
 
     char buf[512];
     size_t n;
@@ -515,6 +632,8 @@ static esp_err_t file_get_handler(httpd_req_t *req)
 
 static esp_err_t file_post_handler(httpd_req_t *req)
 {
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
     char query[32] = {0};
     char name[16]  = {0};
 
@@ -563,13 +682,18 @@ static esp_err_t file_post_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
         return ESP_OK;
     }
-    fputs(body, f);
+    if (fputs(body, f) == EOF) {
+        fclose(f);
+        free(body);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
+        return ESP_OK;
+    }
     fclose(f);
     free(body);
 
     ESP_LOGI(TAG, "Saved %s (%d bytes)", path, received);
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    apply_cors(req);
     httpd_resp_sendstr(req, "{\"ok\":true}");
     return ESP_OK;
 }
@@ -580,6 +704,8 @@ static void reboot_timer_cb(void *arg) { esp_restart(); }
 
 static esp_err_t reboot_handler(httpd_req_t *req)
 {
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true}");
 
@@ -650,7 +776,7 @@ static esp_err_t skills_list_handler(httpd_req_t *req)
     char *json = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    apply_cors(req);
     httpd_resp_sendstr(req, json ? json : "[]");
     free(json);
     return ESP_OK;
@@ -690,6 +816,8 @@ static esp_err_t skill_get_handler(httpd_req_t *req)
 /* POST /api/skill?name=<name> */
 static esp_err_t skill_post_handler(httpd_req_t *req)
 {
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
     char query[64] = {0}, name[52] = {0};
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
         httpd_query_key_value(query, "name", name, sizeof(name));
@@ -714,13 +842,18 @@ static esp_err_t skill_post_handler(httpd_req_t *req)
     skill_name_to_path(name, path, sizeof(path));
     FILE *f = fopen(path, "w");
     if (!f) { free(body); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed"); return ESP_OK; }
-    fputs(body, f);
+    if (fputs(body, f) == EOF) {
+        fclose(f);
+        free(body);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
+        return ESP_OK;
+    }
     fclose(f);
     free(body);
 
     ESP_LOGI(TAG, "Saved skill: %s (%d bytes)", path, received);
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    apply_cors(req);
     httpd_resp_sendstr(req, "{\"ok\":true}");
     return ESP_OK;
 }
@@ -728,6 +861,8 @@ static esp_err_t skill_post_handler(httpd_req_t *req)
 /* DELETE /api/skill?name=<name> */
 static esp_err_t skill_delete_handler(httpd_req_t *req)
 {
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
     char query[64] = {0}, name[52] = {0};
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
         httpd_query_key_value(query, "name", name, sizeof(name));
@@ -741,7 +876,7 @@ static esp_err_t skill_delete_handler(httpd_req_t *req)
     int ret = unlink(path);
     ESP_LOGI(TAG, "Delete skill %s: %s", path, ret == 0 ? "ok" : "failed");
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    apply_cors(req);
     httpd_resp_sendstr(req, ret == 0 ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"not found\"}");
     return ESP_OK;
 }
@@ -795,7 +930,7 @@ static esp_err_t sysinfo_handler(httpd_req_t *req)
              (unsigned)search_calls, (unsigned)search_cost_mc,
              uptime_s, reset_str);
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    apply_cors(req);
     httpd_resp_sendstr(req, buf);
     return ESP_OK;
 }
@@ -862,7 +997,7 @@ static esp_err_t config_get_handler(httpd_req_t *req)
     char *json_str = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    apply_cors(req);
     httpd_resp_sendstr(req, json_str ? json_str : "{}");
     free(json_str);
     return ESP_OK;
@@ -882,6 +1017,8 @@ static void nvs_set_str_safe(const char *ns, const char *key, const char *val)
 
 static esp_err_t config_post_handler(httpd_req_t *req)
 {
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
     size_t max_body = 2048;
     size_t body_len = (req->content_len > 0 && (size_t)req->content_len < max_body)
                       ? (size_t)req->content_len : max_body;
@@ -969,7 +1106,7 @@ static esp_err_t config_post_handler(httpd_req_t *req)
 
     ESP_LOGI(TAG, "Config updated via web");
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    apply_cors(req);
     httpd_resp_sendstr(req, "{\"ok\":true}");
     return ESP_OK;
 }
@@ -1011,7 +1148,7 @@ static esp_err_t crons_get_handler(httpd_req_t *req)
     char *json_str = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    apply_cors(req);
     httpd_resp_sendstr(req, json_str ? json_str : "{\"jobs\":[]}");
     free(json_str);
     return ESP_OK;
@@ -1021,6 +1158,8 @@ static esp_err_t crons_get_handler(httpd_req_t *req)
 
 static esp_err_t cron_delete_handler(httpd_req_t *req)
 {
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
     char query[32] = {0}, id[12] = {0};
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
         httpd_query_key_value(query, "id", id, sizeof(id));
@@ -1030,7 +1169,7 @@ static esp_err_t cron_delete_handler(httpd_req_t *req)
         return ESP_OK;
     }
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    apply_cors(req);
     esp_err_t err = cron_remove_job(id);
     httpd_resp_sendstr(req, err == ESP_OK ? "{\"ok\":true}"
                                           : "{\"ok\":false,\"error\":\"not_found\"}");
@@ -1041,10 +1180,12 @@ static esp_err_t cron_delete_handler(httpd_req_t *req)
 
 static esp_err_t ota_post_handler(httpd_req_t *req)
 {
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
     char body[300] = {0};
     int  rcv = httpd_req_recv(req, body, sizeof(body) - 1);
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    apply_cors(req);
 
     if (rcv <= 0) {
         httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"no body\"}");
@@ -1083,6 +1224,11 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
 
 esp_err_t ws_server_start(void)
 {
+    s_clients_lock = xSemaphoreCreateMutex();
+    if (!s_clients_lock) {
+        ESP_LOGE(TAG, "Failed to create clients mutex");
+        return ESP_ERR_NO_MEM;
+    }
     memset(s_clients, 0, sizeof(s_clients));
 
     {
@@ -1093,6 +1239,42 @@ esp_err_t ws_server_start(void)
             nvs_close(nvs);
         }
         ESP_LOGI(TAG, "Verbose logs: %s", s_verbose_logs ? "on" : "off");
+    }
+
+    /* Load auth token */
+    {
+        char atmp[128] = {0};
+        size_t alen = sizeof(atmp);
+        nvs_handle_t anvs;
+        if (nvs_open(WS_NVS_NAMESPACE, NVS_READONLY, &anvs) == ESP_OK) {
+            nvs_get_str(anvs, WS_NVS_KEY_AUTH_TOKEN, atmp, &alen);
+            nvs_close(anvs);
+        }
+        if (atmp[0]) {
+            strncpy(s_auth_token, atmp, sizeof(s_auth_token) - 1);
+        } else if (LANG_SECRET_HTTP_TOKEN[0]) {
+            strncpy(s_auth_token, LANG_SECRET_HTTP_TOKEN, sizeof(s_auth_token) - 1);
+        }
+        if (s_auth_token[0]) {
+            ESP_LOGI(TAG, "HTTP auth enabled");
+        } else {
+            ESP_LOGW(TAG, "HTTP auth disabled (no token set)");
+        }
+    }
+
+    /* Load CORS origin */
+    {
+        char ctmp[128] = {0};
+        size_t clen = sizeof(ctmp);
+        nvs_handle_t cnvs;
+        if (nvs_open(WS_NVS_NAMESPACE, NVS_READONLY, &cnvs) == ESP_OK) {
+            nvs_get_str(cnvs, WS_NVS_KEY_CORS_ORIGIN, ctmp, &clen);
+            nvs_close(cnvs);
+        }
+        if (ctmp[0]) {
+            strncpy(s_cors_origin, ctmp, sizeof(s_cors_origin) - 1);
+        }
+        ESP_LOGI(TAG, "CORS origin: %s", s_cors_origin);
     }
 
     httpd_config_t config    = HTTPD_DEFAULT_CONFIG();
@@ -1190,8 +1372,12 @@ esp_err_t ws_server_send(const char *chat_id, const char *text)
 {
     if (!s_server) return ESP_ERR_INVALID_STATE;
 
+    xSemaphoreTake(s_clients_lock, portMAX_DELAY);
     ws_client_t *client = find_client_by_chat_id(chat_id);
-    if (!client) {
+    int fd = client ? client->fd : -1;
+    xSemaphoreGive(s_clients_lock);
+
+    if (fd < 0) {
         ESP_LOGW(TAG, "No WS client with chat_id=%s", chat_id);
         return ESP_ERR_NOT_FOUND;
     }
@@ -1211,12 +1397,14 @@ esp_err_t ws_server_send(const char *chat_id, const char *text)
         .len     = strlen(json_str),
     };
 
-    esp_err_t ret = httpd_ws_send_frame_async(s_server, client->fd, &ws_pkt);
+    esp_err_t ret = httpd_ws_send_frame_async(s_server, fd, &ws_pkt);
     free(json_str);
 
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "Send to %s failed: %s", chat_id, esp_err_to_name(ret));
-        remove_client(client->fd);
+        xSemaphoreTake(s_clients_lock, portMAX_DELAY);
+        remove_client(fd);
+        xSemaphoreGive(s_clients_lock);
     }
     return ret;
 }
@@ -1226,8 +1414,12 @@ esp_err_t ws_server_send_with_tts(const char *chat_id, const char *text, const c
 {
     if (!s_server) return ESP_ERR_INVALID_STATE;
 
+    xSemaphoreTake(s_clients_lock, portMAX_DELAY);
     ws_client_t *client = find_client_by_chat_id(chat_id);
-    if (!client) return ESP_ERR_NOT_FOUND;
+    int fd = client ? client->fd : -1;
+    xSemaphoreGive(s_clients_lock);
+
+    if (fd < 0) return ESP_ERR_NOT_FOUND;
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "type", "message");
@@ -1247,11 +1439,13 @@ esp_err_t ws_server_send_with_tts(const char *chat_id, const char *text, const c
         .len     = strlen(json_str),
     };
 
-    esp_err_t ret = httpd_ws_send_frame_async(s_server, client->fd, &ws_pkt);
+    esp_err_t ret = httpd_ws_send_frame_async(s_server, fd, &ws_pkt);
     free(json_str);
 
     if (ret != ESP_OK) {
-        remove_client(client->fd);
+        xSemaphoreTake(s_clients_lock, portMAX_DELAY);
+        remove_client(fd);
+        xSemaphoreGive(s_clients_lock);
     }
     return ret;
 }
@@ -1275,13 +1469,24 @@ esp_err_t ws_server_broadcast_monitor(const char *event, const char *msg_text)
         .len     = strlen(json_str),
     };
 
+    /* Snapshot active fds under lock */
+    int snap_fds[LANG_WS_MAX_CLIENTS];
+    int snap_count = 0;
+    xSemaphoreTake(s_clients_lock, portMAX_DELAY);
     for (int i = 0; i < LANG_WS_MAX_CLIENTS; i++) {
         if (s_clients[i].active) {
-            esp_err_t ret = httpd_ws_send_frame_async(s_server, s_clients[i].fd, &pkt);
-            if (ret != ESP_OK) {
-                ESP_LOGD(TAG, "Monitor send to fd=%d failed, removing", s_clients[i].fd);
-                s_clients[i].active = false;
-            }
+            snap_fds[snap_count++] = s_clients[i].fd;
+        }
+    }
+    xSemaphoreGive(s_clients_lock);
+
+    for (int i = 0; i < snap_count; i++) {
+        esp_err_t ret = httpd_ws_send_frame_async(s_server, snap_fds[i], &pkt);
+        if (ret != ESP_OK) {
+            ESP_LOGD(TAG, "Monitor send to fd=%d failed, removing", snap_fds[i]);
+            xSemaphoreTake(s_clients_lock, portMAX_DELAY);
+            remove_client(snap_fds[i]);
+            xSemaphoreGive(s_clients_lock);
         }
     }
 

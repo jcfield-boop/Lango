@@ -1,6 +1,7 @@
 #include "stt_client.h"
 #include "langoustine_config.h"
 #include "memory/psram_alloc.h"
+#include "llm/http_session.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -21,20 +22,28 @@ static char s_api_key[STT_API_KEY_MAX]  = {0};
 static char s_endpoint[STT_ENDPOINT_MAX] = LANG_DEFAULT_STT_ENDPOINT;
 static char s_model[STT_MODEL_MAX]       = LANG_DEFAULT_STT_MODEL;
 
+/* Persistent HTTP session — created once in stt_client_init() */
+static http_session_t s_session = {0};
+
 /* ── Response accumulator ──────────────────────────────────────── */
 
 typedef struct {
     char  *data;
     size_t len;
     size_t cap;
+    bool   oom;
 } resp_buf_t;
 
 static esp_err_t resp_append(resp_buf_t *rb, const char *src, size_t n)
 {
+    if (rb->oom) return ESP_ERR_NO_MEM;
     if (rb->len + n >= rb->cap) {
         size_t new_cap = rb->cap + n + 1024;
-        char *tmp = realloc(rb->data, new_cap);
-        if (!tmp) return ESP_ERR_NO_MEM;
+        char *tmp = ps_realloc(rb->data, new_cap);  /* P3-1: use ps_realloc */
+        if (!tmp) {
+            rb->oom = true;
+            return ESP_ERR_NO_MEM;
+        }
         rb->data = tmp;
         rb->cap  = new_cap;
     }
@@ -156,6 +165,16 @@ esp_err_t stt_client_init(void)
     } else {
         ESP_LOGW(TAG, "No STT API key. Use CLI: stt_key <KEY>");
     }
+
+    /* Create persistent session for TLS reuse */
+    if (!s_session.valid) {
+        esp_err_t err = http_session_init(&s_session, s_endpoint,
+                                          http_event_cb,
+                                          60 * 1000, 4096, 4096);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "STT http_session_init failed: %s", esp_err_to_name(err));
+        }
+    }
     return ESP_OK;
 }
 
@@ -184,7 +203,7 @@ esp_err_t stt_transcribe(const uint8_t *audio, size_t audio_len,
     ESP_LOGI(TAG, "STT POST: %u audio bytes → %u multipart body", (unsigned)audio_len, (unsigned)body_len);
 
     /* Response buffer — small initial alloc (JSON response is tiny) */
-    resp_buf_t rb = { .data = malloc(2048), .len = 0, .cap = 2048 };
+    resp_buf_t rb = { .data = ps_malloc(2048), .len = 0, .cap = 2048, .oom = false };
     if (!rb.data) {
         free(body);
         return ESP_ERR_NO_MEM;
@@ -198,37 +217,42 @@ esp_err_t stt_transcribe(const uint8_t *audio, size_t audio_len,
     char auth[STT_API_KEY_MAX + 16];
     snprintf(auth, sizeof(auth), "Bearer %s", s_api_key);
 
-    esp_http_client_config_t cfg = {
-        .url              = s_endpoint,
-        .event_handler    = http_event_cb,
-        .user_data        = &rb,
-        .timeout_ms       = 60 * 1000,
-        .buffer_size      = 4096,
-        .buffer_size_tx   = 4096,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-    };
-
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) {
+    /* Reuse persistent session (lazy init fallback if init was skipped) */
+    if (!s_session.valid) {
+        http_session_init(&s_session, s_endpoint, http_event_cb,
+                          60 * 1000, 4096, 4096);
+    }
+    if (!s_session.valid) {
         free(body);
         free(rb.data);
         return ESP_FAIL;
     }
 
-    esp_http_client_set_method(client, HTTP_METHOD_POST);
-    esp_http_client_set_header(client, "Authorization", auth);
-    esp_http_client_set_header(client, "Content-Type", ct);
-    esp_http_client_set_post_field(client, (const char *)body, (int)body_len);
+    /* Point session at this call's response buffer */
+    http_session_set_ctx(&s_session, &rb);
 
-    esp_err_t ret = esp_http_client_perform(client);
-    int status    = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
+    esp_http_client_set_method(s_session.handle, HTTP_METHOD_POST);
+    esp_http_client_set_header(s_session.handle, "Authorization", auth);
+    esp_http_client_set_header(s_session.handle, "Content-Type", ct);
+    esp_http_client_set_post_field(s_session.handle, (const char *)body, (int)body_len);
+
+    esp_err_t ret = http_session_perform(&s_session);  /* auto-retry on drop */
+    int status    = esp_http_client_get_status_code(s_session.handle);
+    /* Do NOT cleanup — keep handle alive for TLS session reuse */
     free(body);
 
     if (ret != ESP_OK) {
         snprintf(out->error, sizeof(out->error), "HTTP error: %s", esp_err_to_name(ret));
         free(rb.data);
         return ret;
+    }
+
+    /* Check for OOM during response accumulation */
+    if (rb.oom) {
+        ESP_LOGE(TAG, "STT response buffer OOM");
+        free(rb.data);
+        strncpy(out->error, "Out of memory accumulating STT response", sizeof(out->error) - 1);
+        return ESP_ERR_NO_MEM;
     }
 
     ESP_LOGI(TAG, "STT HTTP %d, response: %u bytes", status, (unsigned)rb.len);

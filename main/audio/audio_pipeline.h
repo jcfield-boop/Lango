@@ -27,3 +27,6 @@ esp_err_t audio_ring_commit(const char *chat_id);
 
 /** Abort the current recording and reset the ring buffer. */
 esp_err_t audio_ring_reset(void);
+
+/** Abort only if the ring is owned by chat_id. Returns ESP_ERR_NOT_FOUND if mismatch. */
+esp_err_t audio_ring_reset_for_client(const char *chat_id);

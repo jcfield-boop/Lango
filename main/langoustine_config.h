@@ -34,6 +34,9 @@
 #ifndef LANG_SECRET_TG_TOKEN
 #define LANG_SECRET_TG_TOKEN        ""
 #endif
+#ifndef LANG_SECRET_HTTP_TOKEN
+#define LANG_SECRET_HTTP_TOKEN      ""
+#endif
 
 /* WiFi */
 #define LANG_WIFI_MAX_RETRY          10

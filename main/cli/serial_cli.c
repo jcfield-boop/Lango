@@ -16,6 +16,7 @@
 #include "telegram/telegram_bot.h"
 #include "camera/uvc_camera.h"
 #include "memory/psram_alloc.h"
+#include "gateway/ws_server.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -655,6 +656,86 @@ static int cmd_restart(int argc, char **argv)
     return 0;
 }
 
+/* --- set_http_token command --- */
+static struct {
+    struct arg_str *token;
+    struct arg_end *end;
+} http_token_args;
+
+static int cmd_set_http_token(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&http_token_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, http_token_args.end, argv[0]);
+        return 1;
+    }
+    ws_server_set_auth_token(http_token_args.token->sval[0]);
+    printf("HTTP auth token set.\n");
+    return 0;
+}
+
+/* --- set_cors_origin command --- */
+static struct {
+    struct arg_str *origin;
+    struct arg_end *end;
+} cors_origin_args;
+
+static int cmd_set_cors_origin(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&cors_origin_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, cors_origin_args.end, argv[0]);
+        return 1;
+    }
+    ws_server_set_cors_origin(cors_origin_args.origin->sval[0]);
+    printf("CORS origin set to: %s\n", cors_origin_args.origin->sval[0]);
+    return 0;
+}
+
+/* --- tg_allow / tg_disallow / tg_allowlist commands --- */
+static struct {
+    struct arg_str *chat_id;
+    struct arg_end *end;
+} tg_allow_args;
+
+static int cmd_tg_allow(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&tg_allow_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, tg_allow_args.end, argv[0]);
+        return 1;
+    }
+    esp_err_t err = telegram_add_allowed_id(tg_allow_args.chat_id->sval[0]);
+    if (err == ESP_OK) printf("Added to Telegram allowlist.\n");
+    else printf("Error: %s\n", esp_err_to_name(err));
+    return 0;
+}
+
+static struct {
+    struct arg_str *chat_id;
+    struct arg_end *end;
+} tg_disallow_args;
+
+static int cmd_tg_disallow(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&tg_disallow_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, tg_disallow_args.end, argv[0]);
+        return 1;
+    }
+    esp_err_t err = telegram_remove_allowed_id(tg_disallow_args.chat_id->sval[0]);
+    if (err == ESP_OK) printf("Removed from Telegram allowlist.\n");
+    else printf("Not found: %s\n", esp_err_to_name(err));
+    return 0;
+}
+
+static int cmd_tg_allowlist(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    telegram_list_allowed_ids();
+    return 0;
+}
+
 /* ── Init ──────────────────────────────────────────────────────── */
 
 esp_err_t serial_cli_init(void)
@@ -924,6 +1005,53 @@ esp_err_t serial_cli_init(void)
         .func    = &cmd_capture,
     };
     esp_console_cmd_register(&capture_cmd);
+
+    /* set_http_token */
+    http_token_args.token = arg_str1(NULL, NULL, "<token>", "Bearer token for HTTP auth (empty to disable)");
+    http_token_args.end   = arg_end(1);
+    esp_console_cmd_t http_token_cmd = {
+        .command  = "set_http_token",
+        .help     = "Set HTTP bearer auth token (empty string disables auth)",
+        .func     = &cmd_set_http_token,
+        .argtable = &http_token_args,
+    };
+    esp_console_cmd_register(&http_token_cmd);
+
+    /* set_cors_origin */
+    cors_origin_args.origin = arg_str1(NULL, NULL, "<origin>", "CORS origin URL (e.g. http://192.168.1.5 or *)");
+    cors_origin_args.end    = arg_end(1);
+    esp_console_cmd_t cors_cmd = {
+        .command  = "set_cors_origin",
+        .help     = "Set CORS Access-Control-Allow-Origin header",
+        .func     = &cmd_set_cors_origin,
+        .argtable = &cors_origin_args,
+    };
+    esp_console_cmd_register(&cors_cmd);
+
+    /* tg_allow */
+    tg_allow_args.chat_id = arg_str1(NULL, NULL, "<chat_id>", "Telegram chat ID to allow");
+    tg_allow_args.end     = arg_end(1);
+    esp_console_cmd_t tg_allow_cmd = {
+        .command = "tg_allow", .help = "Add Telegram chat ID to allowlist",
+        .func = &cmd_tg_allow, .argtable = &tg_allow_args,
+    };
+    esp_console_cmd_register(&tg_allow_cmd);
+
+    /* tg_disallow */
+    tg_disallow_args.chat_id = arg_str1(NULL, NULL, "<chat_id>", "Telegram chat ID to remove");
+    tg_disallow_args.end     = arg_end(1);
+    esp_console_cmd_t tg_disallow_cmd = {
+        .command = "tg_disallow", .help = "Remove Telegram chat ID from allowlist",
+        .func = &cmd_tg_disallow, .argtable = &tg_disallow_args,
+    };
+    esp_console_cmd_register(&tg_disallow_cmd);
+
+    /* tg_allowlist */
+    esp_console_cmd_t tg_allowlist_cmd = {
+        .command = "tg_allowlist", .help = "Show Telegram chat ID allowlist",
+        .func = &cmd_tg_allowlist,
+    };
+    esp_console_cmd_register(&tg_allowlist_cmd);
 
     ESP_ERROR_CHECK(esp_console_start_repl(repl));
     ESP_LOGI(TAG, "Serial CLI started");

@@ -1,4 +1,5 @@
 #include "tool_registry.h"
+#include "langoustine_config.h"
 #include "tools/tool_web_search.h"
 #include "tools/tool_get_time.h"
 #include "tools/tool_files.h"

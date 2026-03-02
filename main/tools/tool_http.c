@@ -33,6 +33,47 @@ static esp_err_t http_event_cb(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
+static bool url_is_allowed(const char *url, char *err_out, size_t err_size)
+{
+    if (!url || !url[0]) {
+        snprintf(err_out, err_size, "Error: empty URL");
+        return false;
+    }
+    bool is_http  = strncasecmp(url, "http://",  7) == 0;
+    bool is_https = strncasecmp(url, "https://", 8) == 0;
+    if (!is_http && !is_https) {
+        snprintf(err_out, err_size, "Error: only http/https URLs are allowed");
+        return false;
+    }
+    const char *host_start = is_https ? url + 8 : url + 7;
+    char host[128] = {0};
+    size_t i = 0;
+    while (host_start[i] && host_start[i] != '/' && host_start[i] != ':' && i < sizeof(host) - 1) {
+        host[i] = host_start[i];
+        i++;
+    }
+    host[i] = '\0';
+    /* Block loopback and RFC-1918 private ranges */
+    if (strcasecmp(host, "localhost") == 0 ||
+        strncmp(host, "127.", 4)      == 0 ||
+        strncmp(host, "169.254.", 8)  == 0 ||
+        strncmp(host, "10.", 3)       == 0 ||
+        strncmp(host, "192.168.", 8)  == 0) {
+        snprintf(err_out, err_size, "Error: access to internal/private addresses is blocked");
+        return false;
+    }
+    /* Block 172.16.0.0/12 */
+    if (strncmp(host, "172.", 4) == 0) {
+        int second_octet = 0;
+        if (sscanf(host + 4, "%d", &second_octet) == 1 &&
+            second_octet >= 16 && second_octet <= 31) {
+            snprintf(err_out, err_size, "Error: access to internal/private addresses is blocked");
+            return false;
+        }
+    }
+    return true;
+}
+
 esp_err_t tool_http_execute(const char *input_json, char *output, size_t output_size)
 {
     cJSON *input = cJSON_Parse(input_json);
@@ -53,6 +94,12 @@ esp_err_t tool_http_execute(const char *input_json, char *output, size_t output_
     }
 
     const char *url    = j_url->valuestring;
+
+    if (!url_is_allowed(url, output, output_size)) {
+        cJSON_Delete(input);
+        return ESP_ERR_INVALID_ARG;
+    }
+
     const char *method = (j_method && cJSON_IsString(j_method)) ? j_method->valuestring : "GET";
     const char *body   = (j_body   && cJSON_IsString(j_body))   ? j_body->valuestring   : NULL;
     bool is_post = (strcasecmp(method, "POST") == 0);

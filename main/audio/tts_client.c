@@ -2,6 +2,7 @@
 #include "langoustine_config.h"
 #include "memory/psram_alloc.h"
 #include "audio/i2s_audio.h"
+#include "llm/http_session.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -32,6 +33,7 @@ typedef struct {
     size_t   len;
     int64_t  created_us;  /* esp_timer_get_time() at generation */
     bool     active;
+    bool     playing;    /* true while i2s_audio_play_wav is running */
 } tts_cache_entry_t;
 
 static tts_cache_entry_t s_cache[LANG_TTS_CACHE_MAX];
@@ -41,6 +43,9 @@ static char s_api_key[TTS_API_KEY_MAX]   = {0};
 static char s_endpoint[TTS_ENDPOINT_MAX] = LANG_DEFAULT_TTS_ENDPOINT;
 static char s_model[TTS_MODEL_MAX]       = LANG_DEFAULT_TTS_MODEL;
 static char s_voice[TTS_VOICE_MAX]       = LANG_DEFAULT_TTS_VOICE;
+
+/* Persistent HTTP session — created once in tts_client_init() */
+static http_session_t s_session = {0};
 
 /* ── Response accumulator (binary, PSRAM) ──────────────────────── */
 
@@ -87,7 +92,7 @@ static void cache_evict_oldest(void)
     int64_t oldest_time = INT64_MAX;
 
     for (int i = 0; i < LANG_TTS_CACHE_MAX; i++) {
-        if (s_cache[i].active && s_cache[i].created_us < oldest_time) {
+        if (s_cache[i].active && !s_cache[i].playing && s_cache[i].created_us < oldest_time) {
             oldest_time = s_cache[i].created_us;
             oldest_idx  = i;
         }
@@ -106,7 +111,7 @@ static void cache_expire_old(void)
 {
     int64_t now_us = esp_timer_get_time();
     for (int i = 0; i < LANG_TTS_CACHE_MAX; i++) {
-        if (s_cache[i].active) {
+        if (s_cache[i].active && !s_cache[i].playing) {
             int64_t age_s = (now_us - s_cache[i].created_us) / 1000000LL;
             if (age_s > TTS_TTL_S) {
                 ESP_LOGI(TAG, "TTS cache expire: %s (age %llds)", s_cache[i].id, (long long)age_s);
@@ -173,6 +178,16 @@ esp_err_t tts_client_init(void)
     } else {
         ESP_LOGW(TAG, "No TTS API key. Use CLI: tts_key <KEY>");
     }
+
+    /* Create persistent session for TLS reuse */
+    if (!s_session.valid) {
+        esp_err_t err = http_session_init(&s_session, s_endpoint,
+                                          http_event_cb,
+                                          60 * 1000, 8192, 4096);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "TTS http_session_init failed: %s", esp_err_to_name(err));
+        }
+    }
     return ESP_OK;
 }
 
@@ -211,31 +226,28 @@ esp_err_t tts_generate(const char *text, char *id_out)
     char auth[TTS_API_KEY_MAX + 16];
     snprintf(auth, sizeof(auth), "Bearer %s", s_api_key);
 
-    esp_http_client_config_t cfg = {
-        .url               = s_endpoint,
-        .event_handler     = http_event_cb,
-        .user_data         = &bb,
-        .timeout_ms        = 60 * 1000,
-        .buffer_size       = 8192,
-        .buffer_size_tx    = 4096,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-    };
-
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) {
+    /* Reuse persistent session (lazy init fallback if init was skipped) */
+    if (!s_session.valid) {
+        http_session_init(&s_session, s_endpoint, http_event_cb,
+                          60 * 1000, 8192, 4096);
+    }
+    if (!s_session.valid) {
         free(body);
         free(bb.data);
         return ESP_FAIL;
     }
 
-    esp_http_client_set_method(client, HTTP_METHOD_POST);
-    esp_http_client_set_header(client, "Authorization", auth);
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    esp_http_client_set_post_field(client, body, (int)strlen(body));
+    /* Point session at this call's response buffer */
+    http_session_set_ctx(&s_session, &bb);
 
-    esp_err_t ret = esp_http_client_perform(client);
-    int status    = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
+    esp_http_client_set_method(s_session.handle, HTTP_METHOD_POST);
+    esp_http_client_set_header(s_session.handle, "Authorization", auth);
+    esp_http_client_set_header(s_session.handle, "Content-Type", "application/json");
+    esp_http_client_set_post_field(s_session.handle, body, (int)strlen(body));
+
+    esp_err_t ret = http_session_perform(&s_session);  /* auto-retry on drop */
+    int status    = esp_http_client_get_status_code(s_session.handle);
+    /* Do NOT cleanup — keep handle alive for TLS session reuse */
     free(body);
 
     if (ret != ESP_OK || status != 200) {
@@ -279,12 +291,19 @@ esp_err_t tts_generate(const char *text, char *id_out)
     strncpy(id_out, s_cache[slot].id, 9);
     id_out[8] = '\0';
 
+#if LANG_I2S_AUDIO_ENABLED
+    s_cache[slot].playing = true;   /* mark before releasing lock so eviction skips it */
+#endif
+
     xSemaphoreGive(s_cache_lock);
 
     ESP_LOGI(TAG, "TTS cached: id=%s, %u bytes", id_out, (unsigned)bb.len);
 
 #if LANG_I2S_AUDIO_ENABLED
-    i2s_audio_play_wav(bb.data, bb.len);
+    i2s_audio_play_wav(bb.data, bb.len);   /* synchronous — DMA finishes before return */
+    xSemaphoreTake(s_cache_lock, portMAX_DELAY);
+    s_cache[slot].playing = false;
+    xSemaphoreGive(s_cache_lock);
 #endif
 
     return ESP_OK;

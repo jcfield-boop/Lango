@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "driver/i2s_std.h"
 #include "driver/i2s_types.h"
+#include "freertos/FreeRTOS.h"
 
 static const char *TAG = "i2s_audio";
 

@@ -40,3 +40,12 @@ int32_t telegram_send_get_id(const char *chat_id, const char *text);
  */
 esp_err_t telegram_edit_message(const char *chat_id, int32_t message_id, const char *text);
 
+/** Add a chat ID to the Telegram allowlist. Empty list = accept all. Persisted to NVS. */
+esp_err_t telegram_add_allowed_id(const char *id);
+
+/** Remove a chat ID from the allowlist. */
+esp_err_t telegram_remove_allowed_id(const char *id);
+
+/** Print the current allowlist to stdout. */
+void telegram_list_allowed_ids(void);
+

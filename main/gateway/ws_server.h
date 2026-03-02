@@ -63,3 +63,9 @@ bool ws_server_get_verbose_logs(void);
 
 /** Stop the WebSocket/HTTP server. */
 esp_err_t ws_server_stop(void);
+
+/** Set HTTP bearer token for auth (empty string disables auth). Persisted to NVS. */
+void ws_server_set_auth_token(const char *token);
+
+/** Set CORS Access-Control-Allow-Origin header value (default "*"). Persisted to NVS. */
+void ws_server_set_cors_origin(const char *origin);

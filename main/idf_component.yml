@@ -10,5 +10,8 @@ dependencies:
   espressif/mdns:
     version: ">=1.2.0"
   ## UVC (USB Video Class) driver for USB webcam support
-  espressif/usb_host_libuvc:
-    version: ">=0.1.0"
+  espressif/usb_host_uvc:
+    version: ">=2.0.0"
+  ## Pin USB host lib to IDF-6-compatible version (1.2.0 requires esp_hal_usb from IDF 7+)
+  espressif/usb:
+    version: "1.1.0"
