@@ -9,6 +9,7 @@
 #include "gateway/ws_server.h"
 #include "tools/tool_memory.h"
 #include "audio/tts_client.h"
+#include "telegram/telegram_bot.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -259,6 +260,11 @@ static void agent_loop_task(void *arg)
         cJSON_AddStringToObject(user_msg, "content", msg.content);
         cJSON_AddItemToArray(messages, user_msg);
 
+        /* Telegram: send placeholder before LLM call */
+        if (is_telegram) {
+            tg_placeholder_id = telegram_send_get_id(msg.chat_id, "🤔 thinking...");
+        }
+
         /* Send status: thinking */
         ws_server_send_status(msg.chat_id, "llm_thinking");
 
@@ -269,6 +275,8 @@ static void agent_loop_task(void *arg)
         bool recovery_tried = false;
         bool retry_done = false;
         bool oom_restart = false;
+        bool is_telegram = (strcmp(msg.channel, MIMI_CHAN_TELEGRAM) == 0);
+        int32_t tg_placeholder_id = -1;
 
         /* Detect memory trigger keywords */
         bool force_memory_tool = false;
@@ -292,7 +300,7 @@ static void agent_loop_task(void *arg)
 
         while (iteration < LANG_AGENT_MAX_TOOL_ITER) {
 #if LANG_AGENT_SEND_WORKING_STATUS
-            if (!sent_working_status && strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0) {
+            if (!sent_working_status && strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0 && !is_telegram) {
                 mimi_msg_t status = {0};
                 strncpy(status.channel, msg.channel, sizeof(status.channel) - 1);
                 strncpy(status.chat_id, msg.chat_id, sizeof(status.chat_id) - 1);
@@ -403,25 +411,43 @@ static void agent_loop_task(void *arg)
 
             session_trim(msg.chat_id, LANG_SESSION_MAX_MSGS);
 
-            /* Generate TTS and send with tts_id if successful */
-            ws_server_send_status(msg.chat_id, "tts_generating");
-            char tts_id[9] = {0};
-            esp_err_t tts_err = tts_generate(final_text, tts_id);
-
-            if (tts_err == ESP_OK && tts_id[0]) {
-                /* Send message with tts_id so browser auto-plays */
-                ws_server_send_with_tts(msg.chat_id, final_text, tts_id);
-            } else {
-                /* No TTS — send message-only dispatch via outbound queue */
-                mimi_msg_t out = {0};
-                strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
-                strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
-                out.content = final_text;
-                if (message_bus_push_outbound(&out) != ESP_OK) {
-                    ESP_LOGW(TAG, "Outbound queue full, drop final response");
-                    free(final_text);
+            if (is_telegram) {
+                /* Telegram: edit the placeholder or send a new message */
+                if (tg_placeholder_id > 0) {
+                    telegram_edit_message(msg.chat_id, tg_placeholder_id, final_text);
                 } else {
-                    final_text = NULL;
+                    mimi_msg_t out = {0};
+                    strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
+                    strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
+                    out.content = final_text;
+                    if (message_bus_push_outbound(&out) != ESP_OK) {
+                        ESP_LOGW(TAG, "Outbound queue full, drop telegram response");
+                        free(final_text);
+                    } else {
+                        final_text = NULL;
+                    }
+                }
+            } else {
+                /* WebSocket: generate TTS and send */
+                ws_server_send_status(msg.chat_id, "tts_generating");
+                char tts_id[9] = {0};
+                esp_err_t tts_err = tts_generate(final_text, tts_id);
+
+                if (tts_err == ESP_OK && tts_id[0]) {
+                    /* Send message with tts_id so browser auto-plays */
+                    ws_server_send_with_tts(msg.chat_id, final_text, tts_id);
+                } else {
+                    /* No TTS — send message-only dispatch via outbound queue */
+                    mimi_msg_t out = {0};
+                    strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
+                    strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
+                    out.content = final_text;
+                    if (message_bus_push_outbound(&out) != ESP_OK) {
+                        ESP_LOGW(TAG, "Outbound queue full, drop final response");
+                        free(final_text);
+                    } else {
+                        final_text = NULL;
+                    }
                 }
             }
 
@@ -435,13 +461,17 @@ static void agent_loop_task(void *arg)
                 ? "Memory exhausted — restarting..."
                 : "Sorry, I encountered an error.";
 
-            mimi_msg_t out = {0};
-            strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
-            strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
-            out.content = strdup(err_text);
-            if (out.content) {
-                if (message_bus_push_outbound(&out) != ESP_OK) {
-                    free(out.content);
+            if (is_telegram && tg_placeholder_id > 0) {
+                telegram_edit_message(msg.chat_id, tg_placeholder_id, err_text);
+            } else {
+                mimi_msg_t out = {0};
+                strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
+                strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
+                out.content = strdup(err_text);
+                if (out.content) {
+                    if (message_bus_push_outbound(&out) != ESP_OK) {
+                        free(out.content);
+                    }
                 }
             }
             ws_server_send_status(msg.chat_id, "idle");

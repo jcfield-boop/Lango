@@ -31,6 +31,9 @@
 #ifndef LANG_SECRET_SEARCH_KEY
 #define LANG_SECRET_SEARCH_KEY      ""
 #endif
+#ifndef LANG_SECRET_TG_TOKEN
+#define LANG_SECRET_TG_TOKEN        ""
+#endif
 
 /* WiFi */
 #define LANG_WIFI_MAX_RETRY          10
@@ -148,13 +151,24 @@
 #define LANG_NVS_KEY_VOICE           "voice"
 #define LANG_NVS_KEY_ENDPOINT        "endpoint"
 
+/* Telegram Bot */
+#define LANG_TG_POLL_TIMEOUT_S       30
+#define LANG_TG_MAX_MSG_LEN          4096
+#define LANG_TG_POLL_STACK           (8 * 1024)
+#define LANG_TG_POLL_PRIO            5
+#define LANG_TG_POLL_CORE            0
+#define LANG_NVS_TG                  "tg_config"
+#define LANG_NVS_KEY_TG_TOKEN        "bot_token"
+
 /* Channel Names */
 #define LANG_CHAN_WEBSOCKET           "websocket"
 #define LANG_CHAN_SYSTEM              "system"
+#define LANG_CHAN_TELEGRAM            "telegram"
 
 /* Compatibility aliases for modules not yet fully renamed */
 #define MIMI_CHAN_WEBSOCKET           LANG_CHAN_WEBSOCKET
 #define MIMI_CHAN_SYSTEM              LANG_CHAN_SYSTEM
+#define MIMI_CHAN_TELEGRAM            LANG_CHAN_TELEGRAM
 #define MIMI_BUS_QUEUE_LEN           LANG_BUS_QUEUE_LEN
 #define MIMI_AGENT_MAX_HISTORY       LANG_AGENT_MAX_HISTORY
 #define MIMI_SESSION_MAX_MSGS        LANG_SESSION_MAX_MSGS
@@ -212,3 +226,10 @@
 #define MIMI_SECRET_PROXY_HOST       LANG_SECRET_PROXY_HOST
 #define MIMI_SECRET_PROXY_PORT       LANG_SECRET_PROXY_PORT
 #define MIMI_SECRET_SEARCH_KEY       LANG_SECRET_SEARCH_KEY
+#define MIMI_SECRET_TG_TOKEN         LANG_SECRET_TG_TOKEN
+#define MIMI_TG_POLL_TIMEOUT_S       LANG_TG_POLL_TIMEOUT_S
+#define MIMI_TG_MAX_MSG_LEN          LANG_TG_MAX_MSG_LEN
+#define MIMI_TG_POLL_STACK           LANG_TG_POLL_STACK
+#define MIMI_TG_POLL_PRIO            LANG_TG_POLL_PRIO
+#define MIMI_NVS_TG                  LANG_NVS_TG
+#define MIMI_NVS_KEY_TG_TOKEN        LANG_NVS_KEY_TG_TOKEN

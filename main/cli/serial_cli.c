@@ -13,6 +13,7 @@
 #include "ota/ota_manager.h"
 #include "audio/stt_client.h"
 #include "audio/tts_client.h"
+#include "telegram/telegram_bot.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -115,6 +116,29 @@ static int cmd_set_model_provider(int argc, char **argv)
     }
     llm_set_provider(provider_args.provider->sval[0]);
     printf("Model provider set.\n");
+    return 0;
+}
+
+/* --- set_tg_token command --- */
+static struct {
+    struct arg_str *token;
+    struct arg_end *end;
+} tg_token_args;
+
+static int cmd_set_tg_token(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&tg_token_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, tg_token_args.end, argv[0]);
+        return 1;
+    }
+    esp_err_t err = telegram_set_token(tg_token_args.token->sval[0]);
+    if (err == ESP_OK) {
+        printf("Telegram bot token saved. Polling will use new token immediately.\n");
+    } else {
+        printf("Failed to save Telegram token: %s\n", esp_err_to_name(err));
+        return 1;
+    }
     return 0;
 }
 
@@ -480,6 +504,7 @@ static int cmd_config_show(int argc, char **argv)
     print_config("LLM API Key",  LANG_NVS_LLM,    LANG_NVS_KEY_API_KEY,  LANG_SECRET_API_KEY,      true);
     print_config("LLM Model",    LANG_NVS_LLM,    LANG_NVS_KEY_MODEL,    LANG_SECRET_MODEL,        false);
     print_config("LLM Provider", LANG_NVS_LLM,    LANG_NVS_KEY_PROVIDER, LANG_SECRET_MODEL_PROVIDER, false);
+    print_config("Telegram Token", LANG_NVS_TG,   LANG_NVS_KEY_TG_TOKEN, LANG_SECRET_TG_TOKEN,     true);
     print_config("STT Key",      LANG_NVS_STT,    LANG_NVS_KEY_API_KEY,  "",                       true);
     print_config("TTS Key",      LANG_NVS_TTS,    LANG_NVS_KEY_API_KEY,  "",                       true);
     print_config("TTS Voice",    LANG_NVS_TTS,    LANG_NVS_KEY_VOICE,    LANG_DEFAULT_TTS_VOICE,   false);
@@ -494,7 +519,7 @@ static int cmd_config_show(int argc, char **argv)
 static int cmd_config_reset(int argc, char **argv)
 {
     const char *namespaces[] = {
-        LANG_NVS_WIFI, LANG_NVS_LLM, LANG_NVS_STT, LANG_NVS_TTS,
+        LANG_NVS_WIFI, LANG_NVS_LLM, LANG_NVS_TG, LANG_NVS_STT, LANG_NVS_TTS,
         LANG_NVS_PROXY, LANG_NVS_SEARCH, NULL
     };
     for (int i = 0; namespaces[i]; i++) {
@@ -661,6 +686,17 @@ esp_err_t serial_cli_init(void)
         .func = &cmd_set_model_provider, .argtable = &provider_args,
     };
     esp_console_cmd_register(&provider_cmd);
+
+    /* set_tg_token */
+    tg_token_args.token = arg_str1(NULL, NULL, "<token>", "Telegram bot token");
+    tg_token_args.end   = arg_end(1);
+    esp_console_cmd_t tg_token_cmd = {
+        .command  = "set_tg_token",
+        .help     = "Set Telegram bot token",
+        .func     = &cmd_set_tg_token,
+        .argtable = &tg_token_args,
+    };
+    esp_console_cmd_register(&tg_token_cmd);
 
     /* stt_key */
     stt_key_args.key = arg_str1(NULL, NULL, "<key>", "STT (Whisper) API key");

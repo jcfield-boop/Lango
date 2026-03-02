@@ -38,6 +38,7 @@ idf_component_register(
         "audio/audio_pipeline.c"
         "audio/stt_client.c"
         "audio/tts_client.c"
+        "telegram/telegram_bot.c"
     INCLUDE_DIRS
         "."
     REQUIRES

@@ -29,6 +29,7 @@
 #include "heartbeat/heartbeat.h"
 #include "skills/skill_loader.h"
 #include "rules/rule_engine.h"
+#include "telegram/telegram_bot.h"
 #include "mdns.h"
 
 static const char *TAG = "langoustine";
@@ -162,6 +163,11 @@ static void outbound_dispatch_task(void *arg)
             if (ws_err != ESP_OK) {
                 ESP_LOGW(TAG, "WS send failed for %s: %s", msg.chat_id, esp_err_to_name(ws_err));
             }
+        } else if (strcmp(msg.channel, LANG_CHAN_TELEGRAM) == 0) {
+            esp_err_t tg_err = telegram_send_message(msg.chat_id, msg.content);
+            if (tg_err != ESP_OK) {
+                ESP_LOGW(TAG, "TG send failed for %s", msg.chat_id);
+            }
         } else if (strcmp(msg.channel, LANG_CHAN_SYSTEM) == 0) {
             ESP_LOGI(TAG, "System message [%s]: %.128s", msg.chat_id, msg.content);
             char mon[200];
@@ -217,6 +223,7 @@ void app_main(void)
     ESP_ERROR_CHECK(heartbeat_init());
     ESP_ERROR_CHECK(rule_engine_init());
     ESP_ERROR_CHECK(agent_loop_init());
+    ESP_ERROR_CHECK(telegram_bot_init());
 
     /* Start Serial CLI first (works without WiFi) */
     ESP_ERROR_CHECK(serial_cli_init());
@@ -263,6 +270,7 @@ void app_main(void)
 
             /* Start network-dependent services */
             ESP_ERROR_CHECK(agent_loop_start());
+            ESP_ERROR_CHECK(telegram_bot_start());
             cron_service_start();
             heartbeat_start();
             rule_engine_start();
