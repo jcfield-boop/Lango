@@ -7,6 +7,9 @@ sdkconfig.old
 main/langoustine_secrets.h
 main/langoustine_secrets.h.bak
 
+# Datasheets / docs dropped in project root
+*.pdf
+
 # IDE / OS
 .DS_Store
 .vscode/
