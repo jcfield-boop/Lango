@@ -1,0 +1,22 @@
+# Build output
+build/
+sdkconfig
+sdkconfig.old
+
+# Secrets — NEVER commit
+main/langoustine_secrets.h
+main/langoustine_secrets.h.bak
+
+# IDE / OS
+.DS_Store
+.vscode/
+*.swp
+*.swo
+*~
+
+# ESP-IDF managed components cache
+managed_components/
+
+# Python cache
+__pycache__/
+*.pyc

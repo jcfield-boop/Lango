@@ -1,0 +1,11 @@
+## IDF Component Manager Manifest File
+dependencies:
+  ## Required IDF version
+  idf:
+    version: '>=5.5.0,<7.0.0'
+  ## LittleFS filesystem driver
+  joltwallet/littlefs:
+    version: ">=1.14.0"
+  ## mDNS for langoustine.local hostname resolution
+  espressif/mdns:
+    version: ">=1.2.0"

@@ -1,0 +1,47 @@
+idf_component_register(
+    SRCS
+        "langoustine.c"
+        "bus/message_bus.c"
+        "wifi/wifi_manager.c"
+        "llm/llm_proxy.c"
+        "agent/agent_loop.c"
+        "agent/context_builder.c"
+        "memory/memory_store.c"
+        "memory/session_mgr.c"
+        "memory/psram_alloc.c"
+        "gateway/ws_server.c"
+        "cli/serial_cli.c"
+        "proxy/http_proxy.c"
+        "cron/cron_service.c"
+        "heartbeat/heartbeat.c"
+        "tools/tool_registry.c"
+        "tools/tool_cron.c"
+        "tools/tool_web_search.c"
+        "tools/tool_get_time.c"
+        "tools/tool_files.c"
+        "tools/tool_http.c"
+        "tools/tool_smtp.c"
+        "tools/tool_device_temp.c"
+        "tools/tool_search_files.c"
+        "tools/tool_system_info.c"
+        "tools/tool_memory.c"
+        "tools/lan_request.c"
+        "tools/tool_ha.c"
+        "tools/tool_klipper.c"
+        "tools/tool_gpio.c"
+        "tools/tool_wifi_scan.c"
+        "tools/tool_rss.c"
+        "tools/tool_rule.c"
+        "rules/rule_engine.c"
+        "skills/skill_loader.c"
+        "ota/ota_manager.c"
+        "audio/audio_pipeline.c"
+        "audio/stt_client.c"
+        "audio/tts_client.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        nvs_flash esp_wifi esp_netif esp_http_client esp_http_server
+        esp_https_ota esp_event json console vfs app_update esp-tls
+        driver esp_timer esp_driver_tsens mdns esp_littlefs
+)

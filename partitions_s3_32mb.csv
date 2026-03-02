@@ -1,0 +1,17 @@
+# Name,      Type, SubType,  Offset,   Size,     Flags
+# ESP32-S3 32MB Flash — dual-bank OTA + large LittleFS
+#   nvs       (64KB):  WiFi creds, LLM config, STT/TTS config
+#   phy_init  (4KB):   RF calibration
+#   otadata   (8KB):   OTA slot selector
+#   ota_0     (6MB):   active firmware slot
+#   ota_1     (6MB):   OTA target slot
+#   coredump  (64KB):  panic dump for debugging
+#   littlefs  (~29MB): config / memory / skills / sessions / TTS cache / web UI
+#
+nvs,       data, nvs,      0x9000,   0x10000,
+phy_init,  data, phy,      0x19000,  0x1000,
+otadata,   data, ota,      0x1A000,  0x2000,
+ota_0,     app,  ota_0,    0x20000,  0x600000,
+ota_1,     app,  ota_1,    0x620000, 0x600000,
+coredump,  data, coredump, 0xC20000, 0x10000,
+littlefs,  data, spiffs,   0xC30000, 0x1FD0000,
