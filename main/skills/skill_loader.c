@@ -279,7 +279,7 @@ size_t skill_loader_build_summary(char *buf, size_t size)
         if (name_len < 4) continue;
         if (strcmp(name + name_len - 3, ".md") != 0) continue;
 
-        char full_path[128];
+        char full_path[280];
         snprintf(full_path, sizeof(full_path), "%s%s", LANG_SKILLS_PREFIX, name);
 
         FILE *f = fopen(full_path, "r");

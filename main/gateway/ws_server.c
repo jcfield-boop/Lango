@@ -1106,7 +1106,7 @@ esp_err_t ws_server_start(void)
     httpd_uri_t health_uri = { .uri = "/health", .method = HTTP_GET, .handler = health_handler };
     httpd_register_uri_handler(s_server, &health_uri);
 
-    /* TTS audio serve (wildcard: /tts/*) */
+    /* TTS audio serve (wildcard: /tts/ID) */
     httpd_uri_t tts_uri = { .uri = "/tts/*", .method = HTTP_GET, .handler = tts_serve_handler };
     httpd_register_uri_handler(s_server, &tts_uri);
 

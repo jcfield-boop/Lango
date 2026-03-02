@@ -59,7 +59,7 @@ static int search_dir(const char *dir_path, const char *prefix_filter,
     while ((ent = readdir(dir)) != NULL && matches < MAX_MATCHES) {
         if (ent->d_name[0] == '.') continue;
 
-        char full_path[256];
+        char full_path[280];
         snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, ent->d_name);
 
         /* Recurse into subdirectories */

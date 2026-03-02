@@ -52,7 +52,7 @@ static void purge_old_daily_notes(void)
                      + cutoff_tm.tm_mday;
         if (file_val >= cut_val) continue;
 
-        char path[128];
+        char path[280];
         snprintf(path, sizeof(path), "%s/%s", LANG_LFS_MEMORY_DIR, fname);
         if (remove(path) == 0) {
             ESP_LOGI(TAG, "Purged old daily note: %s", fname);

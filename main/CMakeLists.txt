@@ -44,5 +44,5 @@ idf_component_register(
     REQUIRES
         nvs_flash esp_wifi esp_netif esp_http_client esp_http_server
         esp_https_ota esp_event json console vfs app_update esp-tls
-        driver esp_timer esp_driver_tsens mdns esp_littlefs
+        driver esp_timer esp_driver_tsens espressif__mdns joltwallet__littlefs
 )

@@ -427,7 +427,7 @@ static int cmd_skill_search(int argc, char **argv)
         size_t name_len = strlen(name);
         if (name_len < 4 || strcmp(name + name_len - 3, ".md") != 0) continue;
 
-        char full_path[256];
+        char full_path[280];
         snprintf(full_path, sizeof(full_path), "%s/%s", LANG_LFS_SKILLS_DIR, name);
 
         bool file_matched = contains_nocase(name, keyword);

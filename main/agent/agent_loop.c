@@ -260,14 +260,6 @@ static void agent_loop_task(void *arg)
         cJSON_AddStringToObject(user_msg, "content", msg.content);
         cJSON_AddItemToArray(messages, user_msg);
 
-        /* Telegram: send placeholder before LLM call */
-        if (is_telegram) {
-            tg_placeholder_id = telegram_send_get_id(msg.chat_id, "🤔 thinking...");
-        }
-
-        /* Send status: thinking */
-        ws_server_send_status(msg.chat_id, "llm_thinking");
-
         /* 4. ReAct loop */
         char *final_text = NULL;
         int iteration = 0;
@@ -277,6 +269,14 @@ static void agent_loop_task(void *arg)
         bool oom_restart = false;
         bool is_telegram = (strcmp(msg.channel, MIMI_CHAN_TELEGRAM) == 0);
         int32_t tg_placeholder_id = -1;
+
+        /* Telegram: send placeholder before LLM call */
+        if (is_telegram) {
+            tg_placeholder_id = telegram_send_get_id(msg.chat_id, "🤔 thinking...");
+        }
+
+        /* Send status: thinking */
+        ws_server_send_status(msg.chat_id, "llm_thinking");
 
         /* Detect memory trigger keywords */
         bool force_memory_tool = false;
