@@ -37,6 +37,9 @@ void tts_set_api_key(const char *key);
 /** Save voice to NVS and update in-memory voice. */
 void tts_set_voice(const char *voice);
 
+/** Save model to NVS and update in-memory model. */
+void tts_set_model(const char *model);
+
 /** Copy masked API key into buf. */
 void tts_get_api_key_masked(char *buf, size_t buf_len);
 

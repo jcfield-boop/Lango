@@ -1,0 +1,201 @@
+#include "led_indicator.h"
+#include "langoustine_config.h"
+
+#include <math.h>
+#include <stdatomic.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "driver/rmt_tx.h"
+#include "driver/rmt_encoder.h"
+#include "hal/gpio_types.h"
+
+static const char *TAG = "led";
+
+/* RMT resolution: 10 MHz → 100 ns / tick */
+#define RMT_RESOLUTION_HZ   10000000
+
+/* WS2812 bit timings at 10 MHz (100 ns / tick):
+ *   T0H = 400 ns = 4 ticks,  T0L = 800 ns = 8 ticks
+ *   T1H = 800 ns = 8 ticks,  T1L = 400 ns = 4 ticks */
+#define WS2812_T0H  4
+#define WS2812_T0L  8
+#define WS2812_T1H  8
+#define WS2812_T1L  4
+
+/* Max brightness (0-255): cap at ~40/255 to stay within USB power budget */
+#define LED_MAX_BRIGHT  40
+
+/* Animation period in ticks (1 tick = 20 ms) */
+#define ANIM_PERIOD_TICKS  50   /* 1 s breathing cycle */
+#define ANIM_BLINK_ON      10  /* blink on-time: 200 ms */
+#define ANIM_BLINK_OFF     40  /* blink off-time: 800 ms (total = 1 s) */
+#define ANIM_FAST_ON        3  /* fast flash on: 60 ms */
+#define ANIM_FAST_OFF       7  /* fast flash off: 140 ms (total = 200 ms) */
+#define ANIM_ERROR_CYCLES  25  /* ~5 s of fast flashing then auto-revert */
+
+static rmt_channel_handle_t s_rmt_chan = NULL;
+static rmt_encoder_handle_t s_encoder  = NULL;
+static _Atomic led_state_t  s_state    = LED_BOOTING;
+
+/* --- WS2812 bytes encoder -------------------------------------------- */
+
+/* Encode one GRB byte over RMT */
+static rmt_bytes_encoder_config_t s_enc_cfg = {
+    .bit0 = {
+        .duration0 = WS2812_T0H, .level0 = 1,
+        .duration1 = WS2812_T0L, .level1 = 0,
+    },
+    .bit1 = {
+        .duration0 = WS2812_T1H, .level0 = 1,
+        .duration1 = WS2812_T1L, .level1 = 0,
+    },
+    .flags.msb_first = 1,
+};
+
+static rmt_transmit_config_t s_tx_cfg = {
+    .loop_count = 0,
+};
+
+/* Send one RGB pixel (internally GRB to the WS2812) */
+static void send_pixel(uint8_t r, uint8_t g, uint8_t b)
+{
+    if (!s_rmt_chan || !s_encoder) return;
+
+    uint8_t grb[3] = { g, r, b };
+    esp_err_t err = rmt_transmit(s_rmt_chan, s_encoder, grb, sizeof(grb), &s_tx_cfg);
+    if (err == ESP_OK) {
+        rmt_tx_wait_all_done(s_rmt_chan, pdMS_TO_TICKS(10));
+    }
+}
+
+/* Scale a 0-255 colour component by brightness 0-255 */
+static inline uint8_t scale(uint8_t c, uint8_t bright)
+{
+    return (uint8_t)(((uint16_t)c * bright) >> 8);
+}
+
+/* --- Animation task --------------------------------------------------- */
+
+static void led_task(void *arg)
+{
+    uint32_t step = 0;
+    int      error_count = 0;
+    led_state_t prev_state = LED_BOOTING;
+
+    while (1) {
+        led_state_t state = atomic_load(&s_state);
+
+        /* Reset step counter on state change */
+        if (state != prev_state) {
+            step = 0;
+            error_count = 0;
+            prev_state = state;
+        }
+
+        uint8_t r = 0, g = 0, b = 0;
+
+        switch (state) {
+        case LED_BOOTING:
+            /* Solid red */
+            r = LED_MAX_BRIGHT;
+            break;
+
+        case LED_WIFI: {
+            /* Slow yellow blink: 200 ms on, 800 ms off */
+            uint32_t phase = step % (ANIM_BLINK_ON + ANIM_BLINK_OFF);
+            if (phase < ANIM_BLINK_ON) {
+                r = LED_MAX_BRIGHT;
+                g = LED_MAX_BRIGHT;
+            }
+            break;
+        }
+
+        case LED_READY: {
+            /* Breathing green: brightness = (1 - cos(2π·step/period)) / 2 */
+            float t = (float)step / ANIM_PERIOD_TICKS;
+            float bright = (1.0f - cosf(2.0f * (float)M_PI * t)) * 0.5f;
+            g = scale(LED_MAX_BRIGHT, (uint8_t)(bright * 255.0f));
+            break;
+        }
+
+        case LED_THINKING: {
+            /* Pulsing blue */
+            float t = (float)step / ANIM_PERIOD_TICKS;
+            float bright = (1.0f - cosf(2.0f * (float)M_PI * t)) * 0.5f;
+            b = scale(LED_MAX_BRIGHT, (uint8_t)(bright * 255.0f));
+            break;
+        }
+
+        case LED_SPEAKING: {
+            /* Pulsing cyan */
+            float t = (float)step / ANIM_PERIOD_TICKS;
+            float bright = (1.0f - cosf(2.0f * (float)M_PI * t)) * 0.5f;
+            g = scale(LED_MAX_BRIGHT, (uint8_t)(bright * 255.0f));
+            b = scale(LED_MAX_BRIGHT, (uint8_t)(bright * 255.0f));
+            break;
+        }
+
+        case LED_ERROR: {
+            /* Fast red flash, auto-revert to READY after ANIM_ERROR_CYCLES */
+            uint32_t phase = step % (ANIM_FAST_ON + ANIM_FAST_OFF);
+            if (phase < ANIM_FAST_ON) {
+                r = LED_MAX_BRIGHT;
+            }
+            /* Count flash completions */
+            if (step > 0 && (step % (ANIM_FAST_ON + ANIM_FAST_OFF) == 0)) {
+                error_count++;
+            }
+            if (error_count >= ANIM_ERROR_CYCLES) {
+                atomic_store(&s_state, LED_READY);
+            }
+            break;
+        }
+        }
+
+        send_pixel(r, g, b);
+        step++;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+/* --- Public API ------------------------------------------------------- */
+
+void led_indicator_init(void)
+{
+    rmt_tx_channel_config_t chan_cfg = {
+        .gpio_num        = LANG_LED_GPIO,
+        .clk_src         = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz   = RMT_RESOLUTION_HZ,
+        .mem_block_symbols = 64,
+        .trans_queue_depth = 4,
+    };
+    esp_err_t err = rmt_new_tx_channel(&chan_cfg, &s_rmt_chan);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "rmt_new_tx_channel failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    err = rmt_new_bytes_encoder(&s_enc_cfg, &s_encoder);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "rmt_new_bytes_encoder failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    err = rmt_enable(s_rmt_chan);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "rmt_enable failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    /* Start with booting state */
+    atomic_store(&s_state, LED_BOOTING);
+
+    xTaskCreatePinnedToCore(led_task, "led", 2048, NULL, 2, NULL, 0);
+    ESP_LOGI(TAG, "LED indicator init on GPIO %d", LANG_LED_GPIO);
+}
+
+void led_indicator_set(led_state_t state)
+{
+    atomic_store(&s_state, state);
+}

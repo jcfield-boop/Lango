@@ -166,6 +166,20 @@ esp_err_t wifi_manager_start(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
 
+    /* Programmatic TX power cap — below kconfig minimum (10 dBm) to limit peak
+     * current on USB-powered 3.3V rails. Units: 0.25 dBm/step.
+     * 24 = 6 dBm.  Increase LANG_WIFI_TX_POWER_QDB if WiFi range is insufficient. */
+#define LANG_WIFI_TX_POWER_QDB  24   /* 6 dBm */
+    esp_wifi_set_max_tx_power(LANG_WIFI_TX_POWER_QDB);
+    ESP_LOGI(TAG, "WiFi TX power set to %d dBm (%d quarter-dBm)",
+             LANG_WIFI_TX_POWER_QDB / 4, LANG_WIFI_TX_POWER_QDB);
+
+    /* Enable modem sleep to reduce average WiFi current during sustained data
+     * transfers (TTS downloads, LLM SSE streams). Radio sleeps between DTIM
+     * intervals (~100ms), reducing average WiFi current by ~30-40%. */
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    ESP_LOGI(TAG, "WiFi modem sleep enabled");
+
     return ESP_OK;
 }
 

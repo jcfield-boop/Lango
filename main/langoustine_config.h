@@ -87,10 +87,13 @@
 #define LANG_DEFAULT_STT_ENDPOINT    "https://api.groq.com/openai/v1/audio/transcriptions"
 #define LANG_DEFAULT_STT_MODEL       "whisper-large-v3-turbo"
 
-/* TTS defaults (Groq PlayAI-compatible) */
+/* TTS defaults (Groq Orpheus) */
 #define LANG_DEFAULT_TTS_ENDPOINT    "https://api.groq.com/openai/v1/audio/speech"
-#define LANG_DEFAULT_TTS_MODEL       "playai-tts"
-#define LANG_DEFAULT_TTS_VOICE       "Fritz-PlayAI"
+#define LANG_DEFAULT_TTS_MODEL       "canopylabs/orpheus-v1-english"
+#define LANG_DEFAULT_TTS_VOICE       "tara"
+
+/* RGB Status LED — WS2812/NeoPixel on dev board via RMT */
+#define LANG_LED_GPIO    48   /* GPIO48 = onboard NeoPixel on most ESP32-S3 devkits */
 
 /* I2S Audio — shared BCLK/LRCLK for speaker + mic */
 #define LANG_I2S_BCLK    15   /* to MAX98357A BCLK + INMP441 SCK  */
@@ -147,6 +150,7 @@
 
 /* WebSocket Gateway */
 #define LANG_WS_PORT                 80
+#define LANG_WSS_PORT                443
 #define LANG_WS_MAX_CLIENTS          4
 #define LANG_WS_MAX_AUDIO_FRAME      (32 * 1024)
 

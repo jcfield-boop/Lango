@@ -251,7 +251,13 @@ esp_err_t tts_generate(const char *text, char *id_out)
     free(body);
 
     if (ret != ESP_OK || status != 200) {
-        ESP_LOGE(TAG, "TTS HTTP %d: %s", status, esp_err_to_name(ret));
+        if (bb.data && bb.len > 0) {
+            size_t print_len = bb.len < 255 ? bb.len : 255;
+            bb.data[print_len] = '\0';
+            ESP_LOGE(TAG, "TTS HTTP %d body: %s", status, (char *)bb.data);
+        } else {
+            ESP_LOGE(TAG, "TTS HTTP %d (no body): %s", status, esp_err_to_name(ret));
+        }
         free(bb.data);
         return (ret != ESP_OK) ? ret : ESP_FAIL;
     }
@@ -369,6 +375,21 @@ void tts_set_voice(const char *voice)
         nvs_commit(nvs);
         nvs_close(nvs);
         ESP_LOGI(TAG, "TTS voice set to: %s", voice);
+    }
+}
+
+void tts_set_model(const char *model)
+{
+    if (!model) return;
+    strncpy(s_model, model, sizeof(s_model) - 1);
+    s_model[sizeof(s_model) - 1] = '\0';
+
+    nvs_handle_t nvs;
+    if (nvs_open(LANG_NVS_TTS, NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_str(nvs, "model", model);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+        ESP_LOGI(TAG, "TTS model set to: %s", model);
     }
 }
 

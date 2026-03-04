@@ -19,7 +19,8 @@ typedef struct {
     uint8_t  *buf;
     size_t    write_pos;
     size_t    capacity;
-    bool      active;
+    bool      active;      /* open for writing */
+    bool      committed;   /* handed to STT task, buffer must not be touched */
     char      chat_id[32];
     char      mime[64];
     SemaphoreHandle_t lock;  /* SRAM mutex */
@@ -156,13 +157,19 @@ esp_err_t audio_ring_open(const char *chat_id, const char *mime)
 
     xSemaphoreTake(s_ring.lock, portMAX_DELAY);
 
+    if (s_ring.committed) {
+        /* STT task is actively reading the buffer — must not overwrite */
+        xSemaphoreGive(s_ring.lock);
+        ESP_LOGW(TAG, "audio_ring_open: STT in progress, rejecting new session");
+        return ESP_ERR_INVALID_STATE;
+    }
     if (s_ring.active) {
-        /* Previous session not committed — discard it */
         ESP_LOGW(TAG, "audio_ring_open: discarding uncommitted session");
     }
 
     s_ring.write_pos = 0;
     s_ring.active    = true;
+    s_ring.committed = false;
     strncpy(s_ring.chat_id, chat_id ? chat_id : "", sizeof(s_ring.chat_id) - 1);
     strncpy(s_ring.mime, mime ? mime : "audio/webm;codecs=opus", sizeof(s_ring.mime) - 1);
 
@@ -216,6 +223,9 @@ esp_err_t audio_ring_commit(const char *chat_id)
     ESP_LOGI(TAG, "Audio committed: %u bytes for %s", (unsigned)s_ring.write_pos,
              s_ring.chat_id);
 
+    s_ring.active    = false;   /* no more appends allowed */
+    s_ring.committed = true;    /* buffer is now owned by STT task */
+
     xSemaphoreGive(s_ring.lock);
 
     /* Signal the STT task on Core 1 */
@@ -233,6 +243,7 @@ esp_err_t audio_ring_reset(void)
     xSemaphoreTake(s_ring.lock, portMAX_DELAY);
     s_ring.write_pos = 0;
     s_ring.active    = false;
+    s_ring.committed = false;
     xSemaphoreGive(s_ring.lock);
     return ESP_OK;
 }

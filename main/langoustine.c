@@ -31,7 +31,10 @@
 #include "rules/rule_engine.h"
 #include "telegram/telegram_bot.h"
 #include "audio/i2s_audio.h"
+#include "audio/stt_client.h"
+#include "audio/tts_client.h"
 #include "camera/uvc_camera.h"
+#include "led/led_indicator.h"
 #include "mdns.h"
 
 static const char *TAG = "langoustine";
@@ -209,12 +212,17 @@ void app_main(void)
     ESP_LOGI(TAG, "SRAM free:        %d bytes",
              (int)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
+    /* LED: init early so it shows booting state immediately */
+    led_indicator_init();
+
     ESP_ERROR_CHECK(init_littlefs());
     bootstrap_dirs();
     bootstrap_defaults();
 
 #if LANG_I2S_AUDIO_ENABLED
     ESP_ERROR_CHECK(i2s_audio_init());
+    ESP_ERROR_CHECK(stt_client_init());
+    ESP_ERROR_CHECK(tts_client_init());
 #endif
 
     /* UVC camera — best-effort; continues if no webcam is connected */
@@ -239,6 +247,7 @@ void app_main(void)
     ESP_ERROR_CHECK(serial_cli_init());
 
     /* Start WiFi */
+    led_indicator_set(LED_WIFI);
     esp_err_t wifi_err = wifi_manager_start();
     if (wifi_err == ESP_OK) {
         ESP_LOGI(TAG, "Scanning nearby APs on boot...");
@@ -286,6 +295,7 @@ void app_main(void)
             rule_engine_start();
             ESP_ERROR_CHECK(ws_server_start());
 
+            led_indicator_set(LED_READY);
             ESP_LOGI(TAG, "All services started!");
 
             /* Post-WiFi PSRAM stats */
@@ -294,9 +304,11 @@ void app_main(void)
             ESP_LOGI(TAG, "SRAM free:  %u bytes",
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         } else {
+            led_indicator_set(LED_ERROR);
             ESP_LOGW(TAG, "WiFi connection timeout. Check LANG_SECRET_WIFI_SSID.");
         }
     } else {
+        led_indicator_set(LED_ERROR);
         ESP_LOGW(TAG, "No WiFi credentials. Set LANG_SECRET_WIFI_SSID.");
     }
 

@@ -452,10 +452,10 @@ esp_err_t tool_web_search_execute(const char *input_json, char *output, size_t o
     url_encode(query->valuestring, encoded_query, sizeof(encoded_query));
     cJSON_Delete(input);
 
-    /* Step 1: web search with summary=1 to get summarizer key */
+    /* Step 1: web search (summary=1 requires Brave Answers plan; omit for compatibility) */
     char path[384];
     snprintf(path, sizeof(path),
-             "/res/v1/web/search?q=%s&count=%d&extra_snippets=false&summary=1",
+             "/res/v1/web/search?q=%s&count=%d&extra_snippets=false",
              encoded_query, SEARCH_RESULT_COUNT);
 
     /* Allocate response buffer from internal SRAM (ESP32-C6 has no PSRAM) */

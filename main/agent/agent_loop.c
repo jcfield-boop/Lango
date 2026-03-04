@@ -10,6 +10,7 @@
 #include "tools/tool_memory.h"
 #include "audio/tts_client.h"
 #include "telegram/telegram_bot.h"
+#include "led/led_indicator.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -320,6 +321,7 @@ static void agent_loop_task(void *arg)
                 snprintf(itermsg, sizeof(itermsg), "calling LLM streaming (iter %d)...", iteration + 1);
                 ws_server_broadcast_monitor("llm", itermsg);
             }
+            led_indicator_set(LED_THINKING);
             llm_response_t resp;
             bool force_this_iter = (force_memory_tool && iteration == 0);
             err = llm_chat_tools_streaming(system_prompt, messages, tools_json,
@@ -429,9 +431,19 @@ static void agent_loop_task(void *arg)
                 }
             } else {
                 /* WebSocket: generate TTS and send */
+                led_indicator_set(LED_SPEAKING);
                 ws_server_send_status(msg.chat_id, "tts_generating");
                 char tts_id[9] = {0};
-                esp_err_t tts_err = tts_generate(final_text, tts_id);
+                /* Limit TTS to first ~80 chars to keep WAV < ~200KB on USB-powered supplies.
+                 * Full text is still sent to the browser for display. */
+                char tts_buf[81];
+                const char *tts_text = final_text;
+                if (strlen(final_text) > 80) {
+                    strncpy(tts_buf, final_text, 80);
+                    tts_buf[80] = '\0';
+                    tts_text = tts_buf;
+                }
+                esp_err_t tts_err = tts_generate(tts_text, tts_id);
 
                 if (tts_err == ESP_OK && tts_id[0]) {
                     /* Send message with tts_id so browser auto-plays */
@@ -452,10 +464,12 @@ static void agent_loop_task(void *arg)
             }
 
             free(final_text);
+            led_indicator_set(LED_READY);
             ws_server_send_status(msg.chat_id, "idle");
 
         } else {
             free(final_text);
+            led_indicator_set(LED_ERROR);
             ws_server_broadcast_monitor("error", "agent: LLM returned empty response");
             const char *err_text = oom_restart
                 ? "Memory exhausted — restarting..."
@@ -478,6 +492,7 @@ static void agent_loop_task(void *arg)
         }
 
         free(msg.content);
+
 
         if (oom_restart) {
             ws_server_broadcast_monitor("system", "OOM restart in 3s...");

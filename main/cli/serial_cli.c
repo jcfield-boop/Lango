@@ -13,6 +13,7 @@
 #include "ota/ota_manager.h"
 #include "audio/stt_client.h"
 #include "audio/tts_client.h"
+#include "audio/i2s_audio.h"
 #include "telegram/telegram_bot.h"
 #include "camera/uvc_camera.h"
 #include "memory/psram_alloc.h"
@@ -23,6 +24,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <math.h>
 #include "esp_log.h"
 #include "esp_console.h"
 #include "esp_system.h"
@@ -198,6 +200,110 @@ static int cmd_tts_voice(int argc, char **argv)
     tts_set_voice(tts_voice_args.voice->sval[0]);
     printf("TTS voice set to: %s\n", tts_voice_args.voice->sval[0]);
     return 0;
+}
+
+/* --- tts_model command --- */
+static struct {
+    struct arg_str *model;
+    struct arg_end *end;
+} tts_model_args;
+
+static int cmd_tts_model(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&tts_model_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, tts_model_args.end, argv[0]);
+        return 1;
+    }
+    tts_set_model(tts_model_args.model->sval[0]);
+    printf("TTS model set to: %s\n", tts_model_args.model->sval[0]);
+    return 0;
+}
+
+/* --- speaker_test command — 440 Hz tone, no network needed --- */
+static int cmd_speaker_test(int argc, char **argv)
+{
+    const int SAMPLE_RATE = 16000;
+    const int DURATION_MS = 1500;
+    const int FREQ_HZ     = 440;
+    const int N_SAMPLES   = SAMPLE_RATE * DURATION_MS / 1000;
+
+    /* WAV header (44 bytes) + PCM (16-bit mono) */
+    size_t pcm_bytes  = N_SAMPLES * 2;
+    size_t wav_bytes  = 44 + pcm_bytes;
+    uint8_t *wav = ps_malloc(wav_bytes);
+    if (!wav) {
+        printf("Out of memory\n");
+        return 1;
+    }
+
+    /* RIFF header */
+    memcpy(wav,      "RIFF", 4);
+    uint32_t sz = (uint32_t)(wav_bytes - 8);
+    memcpy(wav + 4,  &sz, 4);
+    memcpy(wav + 8,  "WAVE", 4);
+    memcpy(wav + 12, "fmt ", 4);
+    uint32_t fmt_sz  = 16;    memcpy(wav + 16, &fmt_sz, 4);
+    uint16_t pcm_fmt = 1;     memcpy(wav + 20, &pcm_fmt, 2);  /* PCM */
+    uint16_t ch      = 1;     memcpy(wav + 22, &ch, 2);       /* mono */
+    uint32_t sr      = (uint32_t)SAMPLE_RATE;
+    memcpy(wav + 24, &sr, 4);
+    uint32_t brate   = (uint32_t)(SAMPLE_RATE * 2);
+    memcpy(wav + 28, &brate, 4);
+    uint16_t blk     = 2;     memcpy(wav + 32, &blk, 2);
+    uint16_t bps     = 16;    memcpy(wav + 34, &bps, 2);
+    memcpy(wav + 36, "data", 4);
+    uint32_t dlen = (uint32_t)pcm_bytes;
+    memcpy(wav + 40, &dlen, 4);
+
+    /* 440 Hz sine wave with 10ms fade in/out to avoid clicks */
+    int16_t *pcm = (int16_t *)(wav + 44);
+    int fade_samples = SAMPLE_RATE * 10 / 1000;
+    for (int i = 0; i < N_SAMPLES; i++) {
+        float t    = (float)i / SAMPLE_RATE;
+        float amp  = 0.6f * 32767.0f;
+        if (i < fade_samples)           amp *= (float)i / fade_samples;
+        else if (i > N_SAMPLES - fade_samples) amp *= (float)(N_SAMPLES - i) / fade_samples;
+        pcm[i] = (int16_t)(amp * sinf(2.0f * M_PI * FREQ_HZ * t));
+    }
+
+    printf("Playing 440 Hz test tone (%d ms) via I2S...\n", DURATION_MS);
+    esp_err_t ret = i2s_audio_play_wav(wav, wav_bytes);
+    free(wav);
+    if (ret == ESP_OK) {
+        printf("Speaker test OK\n");
+    } else {
+        printf("I2S play failed: %s\n", esp_err_to_name(ret));
+    }
+    return (ret == ESP_OK) ? 0 : 1;
+}
+
+/* --- say command (TTS + I2S playback) --- */
+static int cmd_say(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("Usage: say <text to speak>\n");
+        return 1;
+    }
+    /* Join all args into one string */
+    char text[512] = {0};
+    size_t pos = 0;
+    for (int i = 1; i < argc && pos < sizeof(text) - 1; i++) {
+        if (i > 1 && pos < sizeof(text) - 2) text[pos++] = ' ';
+        size_t len = strlen(argv[i]);
+        if (pos + len >= sizeof(text)) len = sizeof(text) - pos - 1;
+        memcpy(text + pos, argv[i], len);
+        pos += len;
+    }
+    char id_out[9] = {0};
+    printf("Generating TTS for: \"%s\"\n", text);
+    esp_err_t ret = tts_generate(text, id_out);
+    if (ret == ESP_OK) {
+        printf("Played TTS (id=%s)\n", id_out);
+    } else {
+        printf("TTS failed: %s\n", esp_err_to_name(ret));
+    }
+    return (ret == ESP_OK) ? 0 : 1;
 }
 
 /* --- memory_read command --- */
@@ -692,6 +798,31 @@ static int cmd_set_cors_origin(int argc, char **argv)
     return 0;
 }
 
+/* --- log_level command --- */
+static struct {
+    struct arg_str *tag;
+    struct arg_int *level;
+    struct arg_end *end;
+} log_level_args;
+
+static int cmd_log_level(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&log_level_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, log_level_args.end, argv[0]);
+        return 1;
+    }
+    const char *tag = log_level_args.tag->sval[0];
+    int level = log_level_args.level->ival[0];
+    if (level < 0 || level > 5) {
+        printf("Level must be 0-5: 0=none 1=error 2=warn 3=info 4=debug 5=verbose\n");
+        return 1;
+    }
+    esp_log_level_set(tag, (esp_log_level_t)level);
+    printf("Log level for '%s' set to %d\n", tag, level);
+    return 0;
+}
+
 /* --- tg_allow / tg_disallow / tg_allowlist commands --- */
 static struct {
     struct arg_str *chat_id;
@@ -744,6 +875,7 @@ esp_err_t serial_cli_init(void)
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     repl_config.prompt = "lango> ";
     repl_config.max_cmdline_length = 256;
+    repl_config.task_stack_size = 16384;  /* TTS/STT CLI cmds need TLS stack */
 
 #if CONFIG_ESP_CONSOLE_UART_DEFAULT || CONFIG_ESP_CONSOLE_UART_CUSTOM
     esp_console_dev_uart_config_t hw_config = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
@@ -1052,6 +1184,45 @@ esp_err_t serial_cli_init(void)
         .func = &cmd_tg_allowlist,
     };
     esp_console_cmd_register(&tg_allowlist_cmd);
+
+    /* speaker_test */
+    esp_console_cmd_t spk_test_cmd = {
+        .command = "speaker_test",
+        .help    = "Play 440 Hz test tone via I2S (no network needed)",
+        .func    = &cmd_speaker_test,
+    };
+    esp_console_cmd_register(&spk_test_cmd);
+
+    /* tts_model */
+    tts_model_args.model = arg_str1(NULL, NULL, "<model>", "TTS model ID");
+    tts_model_args.end   = arg_end(1);
+    esp_console_cmd_t tts_model_cmd = {
+        .command  = "tts_model",
+        .help     = "Set TTS model (e.g. canopylabs/orpheus-v1-english)",
+        .func     = &cmd_tts_model,
+        .argtable = &tts_model_args,
+    };
+    esp_console_cmd_register(&tts_model_cmd);
+
+    /* say */
+    esp_console_cmd_t say_cmd = {
+        .command = "say",
+        .help    = "Speak text via TTS + I2S speaker: say hello world",
+        .func    = &cmd_say,
+    };
+    esp_console_cmd_register(&say_cmd);
+
+    /* log_level */
+    log_level_args.tag   = arg_str1(NULL, NULL, "<tag>",   "Log tag (e.g. tts, stt, agent, llm, ws, audio_pipeline, or * for all)");
+    log_level_args.level = arg_int1(NULL, NULL, "<level>", "0=none 1=error 2=warn 3=info 4=debug 5=verbose");
+    log_level_args.end   = arg_end(2);
+    esp_console_cmd_t log_level_cmd = {
+        .command  = "log_level",
+        .help     = "Set per-tag log level at runtime (no rebuild needed)",
+        .func     = &cmd_log_level,
+        .argtable = &log_level_args,
+    };
+    esp_console_cmd_register(&log_level_cmd);
 
     ESP_ERROR_CHECK(esp_console_start_repl(repl));
     ESP_LOGI(TAG, "Serial CLI started");

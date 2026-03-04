@@ -72,8 +72,10 @@ static esp_err_t parse_wav(const uint8_t *buf, size_t buf_len, wav_info_t *out)
         } else if (memcmp(buf + pos, "data", 4) == 0) {
             out->pcm_offset = pos + 8;
             out->pcm_len    = chunk_size;
-            /* Clamp to actual buffer */
-            if (out->pcm_offset + out->pcm_len > buf_len) {
+            /* Clamp to actual buffer. Also handles 0xFFFFFFFF "unspecified"
+             * size (streaming WAV) which overflows a 32-bit addition. */
+            if (out->pcm_offset >= buf_len ||
+                out->pcm_len > buf_len - out->pcm_offset) {
                 out->pcm_len = buf_len - out->pcm_offset;
             }
             found_data = true;
@@ -99,32 +101,60 @@ static esp_err_t parse_wav(const uint8_t *buf, size_t buf_len, wav_info_t *out)
 
 /* ── I2S channel (re)configuration ─────────────────────────────── */
 
+/*
+ * i2s_configure() handles both the first-time init and all subsequent
+ * sample-rate / bit-depth changes.
+ *
+ * ESP-IDF v5.x rule:
+ *   - i2s_channel_init_std_mode()  — must be called exactly ONCE per channel
+ *     (after i2s_new_channel, before first enable).
+ *   - i2s_channel_reconfig_std_clock() / _slot() — used for every subsequent
+ *     change; channel must be disabled first.
+ */
 static esp_err_t i2s_configure(uint32_t sample_rate, i2s_data_bit_width_t bits)
 {
-    /* Disable channel before reconfiguring */
-    i2s_channel_disable(s_tx_handle);
+    esp_err_t ret;
 
-    i2s_std_config_t std_cfg = {
-        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate),
-        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(bits, I2S_SLOT_MODE_MONO),
-        .gpio_cfg = {
-            .mclk = I2S_GPIO_UNUSED,
-            .bclk = LANG_I2S_BCLK,
-            .ws   = LANG_I2S_LRCLK,
-            .dout = LANG_I2S_DOUT,
-            .din  = I2S_GPIO_UNUSED,
-            .invert_flags = {
-                .mclk_inv = false,
-                .bclk_inv = false,
-                .ws_inv   = false,
+    i2s_channel_disable(s_tx_handle);   /* no-op on first call, safe either way */
+
+    if (s_current_sample_rate == 0) {
+        /* ── First-time initialisation ── */
+        i2s_std_config_t std_cfg = {
+            .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate),
+            .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(bits, I2S_SLOT_MODE_MONO),
+            .gpio_cfg = {
+                .mclk = I2S_GPIO_UNUSED,
+                .bclk = LANG_I2S_BCLK,
+                .ws   = LANG_I2S_LRCLK,
+                .dout = LANG_I2S_DOUT,
+                .din  = I2S_GPIO_UNUSED,
+                .invert_flags = {
+                    .mclk_inv = false,
+                    .bclk_inv = false,
+                    .ws_inv   = false,
+                },
             },
-        },
-    };
+        };
+        ret = i2s_channel_init_std_mode(s_tx_handle, &std_cfg);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "i2s_channel_init_std_mode failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
+    } else {
+        /* ── Reconfiguration (channel already initialised) ── */
+        i2s_std_clk_config_t  clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
+        i2s_std_slot_config_t slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(bits, I2S_SLOT_MODE_MONO);
 
-    esp_err_t ret = i2s_channel_init_std_mode(s_tx_handle, &std_cfg);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "i2s_channel_init_std_mode failed: %s", esp_err_to_name(ret));
-        return ret;
+        ret = i2s_channel_reconfig_std_clock(s_tx_handle, &clk_cfg);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "i2s_channel_reconfig_std_clock failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
+        ret = i2s_channel_reconfig_std_slot(s_tx_handle, &slot_cfg);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "i2s_channel_reconfig_std_slot failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
     }
 
     ret = i2s_channel_enable(s_tx_handle);

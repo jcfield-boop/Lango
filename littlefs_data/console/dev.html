@@ -191,7 +191,8 @@ function connect(){
   clearTimeout(reconnectTimer);reconnectTimer=null;
   if(ws){ws.onclose=null;try{ws.close()}catch(e){}}
   dot.className='';
-  ws=new WebSocket('ws://'+location.host+'/ws');
+  var _proto=location.protocol==='https:'?'wss:':'ws:';
+  ws=new WebSocket(_proto+'//'+location.host+'/ws');
   ws.onopen=function(){dot.className='on';addLog('ws','Connected')};
   ws.onclose=function(){
     dot.className='err';

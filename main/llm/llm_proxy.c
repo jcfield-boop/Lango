@@ -841,11 +841,12 @@ esp_err_t llm_chat_tools(const char *system_prompt,
 
                 cJSON *input = cJSON_GetObjectItem(block, "input");
                 if (input) {
+                    /* cJSON_PrintUnformatted allocates a new string not owned by the
+                     * cJSON tree, so cJSON_Delete(root) below will NOT free it.
+                     * Ownership transfers to call->input; freed by llm_response_free(). */
                     char *input_str = cJSON_PrintUnformatted(input);
-                    if (input_str) {
-                        call->input = input_str;
-                        call->input_len = strlen(input_str);
-                    }
+                    call->input     = input_str;   /* NULL on OOM — safe for free() */
+                    call->input_len = input_str ? strlen(input_str) : 0;
                 }
 
                 resp->call_count++;

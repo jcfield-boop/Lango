@@ -17,6 +17,12 @@
 #include <time.h>
 #include "esp_log.h"
 #include "esp_http_server.h"
+#include "esp_https_server.h"
+
+extern const uint8_t s_server_cert[]     asm("_binary_server_cert_pem_start");
+extern const uint8_t s_server_cert_end[] asm("_binary_server_cert_pem_end");
+extern const uint8_t s_server_key[]      asm("_binary_server_key_pem_start");
+extern const uint8_t s_server_key_end[]  asm("_binary_server_key_pem_end");
 #include "esp_timer.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
@@ -24,6 +30,7 @@
 #include "nvs.h"
 #include "cJSON.h"
 #include "freertos/semphr.h"
+#include "memory/psram_alloc.h"
 
 static const char *TAG = "ws";
 
@@ -40,6 +47,23 @@ static char s_auth_token[128] = {0};
 static char s_cors_origin[128] = "*";
 
 static httpd_handle_t s_server = NULL;
+static httpd_handle_t s_redirect_server = NULL;
+
+static esp_err_t redirect_handler(httpd_req_t *req)
+{
+    char host[64] = {0};
+    if (httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) != ESP_OK || !host[0]) {
+        strncpy(host, "langoustine.local", sizeof(host) - 1);
+    }
+    char *colon = strchr(host, ':');
+    if (colon) *colon = '\0';
+    char location[600];   /* "https://" (8) + host (63) + uri (512) + NUL */
+    snprintf(location, sizeof(location), "https://%s%s", host, req->uri);
+    httpd_resp_set_status(req, "301 Moved Permanently");
+    httpd_resp_set_hdr(req, "Location", location);
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
 
 /* Simple client tracking */
 typedef struct {
@@ -585,11 +609,13 @@ static esp_err_t camera_latest_handler(httpd_req_t *req)
 
 static const char *name_to_path(const char *name)
 {
-    if (name && strcmp(name, "soul")      == 0) return LANG_SOUL_FILE;
-    if (name && strcmp(name, "user")      == 0) return LANG_USER_FILE;
-    if (name && strcmp(name, "memory")    == 0) return LANG_MEMORY_FILE;
-    if (name && strcmp(name, "heartbeat") == 0) return LANG_HEARTBEAT_FILE;
-    if (name && strcmp(name, "services")  == 0) return "/lfs/config/SERVICES.md";
+    if (name && strcmp(name, "soul")          == 0) return LANG_SOUL_FILE;
+    if (name && strcmp(name, "user")          == 0) return LANG_USER_FILE;
+    if (name && strcmp(name, "memory")        == 0) return LANG_MEMORY_FILE;
+    if (name && strcmp(name, "heartbeat")     == 0) return LANG_HEARTBEAT_FILE;
+    if (name && strcmp(name, "services")      == 0) return "/lfs/config/SERVICES.md";
+    if (name && strcmp(name, "console-index") == 0) return "/lfs/console/index.html";
+    if (name && strcmp(name, "console-dev")   == 0) return "/lfs/console/dev.html";
     return NULL;
 }
 
@@ -647,11 +673,11 @@ static esp_err_t file_post_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    size_t max_body = 8 * 1024;
+    size_t max_body = 48 * 1024;
     size_t body_len = (req->content_len > 0 && (size_t)req->content_len < max_body)
                       ? (size_t)req->content_len : max_body;
 
-    char *body = malloc(body_len + 1);
+    char *body = (body_len > 4096) ? ps_malloc(body_len + 1) : malloc(body_len + 1);
     if (!body) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
         return ESP_OK;
@@ -1277,19 +1303,23 @@ esp_err_t ws_server_start(void)
         ESP_LOGI(TAG, "CORS origin: %s", s_cors_origin);
     }
 
-    httpd_config_t config    = HTTPD_DEFAULT_CONFIG();
-    config.server_port       = LANG_WS_PORT;
-    config.ctrl_port         = LANG_WS_PORT + 1;
-    config.max_open_sockets  = 4;
-    config.stack_size        = 8192;
-    config.max_uri_handlers  = 24;
-    config.send_wait_timeout = 30;
-    config.recv_wait_timeout = 30;
-    config.uri_match_fn      = httpd_uri_match_wildcard;
+    httpd_ssl_config_t ssl_cfg         = HTTPD_SSL_CONFIG_DEFAULT();
+    ssl_cfg.httpd.server_port          = LANG_WSS_PORT;
+    ssl_cfg.httpd.ctrl_port            = LANG_WSS_PORT + 1;
+    ssl_cfg.httpd.max_open_sockets     = 4;
+    ssl_cfg.httpd.stack_size           = 10240;
+    ssl_cfg.httpd.max_uri_handlers     = 24;
+    ssl_cfg.httpd.send_wait_timeout    = 30;
+    ssl_cfg.httpd.recv_wait_timeout    = 30;
+    ssl_cfg.httpd.uri_match_fn         = httpd_uri_match_wildcard;
+    ssl_cfg.servercert                 = s_server_cert;
+    ssl_cfg.servercert_len             = s_server_cert_end - s_server_cert;
+    ssl_cfg.prvtkey_pem                = s_server_key;
+    ssl_cfg.prvtkey_len                = s_server_key_end - s_server_key;
 
-    esp_err_t ret = httpd_start(&s_server, &config);
+    esp_err_t ret = httpd_ssl_start(&s_server, &ssl_cfg);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start server: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to start HTTPS server: %s", esp_err_to_name(ret));
         return ret;
     }
 
@@ -1364,7 +1394,23 @@ esp_err_t ws_server_start(void)
     httpd_uri_t ota_uri = { .uri = "/api/ota", .method = HTTP_POST, .handler = ota_post_handler };
     httpd_register_uri_handler(s_server, &ota_uri);
 
-    ESP_LOGI(TAG, "Server started on port %d (WS: /ws, Voice: /, Dev: /console)", LANG_WS_PORT);
+    /* HTTP → HTTPS redirect server on port 80 */
+    httpd_config_t redir_cfg    = HTTPD_DEFAULT_CONFIG();
+    redir_cfg.server_port       = LANG_WS_PORT;
+    redir_cfg.ctrl_port         = LANG_WS_PORT + 1;
+    redir_cfg.max_open_sockets  = 2;
+    redir_cfg.stack_size        = 4096;
+    redir_cfg.max_uri_handlers  = 2;
+    redir_cfg.uri_match_fn      = httpd_uri_match_wildcard;
+    if (httpd_start(&s_redirect_server, &redir_cfg) == ESP_OK) {
+        httpd_uri_t redir_any = {
+            .uri = "/*", .method = HTTP_GET, .handler = redirect_handler,
+        };
+        httpd_register_uri_handler(s_redirect_server, &redir_any);
+        ESP_LOGI(TAG, "HTTP redirect server on port %d", LANG_WS_PORT);
+    }
+
+    ESP_LOGI(TAG, "HTTPS server started on port %d (WSS: /ws, Voice: /, Dev: /console)", LANG_WSS_PORT);
     return ESP_OK;
 }
 
@@ -1504,8 +1550,12 @@ esp_err_t ws_server_broadcast_monitor_verbose(const char *event, const char *msg
 
 esp_err_t ws_server_stop(void)
 {
+    if (s_redirect_server) {
+        httpd_stop(s_redirect_server);
+        s_redirect_server = NULL;
+    }
     if (s_server) {
-        httpd_stop(s_server);
+        httpd_ssl_stop(s_server);
         s_server = NULL;
         ESP_LOGI(TAG, "Server stopped");
     }
