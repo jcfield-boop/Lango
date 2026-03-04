@@ -263,22 +263,16 @@ void app_main(void)
             mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
             ESP_LOGI(TAG, "mDNS started: langoustine.local");
 
-            /* Sync system clock via SNTP */
+            /* Sync system clock via SNTP.
+             * Set build timestamp immediately as fallback; SNTP will silently
+             * overwrite the clock when a response arrives (async, no boot delay). */
+            set_time_from_build();
             esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
             esp_sntp_setservername(0, "pool.ntp.org");
             esp_sntp_setservername(1, "time.google.com");
             esp_sntp_setservername(2, "time.cloudflare.com");
             esp_sntp_init();
-            int sntp_retries = 0;
-            while (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED && sntp_retries++ < 20) {
-                vTaskDelay(pdMS_TO_TICKS(500));
-            }
-            if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
-                ESP_LOGI(TAG, "Time synced via SNTP");
-            } else {
-                ESP_LOGW(TAG, "SNTP unavailable — using build timestamp fallback");
-                set_time_from_build();
-            }
+            ESP_LOGI(TAG, "SNTP started (syncing in background)");
 
             /* Outbound dispatch on Core 0 */
             ESP_ERROR_CHECK((xTaskCreatePinnedToCore(

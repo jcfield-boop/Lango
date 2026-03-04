@@ -309,7 +309,7 @@ static int cmd_say(int argc, char **argv)
 /* --- memory_read command --- */
 static int cmd_memory_read(int argc, char **argv)
 {
-    char *buf = malloc(4096);
+    char *buf = ps_malloc(4096);
     if (!buf) { printf("Out of memory.\n"); return 1; }
     if (memory_read_long_term(buf, 4096) == ESP_OK && buf[0]) {
         printf("=== MEMORY.md ===\n%s\n=================\n", buf);
@@ -428,7 +428,7 @@ static int cmd_set_search_key(int argc, char **argv)
 static int cmd_skill_list(int argc, char **argv)
 {
     (void)argc; (void)argv;
-    char *buf = malloc(4096);
+    char *buf = ps_malloc(4096);
     if (!buf) { printf("Out of memory.\n"); return 1; }
     size_t n = skill_loader_build_summary(buf, 4096);
     if (n == 0) {
@@ -720,7 +720,7 @@ static int cmd_tool_exec(int argc, char **argv)
     const char *tool_name  = argv[1];
     const char *input_json = (argc >= 3) ? argv[2] : "{}";
 
-    char *output = calloc(1, 4096);
+    char *output = ps_malloc(4096);
     if (!output) { printf("Out of memory.\n"); return 1; }
 
     esp_err_t err = tool_registry_execute(tool_name, input_json, output, 4096);

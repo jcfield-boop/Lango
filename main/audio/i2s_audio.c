@@ -115,7 +115,9 @@ static esp_err_t i2s_configure(uint32_t sample_rate, i2s_data_bit_width_t bits)
 {
     esp_err_t ret;
 
-    i2s_channel_disable(s_tx_handle);   /* no-op on first call, safe either way */
+    if (s_current_sample_rate != 0) {
+        i2s_channel_disable(s_tx_handle);
+    }
 
     if (s_current_sample_rate == 0) {
         /* ── First-time initialisation ── */

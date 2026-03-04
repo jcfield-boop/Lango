@@ -434,7 +434,7 @@ static cJSON *convert_messages_openai(const char *system_prompt, cJSON *messages
                     cJSON *text = cJSON_GetObjectItem(block, "text");
                     if (text && cJSON_IsString(text)) {
                         size_t tlen = strlen(text->valuestring);
-                        char *tmp = realloc(text_buf, off + tlen + 1);
+                        char *tmp = ps_realloc(text_buf, off + tlen + 1);
                         if (tmp) {
                             text_buf = tmp;
                             memcpy(text_buf + off, text->valuestring, tlen);
@@ -502,7 +502,7 @@ static cJSON *convert_messages_openai(const char *system_prompt, cJSON *messages
                     cJSON *text = cJSON_GetObjectItem(block, "text");
                     if (text && cJSON_IsString(text)) {
                         size_t tlen = strlen(text->valuestring);
-                        char *tmp = realloc(text_buf, off + tlen + 1);
+                        char *tmp = ps_realloc(text_buf, off + tlen + 1);
                         if (tmp) {
                             text_buf = tmp;
                             memcpy(text_buf + off, text->valuestring, tlen);

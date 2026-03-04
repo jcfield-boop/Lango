@@ -43,6 +43,11 @@ CONFIG_LITTLEFS_OBJ_NAME_LEN=64
 # SNTP: also accept NTP server from DHCP option 42 (belt-and-suspenders alongside hardcoded servers)
 CONFIG_LWIP_DHCP_GET_NTP_SRV=y
 
+# Socket file descriptors: default MAX_SOCKETS=16 uses FDs 48–63 (FD_SETSIZE=64).
+# With HTTPS+HTTP servers + WSS + Telegram + TLS API sessions all open concurrently,
+# the 64th FD is hit and accept() fails with ENFILE. Bump to 24 to give headroom.
+CONFIG_LWIP_MAX_SOCKETS=24
+
 # WiFi TX power: 20dBm default causes 300mA current surge → hardware brownout on marginal USB supplies.
 # 10dBm (40*0.25): sustained HTTPS TX at 13dBm still triggers hardware BOD during LLM API calls.
 # 10dBm is typically the minimum allowed by ESP-IDF kconfig range. Increase once PSU is stable.

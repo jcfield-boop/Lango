@@ -2,6 +2,7 @@
 #include "mimi_config.h"
 #include "proxy/http_proxy.h"
 #include "gateway/ws_server.h"
+#include "memory/psram_alloc.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -278,7 +279,7 @@ static esp_err_t get_summary(const char *key, char *output, size_t output_size)
     snprintf(path, sizeof(path), "/res/v1/summarizer/search?key=%s&entity_info=1", encoded_key);
 
     search_buf_t sb = {0};
-    sb.data = calloc(1, SUMMARIZER_BUF_SIZE);
+    sb.data = ps_calloc(1, SUMMARIZER_BUF_SIZE);
     if (!sb.data) return ESP_ERR_NO_MEM;
     sb.cap = SUMMARIZER_BUF_SIZE;
 
@@ -311,7 +312,7 @@ static esp_err_t get_summary(const char *key, char *output, size_t output_size)
 
 static esp_err_t search_tavily(const char *query, const char *api_key, char **out)
 {
-    char *buf = malloc(MIMI_TAVILY_BUF_SIZE);
+    char *buf = ps_malloc(MIMI_TAVILY_BUF_SIZE);
     if (!buf) return ESP_ERR_NO_MEM;
 
     cJSON *body = cJSON_CreateObject();
@@ -460,7 +461,7 @@ esp_err_t tool_web_search_execute(const char *input_json, char *output, size_t o
 
     /* Allocate response buffer from internal SRAM (ESP32-C6 has no PSRAM) */
     search_buf_t sb = {0};
-    sb.data = calloc(1, SEARCH_BUF_SIZE);
+    sb.data = ps_calloc(1, SEARCH_BUF_SIZE);
     if (!sb.data) {
         snprintf(output, output_size, "Error: Out of memory");
         return ESP_ERR_NO_MEM;

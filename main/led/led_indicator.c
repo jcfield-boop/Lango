@@ -23,11 +23,11 @@ static const char *TAG = "led";
 #define WS2812_T1H  8
 #define WS2812_T1L  4
 
-/* Max brightness (0-255): cap at ~40/255 to stay within USB power budget */
-#define LED_MAX_BRIGHT  40
+/* Max brightness (0-255): 60 = comfortable for desk use */
+#define LED_MAX_BRIGHT  60
 
 /* Animation period in ticks (1 tick = 20 ms) */
-#define ANIM_PERIOD_TICKS  50   /* 1 s breathing cycle */
+#define ANIM_PERIOD_TICKS  200  /* 4 s breathing cycle */
 #define ANIM_BLINK_ON      10  /* blink on-time: 200 ms */
 #define ANIM_BLINK_OFF     40  /* blink off-time: 800 ms (total = 1 s) */
 #define ANIM_FAST_ON        3  /* fast flash on: 60 ms */
@@ -63,10 +63,10 @@ static void send_pixel(uint8_t r, uint8_t g, uint8_t b)
     if (!s_rmt_chan || !s_encoder) return;
 
     uint8_t grb[3] = { g, r, b };
-    esp_err_t err = rmt_transmit(s_rmt_chan, s_encoder, grb, sizeof(grb), &s_tx_cfg);
-    if (err == ESP_OK) {
-        rmt_tx_wait_all_done(s_rmt_chan, pdMS_TO_TICKS(10));
-    }
+    /* Fire-and-forget: 20ms task delay >> ~30µs WS2812 frame time.
+     * rmt_tx_wait_all_done is intentionally omitted — the done interrupt
+     * may be delayed on some GPIO configs and blocking here causes spam. */
+    rmt_transmit(s_rmt_chan, s_encoder, grb, sizeof(grb), &s_tx_cfg);
 }
 
 /* Scale a 0-255 colour component by brightness 0-255 */
@@ -191,7 +191,10 @@ void led_indicator_init(void)
     /* Start with booting state */
     atomic_store(&s_state, LED_BOOTING);
 
-    xTaskCreatePinnedToCore(led_task, "led", 2048, NULL, 2, NULL, 0);
+    /* Suppress verbose RMT driver logs (interrupt timing noise on some GPIOs) */
+    esp_log_level_set("rmt", ESP_LOG_WARN);
+
+    xTaskCreatePinnedToCore(led_task, "led", 4096, NULL, 2, NULL, 0);
     ESP_LOGI(TAG, "LED indicator init on GPIO %d", LANG_LED_GPIO);
 }
 

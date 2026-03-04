@@ -93,7 +93,7 @@
 #define LANG_DEFAULT_TTS_VOICE       "tara"
 
 /* RGB Status LED — WS2812/NeoPixel on dev board via RMT */
-#define LANG_LED_GPIO    48   /* GPIO48 = onboard NeoPixel on most ESP32-S3 devkits */
+#define LANG_LED_GPIO    38   /* GPIO38 = onboard NeoPixel on ESP32-S3-DevKitC-1 */
 
 /* I2S Audio — shared BCLK/LRCLK for speaker + mic */
 #define LANG_I2S_BCLK    15   /* to MAX98357A BCLK + INMP441 SCK  */

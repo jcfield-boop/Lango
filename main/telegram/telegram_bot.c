@@ -3,6 +3,7 @@
 #include "bus/message_bus.h"
 #include "proxy/http_proxy.h"
 #include "gateway/ws_server.h"
+#include "memory/psram_alloc.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -120,7 +121,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
             if (new_cap < resp->len + evt->data_len + 1) {
                 new_cap = resp->len + evt->data_len + 1;
             }
-            char *tmp = realloc(resp->buf, new_cap);
+            char *tmp = ps_realloc(resp->buf, new_cap);
             if (!tmp) return ESP_ERR_NO_MEM;
             resp->buf = tmp;
             resp->cap = new_cap;
@@ -170,14 +171,14 @@ static char *tg_api_call_via_proxy(const char *path, const char *post_data)
 
     /* Read response — accumulate until connection close */
     size_t cap = 4096, len = 0;
-    char *buf = calloc(1, cap);
+    char *buf = ps_calloc(1, cap);
     if (!buf) { proxy_conn_close(conn); return NULL; }
 
     int timeout = (MIMI_TG_POLL_TIMEOUT_S + 5) * 1000;
     while (1) {
         if (len + 1024 >= cap) {
             cap *= 2;
-            char *tmp = realloc(buf, cap);
+            char *tmp = ps_realloc(buf, cap);
             if (!tmp) break;
             buf = tmp;
         }
@@ -207,7 +208,7 @@ static char *tg_api_call_direct(const char *method, const char *post_data)
     snprintf(url, sizeof(url), "https://api.telegram.org/bot%s/%s", s_bot_token, method);
 
     http_resp_t resp = {
-        .buf = calloc(1, 4096),
+        .buf = ps_calloc(1, 4096),
         .len = 0,
         .cap = 4096,
     };

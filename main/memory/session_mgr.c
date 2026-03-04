@@ -1,5 +1,6 @@
 #include "session_mgr.h"
 #include "langoustine_config.h"
+#include "memory/psram_alloc.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -69,7 +70,7 @@ esp_err_t session_get_history_json(const char *chat_id, char *buf, size_t size, 
     int count = 0;
     int write_idx = 0;
 
-    char *line = malloc(SESS_LINE_BUF);
+    char *line = ps_malloc(SESS_LINE_BUF);
     if (!line) { fclose(f); snprintf(buf, size, "[]"); return ESP_OK; }
 
     while (fgets(line, SESS_LINE_BUF, f)) {
@@ -140,7 +141,7 @@ cJSON *session_get_history_cjson(const char *chat_id, int max_msgs)
     int count = 0;
     int write_idx = 0;
 
-    char *line = malloc(SESS_LINE_BUF);
+    char *line = ps_malloc(SESS_LINE_BUF);
     if (!line) { fclose(f); return cJSON_CreateArray(); }
 
     while (fgets(line, SESS_LINE_BUF, f)) {

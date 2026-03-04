@@ -1,4 +1,5 @@
 #include "tool_rss.h"
+#include "memory/psram_alloc.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -277,7 +278,7 @@ esp_err_t tool_rss_execute(const char *input_json, char *output, size_t output_s
     cJSON_Delete(input);
 
     /* Allocate response buffer */
-    char *buf = malloc(RSS_BUF_SIZE);
+    char *buf = ps_malloc(RSS_BUF_SIZE);
     if (!buf) {
         snprintf(output, output_size, "Error: out of memory");
         return ESP_ERR_NO_MEM;
