@@ -6,47 +6,91 @@
 <title>Langoustine</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',monospace;background:#111;color:#e0e0e0;height:100vh;display:flex;flex-direction:column;overflow:hidden;-webkit-tap-highlight-color:transparent}
-header{background:#1e1e1e;padding:10px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #333;flex-shrink:0}
-header h1{font-size:1.05rem;color:#7ec8e3;font-weight:600}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#111;color:#e0e0e0;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+header{background:#1e1e1e;padding:8px 14px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #333;flex-shrink:0;flex-wrap:wrap;min-height:42px}
+header h1{font-size:1rem;color:#7ec8e3;font-weight:600;white-space:nowrap}
 #ws-dot{width:8px;height:8px;border-radius:50%;background:#555;flex-shrink:0;transition:background .3s}
 #ws-dot.on{background:#7ee38e}
 #ws-dot.err{background:#e37e7e}
-#status-badge{font-size:0.75rem;color:#777;margin-left:4px}
+#status-badge{font-size:0.72rem;color:#777;white-space:nowrap}
 #status-badge.recording{color:#e37e7e}
-#status-badge.processing{color:#c8e37e}
-#status-badge.thinking,#status-badge.llm_thinking{color:#7ec8e3}
-#status-badge.speaking{color:#b07ee3}
+#status-badge.llm_thinking,#status-badge.thinking{color:#7ec8e3}
+#status-badge.tts_generating,#status-badge.speaking{color:#b07ee3}
 #status-badge.stt_processing{color:#c8e37e}
-#status-badge.tts_generating{color:#b07ee3}
-#mode-toggle{margin-left:auto;font-size:0.72rem;color:#555;cursor:pointer;border:1px solid #333;padding:3px 8px;border-radius:12px;background:none;white-space:nowrap}
-#mode-toggle:hover{color:#aaa;border-color:#555}
-a.console-link{color:#444;font-size:0.75rem;text-decoration:none;padding:3px 0}
-a.console-link:hover{color:#7ec8e3}
-#transcript{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
-.msg-row{display:flex;flex-direction:column;gap:3px;max-width:85%}
+#hdr-meta{font-size:0.7rem;color:#555;white-space:nowrap;margin-left:4px}
+#hdr-tok{font-size:0.7rem;color:#888;white-space:nowrap}
+.hdr-btn{background:#2a2a2a;color:#aaa;border:1px solid #3a3a3a;padding:3px 9px;cursor:pointer;border-radius:3px;font-size:0.75rem;white-space:nowrap}
+.hdr-btn:hover{background:#3a3a3a;color:#ddd}
+#reboot-btn{background:#3a1a1a;border-color:#5a2a2a;color:#e37e7e;margin-left:auto}
+#reboot-btn:hover{background:#4a1a1a}
+#main{flex:1;display:flex;min-height:0;overflow:hidden}
+/* Chat pane */
+#chat-pane{flex:1;display:flex;flex-direction:column;min-height:0;min-width:0;border-right:1px solid #222}
+#transcript{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+.msg-row{display:flex;flex-direction:column;gap:3px;max-width:88%}
 .msg-row.user{align-self:flex-end;align-items:flex-end}
-.msg-row.assistant{align-self:flex-start;align-items:flex-start}
-.msg-bubble{padding:9px 13px;border-radius:16px;line-height:1.5;font-size:0.9rem;word-break:break-word;white-space:pre-wrap}
-.msg-row.user .msg-bubble{background:#1a3a5c;color:#b8daff;border-bottom-right-radius:4px}
-.msg-row.assistant .msg-bubble{background:#252525;color:#e0e0e0;border-bottom-left-radius:4px}
-.msg-row.assistant .msg-bubble.streaming{opacity:0.75}
-.cursor{display:inline-block;width:2px;height:1em;background:#7ec8e3;vertical-align:text-bottom;animation:blink 0.8s infinite}
+.msg-row.asst{align-self:flex-start;align-items:flex-start}
+.bubble{padding:8px 12px;border-radius:16px;line-height:1.5;font-size:0.88rem;word-break:break-word;white-space:pre-wrap}
+.msg-row.user .bubble{background:#1a3a5c;color:#b8daff;border-bottom-right-radius:4px}
+.msg-row.asst .bubble{background:#252525;color:#e0e0e0;border-bottom-left-radius:4px}
+.bubble.streaming{opacity:0.75}
+.cursor{display:inline-block;width:2px;height:1em;background:#7ec8e3;vertical-align:text-bottom;animation:blink .8s infinite}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
-.tts-replay{background:none;border:none;color:#555;cursor:pointer;font-size:0.85rem;padding:0 4px;vertical-align:middle}
-.tts-replay:hover{color:#b07ee3}
-#error-bar{background:#5a1f1f;color:#ffaaaa;font-size:0.8rem;padding:6px 16px;flex-shrink:0;display:none}
-#ptt-area{background:#1e1e1e;border-top:1px solid #333;padding:14px 16px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:10px}
-#text-row{display:flex;width:100%;gap:8px;max-width:600px}
-#text-input{flex:1;background:#252525;color:#ddd;border:1px solid #444;padding:8px 12px;border-radius:20px;font-size:0.9rem;outline:none;font-family:inherit}
+.tts-play{background:none;border:none;color:#555;cursor:pointer;font-size:0.85rem;padding:2px 4px;vertical-align:middle}
+.tts-play:hover{color:#b07ee3}
+#error-bar{background:#5a1f1f;color:#ffaaaa;font-size:0.78rem;padding:5px 14px;flex-shrink:0;display:none}
+#input-area{background:#1a1a1a;border-top:1px solid #333;padding:10px 12px;flex-shrink:0;display:flex;gap:8px;align-items:center}
+#text-input{flex:1;background:#252525;color:#ddd;border:1px solid #3a3a3a;padding:7px 12px;border-radius:20px;font-size:0.88rem;outline:none;font-family:inherit}
 #text-input:focus{border-color:#555}
-#send-btn{background:#1a3a5c;color:#b8daff;border:none;border-radius:20px;padding:8px 16px;cursor:pointer;font-size:0.9rem}
+#send-btn{background:#1a3a5c;color:#b8daff;border:none;border-radius:20px;padding:7px 14px;cursor:pointer;font-size:0.9rem;flex-shrink:0}
 #send-btn:hover{background:#234e7a}
-#ptt-btn{width:68px;height:68px;border-radius:50%;border:3px solid #444;background:#1e1e1e;cursor:pointer;font-size:1.9rem;transition:all .15s;touch-action:none;user-select:none;-webkit-user-select:none;display:flex;align-items:center;justify-content:center;color:#aaa}
-#ptt-btn:hover:not([disabled]){border-color:#666;color:#ddd}
-#ptt-btn.active{border-color:#e37e7e;background:#3a1a1a;color:#e37e7e;transform:scale(1.05)}
-#ptt-btn[disabled]{opacity:0.35;cursor:not-allowed}
-#ptt-hint{font-size:0.7rem;color:#444;text-align:center}
+#mic-btn{width:40px;height:40px;border-radius:50%;border:2px solid #444;background:#1e1e1e;cursor:pointer;font-size:1.2rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s;color:#888}
+#mic-btn:hover{border-color:#666;color:#ddd}
+#mic-btn.active{border-color:#e37e7e;background:#3a1a1a;color:#e37e7e}
+#mic-btn[disabled]{opacity:0.3;cursor:not-allowed}
+/* Dev pane */
+#dev-pane{width:380px;display:flex;flex-direction:column;min-height:0;flex-shrink:0;background:#161616}
+#dev-nav{display:flex;flex-shrink:0;border-bottom:1px solid #333;overflow-x:auto;scrollbar-width:none}
+#dev-nav::-webkit-scrollbar{display:none}
+#dev-nav button{border:none;border-bottom:2px solid transparent;padding:7px 10px;color:#666;background:transparent;cursor:pointer;font-size:0.75rem;white-space:nowrap;flex-shrink:0}
+#dev-nav button.active{color:#7ec8e3;border-bottom-color:#7ec8e3}
+#dev-nav button:hover{color:#ddd;background:#1e1e1e}
+#dev-content{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+#log-panel{flex:1;overflow-y:auto;padding:6px 8px;font-family:monospace;font-size:0.76rem;min-height:0}
+.entry{padding:1px 0;line-height:1.5;word-break:break-word}
+.ts{color:#444;margin-right:5px;user-select:none}
+.llm{color:#7ec8e3}.tool{color:#c8e37e}.done{color:#7ee38e}
+.task{color:#b07ee3}.msg{color:#e3b97e}.err{color:#e37e7e}.ws{color:#555}
+.search{color:#7ee38e}.stream{color:#3a5a3a}
+#log-toolbar{display:flex;gap:6px;padding:4px 8px;background:#1a1a1a;border-top:1px solid #2a2a2a;flex-shrink:0}
+#file-panel,#settings-panel,#skill-panel,#cron-panel{display:none;flex:1;flex-direction:column;min-height:0;overflow-y:auto;padding:10px;gap:8px}
+textarea{flex:1;background:#111;color:#ddd;border:1px solid #333;padding:8px;font-family:monospace;font-size:0.8rem;resize:none;outline:none;border-radius:3px;min-height:200px}
+textarea:focus{border-color:#555}
+.toolbar{display:flex;gap:6px;align-items:center;flex-shrink:0;flex-wrap:wrap}
+.fld{flex:1;display:flex;flex-direction:column;gap:3px;min-width:140px}
+label{font-size:0.75rem;color:#888}
+input[type=text],input[type=password]{background:#111;color:#ddd;border:1px solid #333;padding:5px 8px;font-family:monospace;font-size:0.8rem;border-radius:3px;outline:none;width:100%}
+input:focus{border-color:#555}
+.cfg-row{display:flex;gap:8px;flex-wrap:wrap}
+.cfg-status{font-size:0.75rem;color:#7ee38e}
+.cron-tbl{width:100%;border-collapse:collapse;font-size:0.76rem}
+.cron-tbl th{color:#666;text-align:left;padding:3px 6px;border-bottom:1px solid #2a2a2a;font-weight:normal}
+.cron-tbl td{padding:3px 6px;border-bottom:1px solid #1e1e1e;word-break:break-word}
+#skill-list{display:flex;flex-direction:column;gap:3px;margin-bottom:8px}
+.skill-item{background:#1e1e1e;border:1px solid #333;padding:4px 8px;cursor:pointer;font-size:0.78rem;color:#aaa;text-align:left;border-radius:3px}
+.skill-item:hover{background:#2a2a2a;color:#ddd}
+.skill-item.active{color:#7ec8e3;border-color:#7ec8e3}
+.toggle{position:relative;display:inline-block;width:34px;height:18px;flex-shrink:0}
+.toggle input{opacity:0;width:0;height:0;position:absolute}
+.toggle-sl{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#333;border-radius:18px;transition:.2s}
+.toggle-sl:before{position:absolute;content:"";width:12px;height:12px;left:3px;bottom:3px;background:#777;border-radius:50%;transition:.2s}
+.toggle input:checked+.toggle-sl{background:#2d5a3d}
+.toggle input:checked+.toggle-sl:before{transform:translateX(16px);background:#7ee38e}
+/* Mobile: stack panes */
+@media(max-width:700px){
+  #dev-pane{width:100%;border-right:none;border-top:1px solid #222;max-height:40vh}
+  #main{flex-direction:column}
+}
 </style>
 </head>
 <body>
@@ -54,259 +98,543 @@ a.console-link:hover{color:#7ec8e3}
   <span id="ws-dot"></span>
   <h1>&#x1F99E; Langoustine</h1>
   <span id="status-badge">idle</span>
-  <button id="mode-toggle" onclick="cycleMode()" title="Switch voice mode"></button>
-  <a class="console-link" href="/console">dev</a>
+  <span id="hdr-meta"></span>
+  <span id="hdr-tok"></span>
+  <button class="hdr-btn" onclick="doHeartbeat()">&#x2665; Heartbeat</button>
+  <button class="hdr-btn" id="reboot-btn" onclick="doReboot()">&#x21BA; Reboot</button>
 </header>
-<div id="error-bar"></div>
-<div id="transcript"></div>
-<div id="ptt-area">
-  <div id="text-row">
-    <input id="text-input" type="text" placeholder="Type a message..." maxlength="512"
-           onkeydown="if(event.key==='Enter')sendText()" autocomplete="off" spellcheck="false">
-    <button id="send-btn" onclick="sendText()">&#x27A4;</button>
+<div id="main">
+  <!-- Chat pane -->
+  <div id="chat-pane">
+    <div id="error-bar"></div>
+    <div id="transcript"></div>
+    <div id="input-area">
+      <input id="text-input" type="text" placeholder="Type a message…" maxlength="512"
+             onkeydown="if(event.key==='Enter')sendText()" autocomplete="off" spellcheck="false">
+      <button id="send-btn" onclick="sendText()">&#x27A4;</button>
+      <button id="mic-btn" title="Click to record voice" onclick="toggleVoice()">&#x1F3A4;</button>
+    </div>
   </div>
-  <button id="ptt-btn" title="Hold to speak (or hold Space)">&#x1F3A4;</button>
-  <div id="ptt-hint"></div>
+  <!-- Dev pane -->
+  <div id="dev-pane">
+    <div id="dev-nav">
+      <button class="active" onclick="showTab('log',this)">Log</button>
+      <button onclick="showTab('soul',this)">SOUL</button>
+      <button onclick="showTab('user',this)">USER</button>
+      <button onclick="showTab('memory',this)">Memory</button>
+      <button onclick="showTab('heartbeat',this)">Heartbeat</button>
+      <button onclick="showTab('services',this)">Services</button>
+      <button onclick="showTab('skills',this)">Skills</button>
+      <button onclick="showTab('crons',this)">Crons</button>
+      <button onclick="showTab('settings',this)">Settings</button>
+    </div>
+    <div id="dev-content">
+      <div id="log-panel"></div>
+      <div id="log-toolbar">
+        <button class="hdr-btn" onclick="clearLog()">&#x2715; Clear</button>
+      </div>
+      <div id="file-panel">
+        <div class="toolbar">
+          <button class="hdr-btn" onclick="saveFile()">&#x1F4BE; Save</button>
+          <span id="file-label" style="color:#7ec8e3;font-size:0.78rem;font-weight:600"></span>
+          <span class="cfg-status" id="file-status"></span>
+        </div>
+        <textarea id="editor" spellcheck="false"></textarea>
+      </div>
+      <div id="skill-panel">
+        <div id="skill-list"></div>
+        <div class="toolbar">
+          <button class="hdr-btn" onclick="newSkill()">+ New</button>
+          <input id="skill-name" type="text" placeholder="skill-name" maxlength="48" spellcheck="false" style="width:120px">
+          <button class="hdr-btn" onclick="saveSkill()">&#x1F4BE; Save</button>
+          <button class="hdr-btn" onclick="deleteSkill()" style="background:#3a1a1a;border-color:#5a2a2a;color:#e37e7e">&#x1F5D1;</button>
+          <span class="cfg-status" id="skill-status"></span>
+        </div>
+        <textarea id="skill-editor" spellcheck="false"></textarea>
+      </div>
+      <div id="cron-panel">
+        <div class="toolbar">
+          <button class="hdr-btn" onclick="loadCrons()">&#x21BA; Refresh</button>
+          <span class="cfg-status" id="cron-status"></span>
+        </div>
+        <table class="cron-tbl">
+          <thead><tr><th>Name</th><th>Schedule</th><th>Next</th><th>Message</th><th></th></tr></thead>
+          <tbody id="cron-body"></tbody>
+        </table>
+      </div>
+      <div id="settings-panel">
+        <div class="cfg-row">
+          <div class="fld"><label>Provider</label><input id="cfg-provider" type="text" placeholder="anthropic" maxlength="32"></div>
+          <div class="fld"><label>Model</label><input id="cfg-model" type="text" placeholder="claude-3-5-haiku-latest" maxlength="64"></div>
+        </div>
+        <div class="fld"><label>LLM API Key</label><input id="cfg-apikey" type="password" placeholder="sk-ant-…" maxlength="320" autocomplete="off"></div>
+        <div class="fld"><label>Search API Key (Tavily tvly-… or Brave)</label><input id="cfg-searchkey" type="password" placeholder="tvly-…" maxlength="128" autocomplete="off"></div>
+        <div class="cfg-row">
+          <div class="fld"><label>STT Key (Groq)</label><input id="cfg-sttkey" type="password" placeholder="gsk_…" maxlength="320" autocomplete="off"></div>
+          <div class="fld"><label>TTS Key (Groq)</label><input id="cfg-ttskey" type="password" placeholder="gsk_…" maxlength="320" autocomplete="off"></div>
+        </div>
+        <div class="fld"><label>TTS Voice</label><input id="cfg-ttsvoice" type="text" placeholder="Fritz-PlayAI" maxlength="64"></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:4px 0">
+          <label class="toggle"><input id="cfg-verbose" type="checkbox"><span class="toggle-sl"></span></label>
+          <span style="font-size:0.78rem;color:#888">Verbose Logs</span>
+        </div>
+        <div class="toolbar">
+          <button class="hdr-btn" onclick="loadConfig()">&#x21BA; Load</button>
+          <button class="hdr-btn" onclick="saveConfig()">&#x1F4BE; Save</button>
+          <span class="cfg-status" id="cfg-status"></span>
+        </div>
+        <p style="color:#444;font-size:0.72rem">Keys stored in NVS. Masked values shown for existing keys — leave blank to keep.</p>
+      </div>
+    </div>
+  </div>
 </div>
+
 <script>
-/* ── Feature detection ── */
+/* ── Globals ── */
 var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-var hasSpeechRec = !!SpeechRec;
-var hasSpeechSynth = !!(window.speechSynthesis);
-var hasMediaRec = !!(window.MediaRecorder && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-
-/* Modes:
- *   'browser' — SpeechRecognition + speechSynthesis (Chrome/Edge, best)
- *   'text'    — no mic at all
- * (Device mic mode removed: the onboard INMP441 mic handles voice input directly.)
- */
-var modes = [];
-if (hasSpeechRec && hasSpeechSynth) modes.push('browser');
-modes.push('text');
-var modeIdx = modes.indexOf('text');  /* default to text — device speaks via I2S */
-var mode = modes[modeIdx];
-
-function modeLabel(m){
-  if (m === 'browser') return '&#x1F4BB; Browser voice (Web Speech API)';
-  return '&#x2328; Text only';
-}
-function cycleMode(){
-  modeIdx = (modeIdx + 1) % modes.length;
-  mode = modes[modeIdx];
-  applyMode();
-}
-function applyMode(){
-  document.getElementById('mode-toggle').innerHTML = modeLabel(mode);
-  var btn = document.getElementById('ptt-btn');
-  var hint = document.getElementById('ptt-hint');
-  if (mode === 'text') {
-    btn.disabled = true;
-    hint.textContent = 'text mode';
-  } else {
-    btn.disabled = false;
-    hint.textContent = 'click or hold space — uses browser mic';
-  }
-}
-applyMode();
-
-/* ── WebSocket ── */
-var ws, reconnectTimer=null;
 var chatId = 'ws_' + Math.floor(Math.random() * 99999);
+var ws, reconnectTimer;
 var dot = document.getElementById('ws-dot');
 var statusBadge = document.getElementById('status-badge');
 var transcript = document.getElementById('transcript');
 var errBar = document.getElementById('error-bar');
+var micBtn = document.getElementById('mic-btn');
+var streamBubble = null;
+var recActive = false;
+var browserRec = null;
+var curTab = 'log';
+var curFile = null;
+var curSkill = null;
+var streamingLogged = false;
 
-function connect(){
-  clearTimeout(reconnectTimer); reconnectTimer = null;
-  if (ws){ ws.onclose = null; try{ ws.close(); }catch(e){} }
+/* ── WebSocket ── */
+function connect() {
+  clearTimeout(reconnectTimer);
+  if (ws) { ws.onclose = null; try { ws.close(); } catch(e) {} }
   dot.className = '';
-  var _proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(_proto + '//' + location.host + '/ws');
-  ws.onopen  = function(){ dot.className = 'on'; setStatus('idle'); };
-  ws.onclose = function(){
+  var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(proto + '//' + location.host + '/ws');
+  ws.onopen = function() { dot.className = 'on'; setStatus('idle'); addLog('ws', 'Connected'); };
+  ws.onclose = function() {
     dot.className = 'err'; setStatus('offline');
+    addLog('err', 'Disconnected — retry 4s');
     reconnectTimer = setTimeout(connect, 4000);
   };
-  ws.onerror = function(){};
-  ws.onmessage = function(ev){
+  ws.onerror = function() {};
+  ws.onmessage = function(ev) {
     if (typeof ev.data !== 'string') return;
-    try{
+    try {
       var d = JSON.parse(ev.data);
+      /* Monitor events: no chat_id filter */
+      if (d.type === 'monitor') {
+        var cls = d.event === 'error' ? 'err' : (d.event || 'ws');
+        addLog(cls, '[' + d.event + '] ' + d.msg);
+        return;
+      }
+      /* Chat-filtered events */
       if (d.chat_id && d.chat_id !== chatId) return;
-      if      (d.type === 'token')   handleToken(d.content);
+      if      (d.type === 'token')   { handleToken(d.content); }
       else if (d.type === 'message') handleMessage(d.content, d.tts_id);
-      else if (d.type === 'status')  setStatus(d.stage);
-      else if (d.type === 'error')   showError(d.code + ': ' + (d.message || ''));
-    }catch(e){}
+      else if (d.type === 'status')  { setStatus(d.stage); addLog('ws', '[status] ' + d.stage); }
+      else if (d.type === 'error')   { showError(d.code + ': ' + (d.message || '')); addLog('err', d.code + ': ' + d.message); }
+    } catch(e) {}
   };
 }
-setInterval(function(){
-  if (ws && ws.readyState === 1){ try{ ws.send('{"type":"ping"}'); }catch(e){} }
-}, 25000);
+setInterval(function() { if (ws && ws.readyState === 1) try { ws.send('{"type":"ping"}'); } catch(e) {} }, 25000);
 
 /* ── Status ── */
-function setStatus(s){
-  var L = {idle:'idle',recording:'recording...',stt_processing:'transcribing...',
-            llm_thinking:'thinking...',tts_generating:'generating audio...',
-            speaking:'speaking...',offline:'offline'};
+function setStatus(s) {
+  var L = { idle:'idle', recording:'recording…', stt_processing:'transcribing…',
+            llm_thinking:'thinking…', tts_generating:'generating audio…',
+            speaking:'speaking…', offline:'offline' };
   statusBadge.textContent = L[s] || s;
-  statusBadge.className   = s;
+  statusBadge.className = s;
 }
-function showError(msg){
-  errBar.textContent = msg;
-  errBar.style.display = 'block';
-  setTimeout(function(){ errBar.style.display = 'none'; }, 6000);
+function showError(msg) {
+  errBar.textContent = msg; errBar.style.display = 'block';
+  setTimeout(function() { errBar.style.display = 'none'; }, 6000);
 }
 
-/* ── Transcript helpers ── */
-function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-var streamBubble = null;
+/* ── Chat bubbles ── */
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-function addUserBubble(text){
+function addUserBubble(text) {
   streamBubble = null;
   var row = document.createElement('div');
   row.className = 'msg-row user';
-  row.innerHTML = '<div class="msg-bubble">' + esc(text) + '</div>';
+  row.innerHTML = '<div class="bubble">' + esc(text) + '</div>';
   transcript.appendChild(row);
   transcript.scrollTop = transcript.scrollHeight;
 }
 
-function startStreamBubble(){
-  if (streamBubble) return; // already streaming
-  var bubble = document.createElement('div');
-  bubble.className = 'msg-bubble streaming';
-  bubble.innerHTML = '<span class="cursor"></span>';
+function startStreamBubble() {
+  if (streamBubble) return;
+  var b = document.createElement('div');
+  b.className = 'bubble streaming';
+  b.innerHTML = '<span class="cursor"></span>';
   var row = document.createElement('div');
-  row.className = 'msg-row assistant';
-  row.appendChild(bubble);
+  row.className = 'msg-row asst';
+  row.appendChild(b);
   transcript.appendChild(row);
   transcript.scrollTop = transcript.scrollHeight;
-  streamBubble = bubble;
+  streamBubble = b;
 }
 
-function handleToken(delta){
+function handleToken(delta) {
   if (!streamBubble) startStreamBubble();
-  var cursor = streamBubble.querySelector('.cursor');
-  streamBubble.insertBefore(document.createTextNode(delta), cursor);
+  if (!streamingLogged) { addLog('llm', '[streaming\u2026]'); streamingLogged = true; }
+  var c = streamBubble.querySelector('.cursor');
+  streamBubble.insertBefore(document.createTextNode(delta), c);
   transcript.scrollTop = transcript.scrollHeight;
 }
 
-function handleMessage(text, ttsId){
-  if (streamBubble){
-    streamBubble.className = 'msg-bubble';
+function handleMessage(text, ttsId) {
+  streamingLogged = false;
+  addLog('msg', '[resp] ' + text.substring(0, 120));
+  var row;
+  if (streamBubble) {
+    streamBubble.className = 'bubble';
     streamBubble.textContent = text;
+    row = streamBubble.parentNode;
     streamBubble = null;
   } else {
-    var row = document.createElement('div');
-    row.className = 'msg-row assistant';
-    var bubble = document.createElement('div');
-    bubble.className = 'msg-bubble';
-    bubble.textContent = text;
-    row.appendChild(bubble);
+    var b = document.createElement('div');
+    b.className = 'bubble';
+    b.textContent = text;
+    row = document.createElement('div');
+    row.className = 'msg-row asst';
+    row.appendChild(b);
     transcript.appendChild(row);
   }
-  transcript.scrollTop = transcript.scrollHeight;
-
-  /* TTS playback via browser speech synthesis */
-  if (mode === 'browser' && hasSpeechSynth) {
-    speakBrowser(text);
+  if (ttsId) {
+    var btn = document.createElement('button');
+    btn.className = 'tts-play';
+    btn.title = 'Replay audio';
+    btn.textContent = '\u25B6';
+    (function(id) { btn.onclick = function() { playTTS(id); }; })(ttsId);
+    row.appendChild(btn);
+    playTTS(ttsId);
   }
+  transcript.scrollTop = transcript.scrollHeight;
 }
 
-/* ── Browser TTS (speechSynthesis) ── */
-function speakBrowser(text){
-  if (!window.speechSynthesis) return;
-  window.speechSynthesis.cancel();
-  var utt = new SpeechSynthesisUtterance(text);
-  utt.onstart = function(){ setStatus('speaking'); };
-  utt.onend = utt.onerror = function(){ setStatus('idle'); };
-  window.speechSynthesis.speak(utt);
+/* ── TTS: fetch Groq WAV from device cache ── */
+var curAudio = null;
+function playTTS(ttsId) {
+  if (curAudio) { try { curAudio.pause(); } catch(e) {} }
+  curAudio = new Audio('/tts/' + ttsId);
+  curAudio.onplay = function() { setStatus('speaking'); };
+  curAudio.onended = curAudio.onerror = function() { setStatus('idle'); curAudio = null; };
+  curAudio.play().catch(function() { setStatus('idle'); });
 }
 
 /* ── Text prompt ── */
-function sendText(){
+function sendText() {
   var inp = document.getElementById('text-input');
   var text = inp.value.trim();
   if (!text || !ws || ws.readyState !== 1) return;
   addUserBubble(text);
-  ws.send(JSON.stringify({type:'prompt', content:text, chat_id:chatId}));
+  ws.send(JSON.stringify({ type:'prompt', content:text, chat_id:chatId }));
   startStreamBubble();
   setStatus('llm_thinking');
   inp.value = '';
 }
 
-/* ── Browser STT (SpeechRecognition) ── */
-var browserRec = null;
-var browserRecActive = false;
+/* ── Voice: click-to-toggle ── */
+if (!SpeechRec) micBtn.disabled = true;
 
-function startBrowserSTT(){
-  if (!SpeechRec || browserRecActive) return;
-  try {
-    browserRec = new SpeechRec();
-    browserRec.lang = navigator.language || 'en-US';
-    browserRec.interimResults = false;
-    browserRec.maxAlternatives = 1;
-    browserRec.onresult = function(ev){
-      var text = ev.results[0][0].transcript.trim();
-      if (text) {
-        addUserBubble(text);
-        ws.send(JSON.stringify({type:'prompt', content:text, chat_id:chatId}));
-        startStreamBubble();
-        setStatus('llm_thinking');
-      }
-    };
-    browserRec.onerror = function(ev){
-      if (ev.error !== 'no-speech') showError('Speech recognition error: ' + ev.error);
-      stopBrowserSTT();
-    };
-    browserRec.onend = function(){ stopBrowserSTT(); };
-    browserRec.start();
-    browserRecActive = true;
-    document.getElementById('ptt-btn').classList.add('active');
-    setStatus('recording');
-  } catch(e) {
-    showError('Speech recognition unavailable');
-  }
+function toggleVoice() {
+  if (!SpeechRec) { showError('Web Speech API not available (try Chrome/Edge)'); return; }
+  if (recActive) stopVoice(); else startVoice();
 }
 
-function stopBrowserSTT(){
-  browserRecActive = false;
-  document.getElementById('ptt-btn').classList.remove('active');
-  if (browserRec){ try{ browserRec.stop(); }catch(e){} browserRec = null; }
-  if (statusBadge.textContent === 'recording...') setStatus('idle');
+function startVoice() {
+  recActive = true;
+  micBtn.classList.add('active');
+  setStatus('recording');
+  browserRec = new SpeechRec();
+  browserRec.lang = navigator.language || 'en-US';
+  browserRec.continuous = false;
+  browserRec.interimResults = false;
+  browserRec.onresult = function(ev) {
+    var text = ev.results[0][0].transcript.trim();
+    if (text) {
+      addUserBubble(text);
+      ws.send(JSON.stringify({ type:'prompt', content:text, chat_id:chatId }));
+      startStreamBubble();
+      setStatus('llm_thinking');
+    }
+  };
+  browserRec.onerror = function(ev) {
+    if (ev.error !== 'no-speech') showError('Mic: ' + ev.error);
+    stopVoice();
+  };
+  browserRec.onend = stopVoice;
+  browserRec.start();
 }
 
-/* ── PTT handlers (browser speech mode only) ── */
-function onPTTDown(){
-  if (mode === 'browser') startBrowserSTT();
-}
-function onPTTUp(){
-  if (mode === 'browser') stopBrowserSTT();
+function stopVoice() {
+  spaceStarted = false;
+  recActive = false;
+  micBtn.classList.remove('active');
+  if (browserRec) { try { browserRec.abort(); } catch(e) {} browserRec = null; }
+  if (statusBadge.className === 'recording') setStatus('idle');
 }
 
-var pttBtn = document.getElementById('ptt-btn');
-pttBtn.addEventListener('mousedown',  function(e){ e.preventDefault(); onPTTDown(); });
-pttBtn.addEventListener('mouseup',    function(e){ e.preventDefault(); onPTTUp(); });
-pttBtn.addEventListener('mouseleave', function(){ if (recording || browserRecActive) onPTTUp(); });
-pttBtn.addEventListener('touchstart', function(e){ e.preventDefault(); onPTTDown(); }, {passive:false});
-pttBtn.addEventListener('touchend',   function(e){ e.preventDefault(); onPTTUp(); }, {passive:false});
-pttBtn.addEventListener('touchcancel',function(e){ e.preventDefault(); onPTTUp(); }, {passive:false});
-
-/* Spacebar PTT */
-var spaceDown = false;
-document.addEventListener('keydown', function(e){
-  if (e.code === 'Space' && !spaceDown && e.target.tagName !== 'INPUT'){
-    e.preventDefault(); spaceDown = true; onPTTDown();
+/* Spacebar shortcut — only stops if spacebar started the recording */
+var spaceStarted = false;
+document.addEventListener('keydown', function(e) {
+  if (e.code === 'Space' && !spaceStarted && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+    e.preventDefault();
+    if (!recActive) { spaceStarted = true; startVoice(); }
   }
 });
-document.addEventListener('keyup', function(e){
-  if (e.code === 'Space' && spaceDown){
-    e.preventDefault(); spaceDown = false; onPTTUp();
-  }
+document.addEventListener('keyup', function(e) {
+  if (e.code === 'Space' && spaceStarted) { e.preventDefault(); spaceStarted = false; stopVoice(); }
 });
 
+/* ── Dev log ── */
+var logPanel = document.getElementById('log-panel');
+var logEntries = [];
+var LOG_MAX = 400;
+function ts() { var n = new Date(); return [n.getHours(),n.getMinutes(),n.getSeconds()].map(function(v){return v<10?'0'+v:v}).join(':'); }
+
+function renderLogEntry(e) {
+  var el = document.createElement('div');
+  el.className = 'entry';
+  el.innerHTML = '<span class="ts">' + e.time + '</span><span class="' + esc(e.cls) + '">' + esc(e.text) + '</span>';
+  logPanel.appendChild(el);
+  if (logPanel.children.length > LOG_MAX) logPanel.removeChild(logPanel.firstChild);
+  logPanel.scrollTop = logPanel.scrollHeight;
+}
+
+function addLog(cls, text) {
+  var entry = { cls: cls, text: text, time: ts() };
+  logEntries.push(entry);
+  if (logEntries.length > LOG_MAX) logEntries.shift();
+  if (curTab === 'log') renderLogEntry(entry);
+}
+
+function flushLog() {
+  logPanel.innerHTML = '';
+  logEntries.forEach(renderLogEntry);
+}
+
+function clearLog() { logEntries = []; logPanel.innerHTML = ''; }
+
+/* ── Tabs ── */
+function showTab(tab, btn) {
+  document.querySelectorAll('#dev-nav button').forEach(function(b) { b.classList.remove('active'); });
+  btn.classList.add('active');
+  curTab = tab;
+  var isLog = tab === 'log';
+  document.getElementById('log-panel').style.display = isLog ? '' : 'none';
+  document.getElementById('log-toolbar').style.display = isLog ? '' : 'none';
+  document.getElementById('file-panel').style.display = (!isLog && tab !== 'skills' && tab !== 'crons' && tab !== 'settings') ? 'flex' : 'none';
+  document.getElementById('skill-panel').style.display = tab === 'skills' ? 'flex' : 'none';
+  document.getElementById('cron-panel').style.display = tab === 'crons' ? 'flex' : 'none';
+  document.getElementById('settings-panel').style.display = tab === 'settings' ? 'flex' : 'none';
+  if (isLog) { flushLog(); return; }
+  if (tab === 'skills') { loadSkillList(); return; }
+  if (tab === 'crons') { loadCrons(); return; }
+  if (tab === 'settings') { loadConfig(); return; }
+  curFile = tab;
+  document.getElementById('file-label').textContent = tab.toUpperCase() + '.md';
+  document.getElementById('file-status').textContent = 'Loading…';
+  fetch('/api/file?name=' + tab)
+    .then(function(r) { return r.text(); })
+    .then(function(t) { document.getElementById('editor').value = t; document.getElementById('file-status').textContent = ''; })
+    .catch(function() { document.getElementById('file-status').textContent = 'Load failed'; });
+}
+function saveFile() {
+  if (!curFile) return;
+  document.getElementById('file-status').textContent = 'Saving…';
+  fetch('/api/file?name=' + curFile, {
+    method: 'POST', body: document.getElementById('editor').value,
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+  }).then(function(r) { return r.json(); })
+    .then(function(j) {
+      document.getElementById('file-status').textContent = j.ok ? 'Saved \u2713' : 'Failed';
+      setTimeout(function() { document.getElementById('file-status').textContent = ''; }, 3000);
+    }).catch(function() { document.getElementById('file-status').textContent = 'Failed'; });
+}
+
+/* ── Skills ── */
+function loadSkillList() {
+  fetch('/api/skills').then(function(r) { return r.json(); }).then(function(names) {
+    var el = document.getElementById('skill-list');
+    el.innerHTML = '';
+    names.forEach(function(n) {
+      var b = document.createElement('button');
+      b.className = 'skill-item' + (n === curSkill ? ' active' : '');
+      b.textContent = n;
+      b.onclick = function() { selectSkill(n); };
+      el.appendChild(b);
+    });
+  }).catch(function() {});
+}
+function selectSkill(name) {
+  curSkill = name;
+  document.getElementById('skill-name').value = name;
+  document.querySelectorAll('.skill-item').forEach(function(b) { b.classList.toggle('active', b.textContent === name); });
+  document.getElementById('skill-status').textContent = 'Loading…';
+  fetch('/api/skill?name=' + encodeURIComponent(name))
+    .then(function(r) { return r.text(); })
+    .then(function(t) { document.getElementById('skill-editor').value = t; document.getElementById('skill-status').textContent = ''; })
+    .catch(function() { document.getElementById('skill-status').textContent = 'Failed'; });
+}
+function newSkill() {
+  curSkill = null;
+  document.getElementById('skill-name').value = '';
+  document.getElementById('skill-editor').value = '# New Skill\n\nDescribe what this skill does.\n\n## When to use\n\n## Steps\n1. \n';
+  document.querySelectorAll('.skill-item').forEach(function(b) { b.classList.remove('active'); });
+}
+function saveSkill() {
+  var name = document.getElementById('skill-name').value.trim();
+  if (!name) { document.getElementById('skill-status').textContent = 'Name required'; return; }
+  document.getElementById('skill-status').textContent = 'Saving…';
+  fetch('/api/skill?name=' + encodeURIComponent(name), {
+    method: 'POST', body: document.getElementById('skill-editor').value,
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }
+  }).then(function(r) { return r.json(); })
+    .then(function(j) {
+      if (j.ok) { curSkill = name; loadSkillList(); document.getElementById('skill-status').textContent = 'Saved \u2713'; }
+      else document.getElementById('skill-status').textContent = 'Failed';
+      setTimeout(function() { document.getElementById('skill-status').textContent = ''; }, 3000);
+    }).catch(function() { document.getElementById('skill-status').textContent = 'Failed'; });
+}
+function deleteSkill() {
+  if (!curSkill || !confirm('Delete "' + curSkill + '"?')) return;
+  fetch('/api/skill?name=' + encodeURIComponent(curSkill), { method: 'DELETE' })
+    .then(function(r) { return r.json(); })
+    .then(function(j) { if (j.ok) { curSkill = null; document.getElementById('skill-editor').value = ''; loadSkillList(); } })
+    .catch(function() {});
+}
+
+/* ── Crons ── */
+function pad2(n) { return n < 10 ? '0' + n : n; }
+function fmtInterval(s) {
+  if (s < 60) return 'every ' + s + 's';
+  if (s < 3600) { var m = Math.floor(s / 60); return 'every ' + m + 'm' + (s % 60 ? (s % 60) + 's' : ''); }
+  var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return 'every ' + h + 'h' + (m ? m + 'm' : '');
+}
+function fmtCronNext(job, now) {
+  if (!job.enabled) return '<span style="color:#555">disabled</span>';
+  var d = job.next_run - now;
+  if (d <= 0) return '<span style="color:#e37e7e">overdue</span>';
+  if (d < 60) return 'in ' + d + 's';
+  if (d < 3600) return 'in ' + Math.floor(d/60) + 'm';
+  return 'in ' + Math.floor(d/3600) + 'h';
+}
+function loadCrons() {
+  document.getElementById('cron-status').textContent = 'Loading…';
+  fetch('/api/crons').then(function(r) { return r.json(); }).then(function(d) {
+    document.getElementById('cron-status').textContent = '';
+    var tb = document.getElementById('cron-body');
+    tb.innerHTML = '';
+    if (!d.jobs || !d.jobs.length) {
+      tb.innerHTML = '<tr><td colspan="5" style="color:#444;padding:12px">No cron jobs</td></tr>';
+      return;
+    }
+    d.jobs.forEach(function(j) {
+      var tr = document.createElement('tr');
+      var sched = j.kind === 'every'
+        ? '<span style="color:#c8e37e">' + esc(fmtInterval(j.interval_s)) + '</span>'
+        : '<span style="color:#7ec8e3">at ' + esc(new Date(j.at_epoch * 1000).toLocaleTimeString()) + '</span>';
+      var msg = j.message.length > 36 ? j.message.substring(0, 36) + '\u2026' : j.message;
+      tr.innerHTML = '<td>' + esc(j.name) + '</td><td>' + sched + '</td><td>' + fmtCronNext(j, d.now_epoch) + '</td>'
+        + '<td style="color:#666" title="' + esc(j.message) + '">' + esc(msg) + '</td>'
+        + '<td></td>';
+      var delBtn = document.createElement('button');
+      delBtn.className = 'hdr-btn';
+      delBtn.style.cssText = 'background:#3a1a1a;border-color:#5a2a2a;color:#e37e7e;padding:1px 6px';
+      delBtn.textContent = '\u2715';
+      delBtn.dataset.cronId = j.id;
+      delBtn.dataset.cronName = j.name;
+      delBtn.onclick = function() { delCron(this.dataset.cronId, this.dataset.cronName); };
+      tr.lastChild.appendChild(delBtn);
+      tb.appendChild(tr);
+    });
+  }).catch(function() { document.getElementById('cron-status').textContent = 'Failed'; });
+}
+function delCron(id, name) {
+  if (!confirm('Delete "' + name + '"?')) return;
+  fetch('/api/cron?id=' + encodeURIComponent(id), { method: 'DELETE' })
+    .then(function(r) { return r.json(); })
+    .then(function(j) { if (j.ok) loadCrons(); })
+    .catch(function() {});
+}
+
+/* ── Settings ── */
+function loadConfig() {
+  document.getElementById('cfg-status').textContent = 'Loading…';
+  fetch('/api/config').then(function(r) { return r.json(); }).then(function(d) {
+    document.getElementById('cfg-provider').value = d.provider || '';
+    document.getElementById('cfg-model').value = d.model || '';
+    document.getElementById('cfg-apikey').value = d.api_key || '';
+    document.getElementById('cfg-searchkey').value = d.search_key || '';
+    document.getElementById('cfg-sttkey').value = d.stt_key || '';
+    document.getElementById('cfg-ttskey').value = d.tts_key || '';
+    document.getElementById('cfg-ttsvoice').value = d.tts_voice || '';
+    document.getElementById('cfg-verbose').checked = !!d.verbose_logs;
+    document.getElementById('cfg-status').textContent = '';
+  }).catch(function() { document.getElementById('cfg-status').textContent = 'Failed'; });
+}
+function saveConfig() {
+  document.getElementById('cfg-status').textContent = 'Saving…';
+  fetch('/api/config', {
+    method: 'POST',
+    body: JSON.stringify({
+      provider: document.getElementById('cfg-provider').value.trim(),
+      model: document.getElementById('cfg-model').value.trim(),
+      api_key: document.getElementById('cfg-apikey').value.trim(),
+      search_key: document.getElementById('cfg-searchkey').value.trim(),
+      stt_key: document.getElementById('cfg-sttkey').value.trim(),
+      tts_key: document.getElementById('cfg-ttskey').value.trim(),
+      tts_voice: document.getElementById('cfg-ttsvoice').value.trim(),
+      verbose_logs: document.getElementById('cfg-verbose').checked
+    }),
+    headers: { 'Content-Type': 'application/json' }
+  }).then(function(r) { return r.json(); })
+    .then(function(j) {
+      document.getElementById('cfg-status').textContent = j.ok ? 'Saved \u2713' : 'Failed';
+      setTimeout(function() { document.getElementById('cfg-status').textContent = ''; }, 3000);
+      if (j.ok) loadConfig();
+    }).catch(function() { document.getElementById('cfg-status').textContent = 'Failed'; });
+}
+
+/* ── Sysinfo ── */
+function fetchSysinfo() {
+  fetch('/api/sysinfo').then(function(r) { return r.json(); }).then(function(d) {
+    var hf = Math.round((d.heap_free || 0) / 1024), hm = Math.round((d.heap_min || 0) / 1024);
+    var pf = d.psram_free ? Math.round(d.psram_free / 1024) : 0;
+    var su = Math.round((d.lfs_used || 0) / 1024), st = Math.round((d.lfs_total || 0) / 1024);
+    var up = d.uptime_s || 0;
+    var upStr = up < 60 ? up + 's' : up < 3600 ? Math.floor(up/60) + 'm' : Math.floor(up/3600) + 'h' + Math.floor((up%3600)/60) + 'm';
+    document.getElementById('hdr-meta').textContent = 'RAM ' + hf + 'K  PSRAM ' + pf + 'K  FS ' + su + '/' + st + 'K  up ' + upStr;
+    var ti = d.tokens_in || 0, to = d.tokens_out || 0, cost = (d.cost_millicents || 0) + (d.search_cost_millicents || 0);
+    document.getElementById('hdr-tok').textContent = ti + '\u2191' + to + '\u2193' + (cost ? '  $' + (cost/100000).toFixed(4) : '');
+  }).catch(function() {});
+}
+
+/* ── Heartbeat + Reboot ── */
+function doHeartbeat() {
+  fetch('/api/heartbeat', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(d) { addLog('task', d.triggered ? 'Heartbeat: triggered' : 'Heartbeat: no tasks'); })
+    .catch(function() { addLog('err', 'Heartbeat failed'); });
+}
+function doReboot() {
+  if (!confirm('Reboot Langoustine?')) return;
+  fetch('/api/reboot', { method: 'POST' }).catch(function() {});
+  addLog('err', 'Rebooting\u2026');
+}
+
+/* ── Init ── */
 connect();
+fetchSysinfo();
+setInterval(fetchSysinfo, 15000);
 </script>
 </body>
 </html>
