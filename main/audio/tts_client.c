@@ -1,7 +1,6 @@
 #include "tts_client.h"
 #include "langoustine_config.h"
 #include "memory/psram_alloc.h"
-#include "audio/i2s_audio.h"
 #include "llm/http_session.h"
 
 #include <string.h>
@@ -33,7 +32,6 @@ typedef struct {
     size_t   len;
     int64_t  created_us;  /* esp_timer_get_time() at generation */
     bool     active;
-    bool     playing;    /* true while i2s_audio_play_wav is running */
 } tts_cache_entry_t;
 
 static tts_cache_entry_t s_cache[LANG_TTS_CACHE_MAX];
@@ -92,7 +90,7 @@ static void cache_evict_oldest(void)
     int64_t oldest_time = INT64_MAX;
 
     for (int i = 0; i < LANG_TTS_CACHE_MAX; i++) {
-        if (s_cache[i].active && !s_cache[i].playing && s_cache[i].created_us < oldest_time) {
+        if (s_cache[i].active && s_cache[i].created_us < oldest_time) {
             oldest_time = s_cache[i].created_us;
             oldest_idx  = i;
         }
@@ -111,7 +109,7 @@ static void cache_expire_old(void)
 {
     int64_t now_us = esp_timer_get_time();
     for (int i = 0; i < LANG_TTS_CACHE_MAX; i++) {
-        if (s_cache[i].active && !s_cache[i].playing) {
+        if (s_cache[i].active) {
             int64_t age_s = (now_us - s_cache[i].created_us) / 1000000LL;
             if (age_s > TTS_TTL_S) {
                 ESP_LOGI(TAG, "TTS cache expire: %s (age %llds)", s_cache[i].id, (long long)age_s);
@@ -297,20 +295,9 @@ esp_err_t tts_generate(const char *text, char *id_out)
     strncpy(id_out, s_cache[slot].id, 9);
     id_out[8] = '\0';
 
-#if LANG_I2S_AUDIO_ENABLED
-    s_cache[slot].playing = true;   /* mark before releasing lock so eviction skips it */
-#endif
-
     xSemaphoreGive(s_cache_lock);
 
     ESP_LOGI(TAG, "TTS cached: id=%s, %u bytes", id_out, (unsigned)bb.len);
-
-#if LANG_I2S_AUDIO_ENABLED
-    i2s_audio_play_wav(bb.data, bb.len);   /* synchronous — DMA finishes before return */
-    xSemaphoreTake(s_cache_lock, portMAX_DELAY);
-    s_cache[slot].playing = false;
-    xSemaphoreGive(s_cache_lock);
-#endif
 
     return ESP_OK;
 }

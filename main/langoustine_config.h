@@ -131,7 +131,7 @@
 #define LANG_I2C_SCL     10
 
 /* Enable local speaker playback via MAX98357A after TTS generation */
-#define LANG_I2S_AUDIO_ENABLED  1
+#define LANG_I2S_AUDIO_ENABLED  0
 
 /* Message Bus */
 #define LANG_BUS_QUEUE_LEN           16

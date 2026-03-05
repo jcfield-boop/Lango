@@ -551,6 +551,12 @@ esp_err_t llm_chat_tools(const char *system_prompt,
 
     if (s_api_key[0] == '\0') return ESP_ERR_INVALID_STATE;
 
+    {
+        char llm_info[96];
+        snprintf(llm_info, sizeof(llm_info), "provider=%s model=%s", s_provider, s_model);
+        ws_server_broadcast_monitor("llm", llm_info);
+    }
+
     /* Build request body (non-streaming) */
     cJSON *body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "model", s_model);
@@ -1270,6 +1276,12 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
 
     memset(resp, 0, sizeof(*resp));
     if (s_api_key[0] == '\0') return ESP_ERR_INVALID_STATE;
+
+    {
+        char llm_info[96];
+        snprintf(llm_info, sizeof(llm_info), "provider=%s model=%s", s_provider, s_model);
+        ws_server_broadcast_monitor("llm", llm_info);
+    }
 
     /* Build request body (identical to non-streaming + stream:true) */
     cJSON *body = cJSON_CreateObject();

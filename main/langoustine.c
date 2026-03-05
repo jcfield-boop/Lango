@@ -31,12 +31,9 @@
 #include "skills/skill_loader.h"
 #include "rules/rule_engine.h"
 #include "telegram/telegram_bot.h"
-#include "audio/i2s_audio.h"
 #include "audio/audio_pipeline.h"
 #include "audio/stt_client.h"
 #include "audio/tts_client.h"
-#include "audio/microphone.h"
-#include "audio/wake_word.h"
 #include "camera/uvc_camera.h"
 #include "led/led_indicator.h"
 #include "mdns.h"
@@ -233,12 +230,10 @@ void app_main(void)
     bootstrap_dirs();
     bootstrap_defaults();
 
-#if LANG_I2S_AUDIO_ENABLED
-    ESP_ERROR_CHECK(i2s_audio_init());
+    /* Browser audio pipeline (STT/TTS via Groq) — always required */
     ESP_ERROR_CHECK(audio_pipeline_init());
     ESP_ERROR_CHECK(stt_client_init());
     ESP_ERROR_CHECK(tts_client_init());
-#endif
 
     /* UVC camera — best-effort; continues if no webcam is connected */
     uvc_camera_init();
@@ -303,19 +298,6 @@ void app_main(void)
             heartbeat_start();
             rule_engine_start();
             ESP_ERROR_CHECK(ws_server_start());
-
-            /* Local voice: PTT button + wake word.
-             * microphone_init() configures GPIO 0 for both paths.
-             * wake_word_start() runs the AFE+WakeNet task and handles PTT internally;
-             * microphone_start() is not called when wake word is active. */
-#if LANG_I2S_AUDIO_ENABLED
-            ESP_ERROR_CHECK(microphone_init());
-            if (wake_word_start() != ESP_OK) {
-                /* Wake word unavailable (no esp-sr model?) — fall back to PTT only */
-                ESP_LOGW(TAG, "Wake word unavailable, using PTT only");
-                ESP_ERROR_CHECK(microphone_start());
-            }
-#endif
 
             led_indicator_set(LED_READY);
             ESP_LOGI(TAG, "All services started!");

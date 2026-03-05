@@ -448,6 +448,8 @@ esp_err_t tool_web_search_execute(const char *input_json, char *output, size_t o
         return terr;
     }
 
+    ws_server_broadcast_monitor("search", "Brave");
+
     /* Build URL */
     char encoded_query[256];
     url_encode(query->valuestring, encoded_query, sizeof(encoded_query));

@@ -13,7 +13,6 @@
 #include "ota/ota_manager.h"
 #include "audio/stt_client.h"
 #include "audio/tts_client.h"
-#include "audio/i2s_audio.h"
 #include "telegram/telegram_bot.h"
 #include "camera/uvc_camera.h"
 #include "memory/psram_alloc.h"
@@ -24,7 +23,6 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <sys/stat.h>
-#include <math.h>
 #include "esp_log.h"
 #include "esp_console.h"
 #include "esp_system.h"
@@ -217,139 +215,6 @@ static int cmd_tts_model(int argc, char **argv)
     }
     tts_set_model(tts_model_args.model->sval[0]);
     printf("TTS model set to: %s\n", tts_model_args.model->sval[0]);
-    return 0;
-}
-
-/* --- speaker_test command — 440 Hz tone, no network needed --- */
-static int cmd_speaker_test(int argc, char **argv)
-{
-    const int SAMPLE_RATE = 16000;
-    const int DURATION_MS = 1500;
-    const int FREQ_HZ     = 440;
-    const int N_SAMPLES   = SAMPLE_RATE * DURATION_MS / 1000;
-
-    /* WAV header (44 bytes) + PCM (16-bit mono) */
-    size_t pcm_bytes  = N_SAMPLES * 2;
-    size_t wav_bytes  = 44 + pcm_bytes;
-    uint8_t *wav = ps_malloc(wav_bytes);
-    if (!wav) {
-        printf("Out of memory\n");
-        return 1;
-    }
-
-    /* RIFF header */
-    memcpy(wav,      "RIFF", 4);
-    uint32_t sz = (uint32_t)(wav_bytes - 8);
-    memcpy(wav + 4,  &sz, 4);
-    memcpy(wav + 8,  "WAVE", 4);
-    memcpy(wav + 12, "fmt ", 4);
-    uint32_t fmt_sz  = 16;    memcpy(wav + 16, &fmt_sz, 4);
-    uint16_t pcm_fmt = 1;     memcpy(wav + 20, &pcm_fmt, 2);  /* PCM */
-    uint16_t ch      = 1;     memcpy(wav + 22, &ch, 2);       /* mono */
-    uint32_t sr      = (uint32_t)SAMPLE_RATE;
-    memcpy(wav + 24, &sr, 4);
-    uint32_t brate   = (uint32_t)(SAMPLE_RATE * 2);
-    memcpy(wav + 28, &brate, 4);
-    uint16_t blk     = 2;     memcpy(wav + 32, &blk, 2);
-    uint16_t bps     = 16;    memcpy(wav + 34, &bps, 2);
-    memcpy(wav + 36, "data", 4);
-    uint32_t dlen = (uint32_t)pcm_bytes;
-    memcpy(wav + 40, &dlen, 4);
-
-    /* 440 Hz sine wave with 10ms fade in/out to avoid clicks */
-    int16_t *pcm = (int16_t *)(wav + 44);
-    int fade_samples = SAMPLE_RATE * 10 / 1000;
-    for (int i = 0; i < N_SAMPLES; i++) {
-        float t    = (float)i / SAMPLE_RATE;
-        float amp  = 0.6f * 32767.0f;
-        if (i < fade_samples)           amp *= (float)i / fade_samples;
-        else if (i > N_SAMPLES - fade_samples) amp *= (float)(N_SAMPLES - i) / fade_samples;
-        pcm[i] = (int16_t)(amp * sinf(2.0f * M_PI * FREQ_HZ * t));
-    }
-
-    printf("Playing 440 Hz test tone (%d ms) via I2S...\n", DURATION_MS);
-    esp_err_t ret = i2s_audio_play_wav(wav, wav_bytes);
-    free(wav);
-    if (ret == ESP_OK) {
-        printf("Speaker test OK\n");
-    } else {
-        printf("I2S play failed: %s\n", esp_err_to_name(ret));
-    }
-    return (ret == ESP_OK) ? 0 : 1;
-}
-
-/* --- set_volume command --- */
-static struct {
-    struct arg_int *level;
-    struct arg_end *end;
-} volume_args;
-
-static int cmd_set_volume(int argc, char **argv)
-{
-    int nerrors = arg_parse(argc, argv, (void **)&volume_args);
-    if (nerrors != 0) {
-        arg_print_errors(stderr, volume_args.end, argv[0]);
-        return 1;
-    }
-    int pct = volume_args.level->ival[0];
-    if (pct < 0 || pct > 100) {
-        printf("Volume must be 0–100\n");
-        return 1;
-    }
-    uint8_t raw = (uint8_t)(pct * 255 / 100);
-    i2s_audio_set_volume(raw);
-    printf("Volume set to %d%% (raw %u/255)\n", pct, raw);
-    return 0;
-}
-
-/* --- mic_test command — 3s capture from INMP441, print RMS/peak --- */
-static int cmd_mic_test(int argc, char **argv)
-{
-    const int SAMPLE_RATE  = 16000;
-    const int DURATION_MS  = 3000;
-    const int CHUNK_BYTES  = 512;
-    const int TOTAL_BYTES  = (SAMPLE_RATE * 2 * DURATION_MS) / 1000; /* 16-bit mono */
-
-    uint8_t *buf = ps_malloc(TOTAL_BYTES);
-    if (!buf) {
-        printf("Out of PSRAM\n");
-        return 1;
-    }
-
-    printf("Recording %d ms from INMP441 mic (speak now)...\n", DURATION_MS);
-
-    int pos = 0;
-    while (pos < TOTAL_BYTES) {
-        int want = TOTAL_BYTES - pos;
-        if (want > CHUNK_BYTES) want = CHUNK_BYTES;
-        size_t got = 0;
-        esp_err_t ret = i2s_audio_read(buf + pos, want, &got, 200);
-        if (ret != ESP_OK) {
-            printf("i2s_audio_read error: %s\n", esp_err_to_name(ret));
-            free(buf);
-            return 1;
-        }
-        pos += (int)got;
-    }
-
-    /* Compute RMS and peak from 16-bit signed samples */
-    int16_t *samples  = (int16_t *)buf;
-    int      n        = TOTAL_BYTES / 2;
-    int32_t  peak     = 0;
-    int64_t  sum_sq   = 0;
-    for (int i = 0; i < n; i++) {
-        int32_t s = samples[i];
-        if (s < 0) s = -s;
-        if (s > peak) peak = s;
-        sum_sq += (int64_t)samples[i] * samples[i];
-    }
-    int rms = (int)sqrtf((float)(sum_sq / n));
-
-    printf("Mic test done: samples=%d peak=%d RMS=%d\n", n, (int)peak, rms);
-    if (rms < 50) printf("  Hint: very quiet — check wiring or speak louder.\n");
-    else          printf("  Mic OK (RMS > 50).\n");
-
-    free(buf);
     return 0;
 }
 
@@ -1259,33 +1124,6 @@ esp_err_t serial_cli_init(void)
         .func = &cmd_tg_allowlist,
     };
     esp_console_cmd_register(&tg_allowlist_cmd);
-
-    /* speaker_test */
-    esp_console_cmd_t spk_test_cmd = {
-        .command = "speaker_test",
-        .help    = "Play 440 Hz test tone via I2S (no network needed)",
-        .func    = &cmd_speaker_test,
-    };
-    esp_console_cmd_register(&spk_test_cmd);
-
-    /* mic_test */
-    esp_console_cmd_t mic_test_cmd = {
-        .command = "mic_test",
-        .help    = "Record 3 s from INMP441 mic and print peak/RMS energy",
-        .func    = &cmd_mic_test,
-    };
-    esp_console_cmd_register(&mic_test_cmd);
-
-    /* set_volume */
-    volume_args.level = arg_int1(NULL, NULL, "<0-100>", "Volume percentage (0=mute, 100=full)");
-    volume_args.end   = arg_end(1);
-    esp_console_cmd_t volume_cmd = {
-        .command  = "set_volume",
-        .help     = "Set speaker volume (0–100%). Saved to NVS.",
-        .func     = &cmd_set_volume,
-        .argtable = &volume_args,
-    };
-    esp_console_cmd_register(&volume_cmd);
 
     /* tts_model */
     tts_model_args.model = arg_str1(NULL, NULL, "<model>", "TTS model ID");
