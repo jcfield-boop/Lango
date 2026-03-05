@@ -683,8 +683,14 @@ static esp_err_t file_post_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    int received = httpd_req_recv(req, body, body_len);
-    if (received <= 0) {
+    /* Loop: mbedTLS returns at most one TLS record (~16KB) per call */
+    size_t received = 0;
+    while (received < body_len) {
+        int r = httpd_req_recv(req, body + received, body_len - received);
+        if (r <= 0) break;
+        received += (size_t)r;
+    }
+    if (received == 0) {
         free(body);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body received");
         return ESP_OK;
@@ -860,8 +866,9 @@ static esp_err_t skill_post_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
         return ESP_OK;
     }
-    int received = httpd_req_recv(req, body, body_len);
-    if (received <= 0) { free(body); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body"); return ESP_OK; }
+    size_t received = 0;
+    while (received < body_len) { int r = httpd_req_recv(req, body + received, body_len - received); if (r <= 0) break; received += (size_t)r; }
+    if (received == 0) { free(body); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body"); return ESP_OK; }
     body[received] = '\0';
 
     char path[128];
@@ -1055,8 +1062,9 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    int received = httpd_req_recv(req, body, body_len);
-    if (received <= 0) {
+    size_t received = 0;
+    while (received < body_len) { int r = httpd_req_recv(req, body + received, body_len - received); if (r <= 0) break; received += (size_t)r; }
+    if (received == 0) {
         free(body);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body received");
         return ESP_OK;
