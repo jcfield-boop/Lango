@@ -36,8 +36,8 @@ header h1{font-size:1rem;color:#7ec8e3;font-weight:600;white-space:nowrap}
 .bubble.streaming{opacity:0.75}
 .cursor{display:inline-block;width:2px;height:1em;background:#7ec8e3;vertical-align:text-bottom;animation:blink .8s infinite}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
-.tts-play{background:none;border:none;color:#555;cursor:pointer;font-size:0.85rem;padding:2px 4px;vertical-align:middle}
-.tts-play:hover{color:#b07ee3}
+.tts-play{background:#1e1e1e;border:1px solid #3a3a3a;border-radius:12px;color:#888;cursor:pointer;font-size:0.75rem;padding:2px 10px;margin-top:3px}
+.tts-play:hover{color:#b07ee3;border-color:#b07ee3}
 #error-bar{background:#5a1f1f;color:#ffaaaa;font-size:0.78rem;padding:5px 14px;flex-shrink:0;display:none}
 #input-area{background:#1a1a1a;border-top:1px solid #333;padding:10px 12px;flex-shrink:0;display:flex;gap:8px;align-items:center}
 #text-input{flex:1;background:#252525;color:#ddd;border:1px solid #3a3a3a;padding:7px 12px;border-radius:20px;font-size:0.88rem;outline:none;font-family:inherit}
@@ -131,6 +131,7 @@ input:focus{border-color:#555}
     <div id="dev-content">
       <div id="log-panel"></div>
       <div id="log-toolbar">
+        <button class="hdr-btn" id="verbose-btn" onclick="toggleVerbose()" title="Show all log entries">Verbose</button>
         <button class="hdr-btn" onclick="clearLog()">&#x2715; Clear</button>
       </div>
       <div id="file-panel">
@@ -176,7 +177,11 @@ input:focus{border-color:#555}
         <div class="fld"><label>TTS Voice</label><input id="cfg-ttsvoice" type="text" placeholder="Fritz-PlayAI" maxlength="64"></div>
         <div style="display:flex;align-items:center;gap:8px;padding:4px 0">
           <label class="toggle"><input id="cfg-verbose" type="checkbox"><span class="toggle-sl"></span></label>
-          <span style="font-size:0.78rem;color:#888">Verbose Logs</span>
+          <span style="font-size:0.78rem;color:#888">Verbose Logs (firmware)</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:4px 0">
+          <label class="toggle"><input id="cfg-tts-autoplay" type="checkbox" onchange="ttsAutoPlay=this.checked;localStorage.setItem('ttsAutoPlay',this.checked?'1':'0')"><span class="toggle-sl"></span></label>
+          <span style="font-size:0.78rem;color:#888">Auto-play TTS audio</span>
         </div>
         <div class="toolbar">
           <button class="hdr-btn" onclick="loadConfig()">&#x21BA; Load</button>
@@ -206,6 +211,8 @@ var curTab = 'log';
 var curFile = null;
 var curSkill = null;
 var streamingLogged = false;
+var logVerbose = false;
+var ttsAutoPlay = localStorage.getItem('ttsAutoPlay') === '1';
 
 /* ── WebSocket ── */
 function connect() {
@@ -235,7 +242,7 @@ function connect() {
       if (d.chat_id && d.chat_id !== chatId) return;
       if      (d.type === 'token')   { handleToken(d.content); }
       else if (d.type === 'message') handleMessage(d.content, d.tts_id);
-      else if (d.type === 'status')  { setStatus(d.stage); addLog('ws', '[status] ' + d.stage); }
+      else if (d.type === 'status')  { setStatus(d.stage); }
       else if (d.type === 'error')   { showError(d.code + ': ' + (d.message || '')); addLog('err', d.code + ': ' + d.message); }
     } catch(e) {}
   };
@@ -309,11 +316,11 @@ function handleMessage(text, ttsId) {
   if (ttsId) {
     var btn = document.createElement('button');
     btn.className = 'tts-play';
-    btn.title = 'Replay audio';
-    btn.textContent = '\u25B6';
+    btn.title = 'Play audio';
+    btn.textContent = '\u25B6 Listen';
     (function(id) { btn.onclick = function() { playTTS(id); }; })(ttsId);
     row.appendChild(btn);
-    playTTS(ttsId);
+    if (ttsAutoPlay) playTTS(ttsId);
   }
   transcript.scrollTop = transcript.scrollHeight;
 }
@@ -321,11 +328,13 @@ function handleMessage(text, ttsId) {
 /* ── TTS: fetch Groq WAV from device cache ── */
 var curAudio = null;
 function playTTS(ttsId) {
-  if (curAudio) { try { curAudio.pause(); } catch(e) {} }
-  curAudio = new Audio('/tts/' + ttsId);
-  curAudio.onplay = function() { setStatus('speaking'); };
-  curAudio.onended = curAudio.onerror = function() { setStatus('idle'); curAudio = null; };
-  curAudio.play().catch(function() { setStatus('idle'); });
+  if (curAudio) { try { curAudio.pause(); } catch(e) {} curAudio = null; }
+  var a = new Audio(location.protocol + '//' + location.host + '/tts/' + ttsId);
+  curAudio = a;
+  a.onplay  = function() { setStatus('speaking'); };
+  a.onended = function() { setStatus('idle'); if (curAudio === a) curAudio = null; };
+  a.onerror = function() { setStatus('idle'); addLog('err', 'TTS audio failed (id=' + ttsId + ')'); if (curAudio === a) curAudio = null; };
+  a.play().catch(function(e) { setStatus('idle'); addLog('err', 'TTS play blocked: ' + (e.message || e)); if (curAudio === a) curAudio = null; });
 }
 
 /* ── Text prompt ── */
@@ -399,7 +408,22 @@ var logEntries = [];
 var LOG_MAX = 400;
 function ts() { var n = new Date(); return [n.getHours(),n.getMinutes(),n.getSeconds()].map(function(v){return v<10?'0'+v:v}).join(':'); }
 
+function isNoisy(cls, text) {
+  if (cls === 'stream') return true;
+  if (cls === 'done') return true;
+  if (cls === 'task' && text.indexOf('from ') !== -1) return true;
+  if (cls === 'llm' && /calling LLM|LLM stream done|LLM text alloc|provider=/.test(text)) return true;
+  return false;
+}
+function toggleVerbose() {
+  logVerbose = !logVerbose;
+  var btn = document.getElementById('verbose-btn');
+  btn.style.color = logVerbose ? '#7ec8e3' : '';
+  btn.style.borderColor = logVerbose ? '#7ec8e3' : '';
+  flushLog();
+}
 function renderLogEntry(e) {
+  if (!logVerbose && isNoisy(e.cls, e.text)) return;
   var el = document.createElement('div');
   el.className = 'entry';
   el.innerHTML = '<span class="ts">' + e.time + '</span><span class="' + esc(e.cls) + '">' + esc(e.text) + '</span>';
@@ -578,6 +602,7 @@ function loadConfig() {
     document.getElementById('cfg-ttskey').value = d.tts_key || '';
     document.getElementById('cfg-ttsvoice').value = d.tts_voice || '';
     document.getElementById('cfg-verbose').checked = !!d.verbose_logs;
+    document.getElementById('cfg-tts-autoplay').checked = ttsAutoPlay;
     document.getElementById('cfg-status').textContent = '';
   }).catch(function() { document.getElementById('cfg-status').textContent = 'Failed'; });
 }
