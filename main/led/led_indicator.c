@@ -97,17 +97,13 @@ static void led_task(void *arg)
 
         switch (state) {
         case LED_BOOTING:
-            /* Solid red */
-            r = LED_MAX_BRIGHT;
-            break;
-
         case LED_WIFI: {
-            /* Slow yellow blink: 200 ms on, 800 ms off */
-            uint32_t phase = step % (ANIM_BLINK_ON + ANIM_BLINK_OFF);
-            if (phase < ANIM_BLINK_ON) {
-                r = LED_MAX_BRIGHT;
-                g = LED_MAX_BRIGHT;
-            }
+            /* Breathing amber: calm "connecting" animation, no alarming red */
+            float t = (float)step / ANIM_PERIOD_TICKS;
+            float bright = (1.0f - cosf(2.0f * (float)M_PI * t)) * 0.5f;
+            uint8_t v = scale(LED_MAX_BRIGHT, (uint8_t)(bright * 255.0f));
+            r = v;
+            g = v / 3;  /* amber = full red, 1/3 green, no blue */
             break;
         }
 

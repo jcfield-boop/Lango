@@ -8,9 +8,31 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_wifi.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 
 static const char *TAG = "i2s_audio";
+
+/* Runtime volume: 0=mute, 128=50% (-6dB), 255=100%. Persisted to NVS. */
+static volatile uint8_t s_volume = LANG_AUDIO_VOLUME;
+
+
+void i2s_audio_set_volume(uint8_t vol)
+{
+    s_volume = vol;
+    nvs_handle_t nvs;
+    if (nvs_open(LANG_NVS_AUDIO, NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_u8(nvs, LANG_NVS_KEY_VOLUME, vol);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+    }
+    ESP_LOGI(TAG, "Volume set to %u/255 (%u%%)", vol, (unsigned)(vol * 100u / 255u));
+}
+
+uint8_t i2s_audio_get_volume(void)
+{
+    return s_volume;
+}
 
 /* I2S TX/RX channel handles (I2S_NUM_0, master, full-duplex) */
 static i2s_chan_handle_t s_tx_handle  = NULL;
@@ -247,8 +269,20 @@ esp_err_t i2s_audio_init(void)
         }
     }
 
-    ESP_LOGI(TAG, "I2S audio init OK (BCLK=%d LRCLK=%d DOUT=%d DIN=%d)",
-             LANG_I2S_BCLK, LANG_I2S_LRCLK, LANG_I2S_DOUT, LANG_I2S_DIN);
+    /* Load persisted volume from NVS (falls back to LANG_AUDIO_VOLUME if not set) */
+    {
+        nvs_handle_t nvs;
+        if (nvs_open(LANG_NVS_AUDIO, NVS_READONLY, &nvs) == ESP_OK) {
+            uint8_t stored;
+            if (nvs_get_u8(nvs, LANG_NVS_KEY_VOLUME, &stored) == ESP_OK) {
+                s_volume = stored;
+            }
+            nvs_close(nvs);
+        }
+    }
+
+    ESP_LOGI(TAG, "I2S audio init OK (BCLK=%d LRCLK=%d DOUT=%d DIN=%d vol=%u/255)",
+             LANG_I2S_BCLK, LANG_I2S_LRCLK, LANG_I2S_DOUT, LANG_I2S_DIN, s_volume);
 
 #if LANG_AMP_SD_GPIO >= 0
     /* Configure amp shutdown pin — output, start low (amp off) */
@@ -291,12 +325,21 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
             return ESP_ERR_INVALID_ARG;
     }
 
-    /* Reconfigure I2S only if parameters changed */
+    /* Reconfigure I2S only if sample rate or bit depth changed.
+     *
+     * WiFi PS mode is managed globally (WIFI_PS_NONE set at connect time in
+     * wifi_manager.c) so no per-playback WiFi transitions are needed here. */
     if (info.sample_rate != s_current_sample_rate ||
         (uint32_t)bits    != s_current_bits) {
         ret = i2s_configure(info.sample_rate, bits);
         if (ret != ESP_OK) return ret;
     }
+
+#if LANG_AMP_SD_GPIO >= 0
+    /* Enable amp; 10 ms for output capacitor and supply to stabilise */
+    gpio_set_level(LANG_AMP_SD_GPIO, 1);
+    vTaskDelay(pdMS_TO_TICKS(10));
+#endif
 
     /* Stream PCM data in 4KB chunks with software volume scaling.
      * LANG_AUDIO_VOLUME (0–256, 128 = 50% = -6 dB) reduces peak amp current
@@ -306,31 +349,22 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
     size_t         written;
     int16_t        vol_buf[2048];   /* 4096 bytes = 2048 samples, stack is fine */
 
-    /* Max-sleep WiFi modem during playback — audio is already in PSRAM,
-     * no network activity needed. Frees ~100 mA on the ESP32 3.3V rail. */
-    esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
-
-#if LANG_AMP_SD_GPIO >= 0
-    /* Enable amp: pull SD high, wait for amp to stabilise (~10 ms) */
-    gpio_set_level(LANG_AMP_SD_GPIO, 1);
-    vTaskDelay(pdMS_TO_TICKS(10));
-#endif
-
-    ESP_LOGI(TAG, "Playing WAV: %u bytes PCM (vol=%d/256)", (unsigned)remain, LANG_AUDIO_VOLUME);
+    uint8_t vol = s_volume;
+    ESP_LOGI(TAG, "Playing WAV: %u bytes PCM (vol=%u/255)", (unsigned)remain, vol);
 
     while (remain > 0) {
         size_t chunk = remain < 4096 ? remain : 4096;
-#if LANG_AUDIO_VOLUME < 256
-        /* Scale 16-bit samples; safe for both mono and stereo */
-        size_t samples = chunk / 2;
-        const int16_t *src = (const int16_t *)pcm;
-        for (size_t i = 0; i < samples; i++) {
-            vol_buf[i] = (int16_t)(((int32_t)src[i] * LANG_AUDIO_VOLUME) >> 8);
+        if (vol < 255) {
+            /* Scale 16-bit samples; safe for both mono and stereo */
+            size_t samples = chunk / 2;
+            const int16_t *src = (const int16_t *)pcm;
+            for (size_t i = 0; i < samples; i++) {
+                vol_buf[i] = (int16_t)(((int32_t)src[i] * vol) >> 8);
+            }
+            ret = i2s_channel_write(s_tx_handle, vol_buf, chunk, &written, pdMS_TO_TICKS(1000));
+        } else {
+            ret = i2s_channel_write(s_tx_handle, pcm, chunk, &written, pdMS_TO_TICKS(1000));
         }
-        ret = i2s_channel_write(s_tx_handle, vol_buf, chunk, &written, pdMS_TO_TICKS(1000));
-#else
-        ret = i2s_channel_write(s_tx_handle, pcm, chunk, &written, pdMS_TO_TICKS(1000));
-#endif
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "i2s_channel_write error: %s", esp_err_to_name(ret));
             return ret;
@@ -338,9 +372,6 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
         pcm    += written;
         remain -= written;
     }
-
-    /* Restore normal modem sleep after playback */
-    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
 
 #if LANG_AMP_SD_GPIO >= 0
     /* Disable amp: pull SD low — zero idle current, no hiss between utterances */

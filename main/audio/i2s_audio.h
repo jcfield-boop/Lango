@@ -47,3 +47,13 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len);
  * @return ESP_OK on success, ESP_ERR_INVALID_STATE if RX not ready.
  */
 esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint32_t timeout_ms);
+
+/**
+ * @brief Set playback volume (0=mute, 128=50%, 255=full). Persisted to NVS.
+ */
+void i2s_audio_set_volume(uint8_t vol);
+
+/**
+ * @brief Get current playback volume (0–255).
+ */
+uint8_t i2s_audio_get_volume(void);

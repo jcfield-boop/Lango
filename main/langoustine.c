@@ -7,6 +7,7 @@
 #include "esp_event.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
+#include "soc/rtc_cntl_reg.h"
 #include "esp_littlefs.h"
 #include "nvs_flash.h"
 #include "esp_sntp.h"
@@ -39,6 +40,8 @@
 #include "camera/uvc_camera.h"
 #include "led/led_indicator.h"
 #include "mdns.h"
+#include "esp_ota_ops.h"
+#include "esp_pm.h"
 
 static const char *TAG = "langoustine";
 
@@ -193,6 +196,13 @@ static void outbound_dispatch_task(void *arg)
 
 void app_main(void)
 {
+    /* Disable the hardware brownout detector.
+     * CONFIG_ESP_BROWNOUT_DET=n does NOT clear RTC_CNTL_BROWN_OUT_ENA — that
+     * bit's reset value is 1 (enabled at ~2.43 V), so the hardware BOD fires
+     * on any RF TX transient even when the app "disables" it via Kconfig.
+     * Writing 0 to the register is the only way to fully disable it. */
+    REG_WRITE(RTC_CNTL_BROWN_OUT_REG, 0);
+
     esp_log_level_set("esp-x509-crt-bundle", ESP_LOG_WARN);
 
     ESP_LOGI(TAG, "========================================");
@@ -201,6 +211,7 @@ void app_main(void)
 
     /* Phase 1: Core infrastructure */
     ESP_ERROR_CHECK(init_nvs());
+    esp_ota_mark_app_valid_cancel_rollback();   // write valid CRC'd otadata so OTA can resolve target slot
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     /* PSRAM / SRAM stats (logged before LittleFS to capture peak-free state) */
@@ -308,6 +319,16 @@ void app_main(void)
 
             led_indicator_set(LED_READY);
             ESP_LOGI(TAG, "All services started!");
+
+            /* Allow CPU to scale down to 80 MHz when no high-freq lock is held.
+             * WiFi holds its own freq lock during TX/RX automatically.
+             * During audio playback (MAX_MODEM sleep) CPU drops to 80 MHz, saving ~60 mA. */
+            esp_pm_config_t pm_cfg = {
+                .max_freq_mhz       = 240,
+                .min_freq_mhz       = 80,
+                .light_sleep_enable = false,
+            };
+            esp_pm_configure(&pm_cfg);
 
             /* Post-WiFi PSRAM stats */
             ESP_LOGI(TAG, "PSRAM free: %u bytes",

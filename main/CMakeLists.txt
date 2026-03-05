@@ -45,6 +45,7 @@ idf_component_register(
         "telegram/telegram_bot.c"
         "camera/uvc_camera.c"
         "tools/tool_capture_image.c"
+        "tools/tool_set_volume.c"
         "led/led_indicator.c"
     EMBED_TXTFILES
         "certs/server_cert.pem"

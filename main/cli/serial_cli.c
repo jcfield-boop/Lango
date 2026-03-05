@@ -278,6 +278,30 @@ static int cmd_speaker_test(int argc, char **argv)
     return (ret == ESP_OK) ? 0 : 1;
 }
 
+/* --- set_volume command --- */
+static struct {
+    struct arg_int *level;
+    struct arg_end *end;
+} volume_args;
+
+static int cmd_set_volume(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&volume_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, volume_args.end, argv[0]);
+        return 1;
+    }
+    int pct = volume_args.level->ival[0];
+    if (pct < 0 || pct > 100) {
+        printf("Volume must be 0–100\n");
+        return 1;
+    }
+    uint8_t raw = (uint8_t)(pct * 255 / 100);
+    i2s_audio_set_volume(raw);
+    printf("Volume set to %d%% (raw %u/255)\n", pct, raw);
+    return 0;
+}
+
 /* --- mic_test command — 3s capture from INMP441, print RMS/peak --- */
 static int cmd_mic_test(int argc, char **argv)
 {
@@ -1251,6 +1275,17 @@ esp_err_t serial_cli_init(void)
         .func    = &cmd_mic_test,
     };
     esp_console_cmd_register(&mic_test_cmd);
+
+    /* set_volume */
+    volume_args.level = arg_int1(NULL, NULL, "<0-100>", "Volume percentage (0=mute, 100=full)");
+    volume_args.end   = arg_end(1);
+    esp_console_cmd_t volume_cmd = {
+        .command  = "set_volume",
+        .help     = "Set speaker volume (0–100%). Saved to NVS.",
+        .func     = &cmd_set_volume,
+        .argtable = &volume_args,
+    };
+    esp_console_cmd_register(&volume_cmd);
 
     /* tts_model */
     tts_model_args.model = arg_str1(NULL, NULL, "<model>", "TTS model ID");

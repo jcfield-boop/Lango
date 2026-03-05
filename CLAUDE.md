@@ -132,6 +132,7 @@ Available GPIOs: 0–21, 38–48. GPIO 22–37 used internally for Flash/PSRAM.
 | 10 | I2C_SCL | Camera SCCB + PCA9685 |
 | 1–8, 21 | Cam D0–D7 | OV2640 parallel data (future) |
 | 38–41 | Cam XCLK/PCLK/VSYNC/HREF | OV2640 timing (future) |
+| 42 | AMP_SD | MAX98357A SD (amp shutdown/enable) |
 | 43 | UART0 TX | Serial CLI |
 | 44 | UART0 RX | Serial CLI |
 
@@ -141,13 +142,13 @@ Constants in `main/langoustine_config.h` under `LANG_I2S_*` and `LANG_I2C_*`.
 
 **MAX98357A breakout → ESP32-S3**
 ```
-VIN   → 3.3V
+VIN   → 5V  (USB rail — keeps amp current off the 3.3V/ESP32 rail entirely)
 GND   → GND
 DIN   → GPIO17
 BCLK  → GPIO15
 LRC   → GPIO16
-SD    → leave floating (breakout has pull-up; amp is enabled by default)
-GAIN  → leave floating (12 dB, good for voice)
+SD    → GPIO42  (firmware-controlled: high=enabled, low=shutdown; eliminates idle hiss)
+GAIN  → GND  (3 dB gain; floating = 12 dB default)
 ```
 
 **Speaker → MAX98357A**

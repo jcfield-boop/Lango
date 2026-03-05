@@ -17,6 +17,7 @@
 #include "tools/tool_rss.h"
 #include "tools/tool_rule.h"
 #include "tools/tool_capture_image.h"
+#include "tools/tool_set_volume.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -493,6 +494,20 @@ esp_err_t tool_registry_init(void)
         .execute = tool_capture_image_execute,
     };
     register_tool(&ci);
+
+    /* Register set_volume */
+    mimi_tool_t sv = {
+        .name = "set_volume",
+        .description = "Set the speaker volume. Use this when the user asks to change, increase, decrease, or adjust the volume.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{\"level\":{\"type\":\"integer\","
+            "\"description\":\"Volume level as a percentage (0=mute, 50=half, 100=full)\","
+            "\"minimum\":0,\"maximum\":100}},"
+            "\"required\":[\"level\"]}",
+        .execute = tool_set_volume_execute,
+    };
+    register_tool(&sv);
 
     build_tools_json();
 

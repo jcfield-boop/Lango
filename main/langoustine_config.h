@@ -113,7 +113,7 @@
  * Set to -1 (default) if the SD pin is floating / not connected to a GPIO.
  * Example: wire SD to GPIO 45 and set LANG_AMP_SD_GPIO 45 here. */
 #ifndef LANG_AMP_SD_GPIO
-#define LANG_AMP_SD_GPIO  45
+#define LANG_AMP_SD_GPIO  42
 #endif
 
 /* PTT button — BOOT button, active low, internal pull-up */
@@ -191,6 +191,7 @@
 #define LANG_NVS_SEARCH              "search_config"
 #define LANG_NVS_STT                 "stt_config"
 #define LANG_NVS_TTS                 "tts_config"
+#define LANG_NVS_AUDIO               "audio_config"
 
 /* NVS Keys */
 #define LANG_NVS_KEY_SSID            "ssid"
@@ -202,6 +203,7 @@
 #define LANG_NVS_KEY_PROXY_PORT      "port"
 #define LANG_NVS_KEY_VOICE           "voice"
 #define LANG_NVS_KEY_ENDPOINT        "endpoint"
+#define LANG_NVS_KEY_VOLUME          "volume"
 
 /* Telegram Bot */
 #define LANG_TG_POLL_TIMEOUT_S       30
