@@ -366,7 +366,7 @@ function startVoice() {
     }
   };
   browserRec.onerror = function(ev) {
-    if (ev.error !== 'no-speech') showError('Mic: ' + ev.error);
+    if (ev.error !== 'no-speech' && ev.error !== 'aborted') showError('Mic: ' + ev.error);
     stopVoice();
   };
   browserRec.onend = stopVoice;
@@ -377,7 +377,7 @@ function stopVoice() {
   spaceStarted = false;
   recActive = false;
   micBtn.classList.remove('active');
-  if (browserRec) { try { browserRec.abort(); } catch(e) {} browserRec = null; }
+  if (browserRec) { try { browserRec.stop(); } catch(e) {} browserRec = null; }
   if (statusBadge.className === 'recording') setStatus('idle');
 }
 
