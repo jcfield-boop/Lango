@@ -17,7 +17,6 @@ idf_component_register(
         "tools/tool_registry.c"
         "tools/tool_cron.c"
         "tools/tool_web_search.c"
-        "tools/tool_get_time.c"
         "tools/tool_files.c"
         "tools/tool_http.c"
         "tools/tool_smtp.c"

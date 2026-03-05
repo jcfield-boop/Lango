@@ -1,7 +1,6 @@
 #include "tool_registry.h"
 #include "langoustine_config.h"
 #include "tools/tool_web_search.h"
-#include "tools/tool_get_time.h"
 #include "tools/tool_files.h"
 #include "tools/tool_cron.h"
 #include "tools/tool_http.h"
@@ -82,18 +81,6 @@ esp_err_t tool_registry_init(void)
     };
     register_tool(&ws);
 
-    /* Register get_current_time */
-    mimi_tool_t gt = {
-        .name = "get_current_time",
-        .description = "Get the current date and time. Also sets the system clock. Call this when you need to know what time or date it is.",
-        .input_schema_json =
-            "{\"type\":\"object\","
-            "\"properties\":{},"
-            "\"required\":[]}",
-        .execute = tool_get_time_execute,
-    };
-    register_tool(&gt);
-
     /* Register read_file */
     mimi_tool_t rf = {
         .name = "read_file",
@@ -159,7 +146,7 @@ esp_err_t tool_registry_init(void)
             "\"schedule_type\":{\"type\":\"string\",\"description\":\"'every' for recurring interval or 'at' for one-shot\"},"
             "\"interval_s\":{\"type\":\"integer\",\"description\":\"Interval in seconds (required for 'every')\"},"
             "\"seconds_from_now\":{\"type\":\"integer\",\"description\":\"PREFERRED for 'at': fire this many seconds from now (e.g. 300 = in 5 minutes). Avoids epoch calculation errors.\"},"
-            "\"at_epoch\":{\"type\":\"integer\",\"description\":\"Absolute unix timestamp to fire at. Only use this if you have called get_current_time and have a verified current epoch.\"},"
+            "\"at_epoch\":{\"type\":\"integer\",\"description\":\"Absolute unix timestamp to fire at. Compute from the current time provided in the system prompt.\"},"
             "\"message\":{\"type\":\"string\",\"description\":\"Message to inject when the job fires, triggering an agent turn\"},"
             "\"channel\":{\"type\":\"string\",\"description\":\"Optional reply channel (e.g. 'telegram'). If omitted, current turn channel is used when available\"},"
             "\"chat_id\":{\"type\":\"string\",\"description\":\"Optional reply chat_id. Required when channel='telegram'. If omitted during a Telegram turn, current chat_id is used\"}"

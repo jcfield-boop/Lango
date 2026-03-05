@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include "esp_log.h"
 
 static const char *TAG = "context";
@@ -30,6 +31,16 @@ esp_err_t context_build_system_prompt(char *buf, size_t size)
 {
     size_t off = 0;
 
+    /* Inject current date/time from NTP-synced system clock */
+    {
+        time_t now = time(NULL);
+        struct tm local;
+        localtime_r(&now, &local);
+        char timebuf[64];
+        strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S %Z (%A)", &local);
+        off += snprintf(buf + off, size - off, "**Current date/time: %s**\n\n", timebuf);
+    }
+
     off += snprintf(buf + off, size - off,
         "# Langoustine\n\n"
         "You are Langoustine, a personal AI assistant running on an ESP32-S3.\n"
@@ -40,7 +51,6 @@ esp_err_t context_build_system_prompt(char *buf, size_t size)
         "- For briefings: 5-10 bullets max. No padding or unnecessary caveats.\n\n"
         "## Available Tools\n"
         "- web_search: current facts, news, weather\n"
-        "- get_current_time: current date/time (always use this, no internal clock)\n"
         "- read_file / write_file / edit_file / list_dir: LittleFS file access (/lfs/)\n"
         "- cron_add / cron_list / cron_remove: scheduled tasks\n"
         "- http_request: HTTPS GET/POST to external APIs\n"
@@ -56,9 +66,9 @@ esp_err_t context_build_system_prompt(char *buf, size_t size)
         "For anything that changes over time — stock prices, sports scores, weather, news,\n"
         "exchange rates — ALWAYS use web_search. Your training data is stale.\n\n"
         "## Scheduling Rules (cron_add)\n"
-        "- NEVER calculate epoch timestamps from training data. Training data is stale.\n"
+        "- The current time is already provided above — use it directly.\n"
         "- For relative times: use seconds_from_now (e.g. 300 for 5 minutes).\n"
-        "- For absolute times: call get_current_time FIRST, then compute the offset.\n\n"
+        "- For absolute times: compute the epoch offset from the current time above.\n\n"
         "## File Paths\n"
         "- /lfs/config/USER.md — user profile (name, timezone, preferences)\n"
         "- /lfs/config/SOUL.md — personality (read-only)\n"
