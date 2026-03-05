@@ -489,6 +489,7 @@ static esp_err_t voice_ui_handler(httpd_req_t *req)
         return ESP_OK;
     }
     httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     char buf[512];
     size_t n;
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
@@ -512,6 +513,7 @@ static esp_err_t dev_console_handler(httpd_req_t *req)
         return ESP_OK;
     }
     httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     char buf[512];
     size_t n;
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {

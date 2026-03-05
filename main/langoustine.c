@@ -38,7 +38,6 @@
 #include "led/led_indicator.h"
 #include "mdns.h"
 #include "esp_ota_ops.h"
-#include "esp_pm.h"
 
 static const char *TAG = "langoustine";
 
@@ -301,16 +300,6 @@ void app_main(void)
 
             led_indicator_set(LED_READY);
             ESP_LOGI(TAG, "All services started!");
-
-            /* Allow CPU to scale down to 80 MHz when no high-freq lock is held.
-             * WiFi holds its own freq lock during TX/RX automatically.
-             * During audio playback (MAX_MODEM sleep) CPU drops to 80 MHz, saving ~60 mA. */
-            esp_pm_config_t pm_cfg = {
-                .max_freq_mhz       = 240,
-                .min_freq_mhz       = 80,
-                .light_sleep_enable = false,
-            };
-            esp_pm_configure(&pm_cfg);
 
             /* Post-WiFi PSRAM stats */
             ESP_LOGI(TAG, "PSRAM free: %u bytes",

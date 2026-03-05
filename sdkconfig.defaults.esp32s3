@@ -71,11 +71,6 @@ CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=2048
 # Bias isochronous buffers toward IN (camera → ESP) for better MJPEG throughput
 CONFIG_USB_HOST_HW_BUFFER_BIAS_IN=y
 
-# Power management: enable DFS so CPU scales down to 80 MHz when idle.
-# WiFi holds its own freq lock during TX/RX automatically (no throughput regression).
-# During audio playback (MAX_MODEM sleep) CPU runs at 80 MHz, saving ~60 mA sustained.
-CONFIG_PM_ENABLE=y
-
 # Brownout detector: default level 7 (~3.5V) fires on WiFi startup current surge on USB power.
 # Disable for USB-powered bring-up; re-enable (or set level 0) for production on clean PSU.
 CONFIG_ESP_BROWNOUT_DET=n

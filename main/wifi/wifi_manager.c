@@ -174,15 +174,6 @@ esp_err_t wifi_manager_start(void)
     ESP_LOGI(TAG, "WiFi TX power set to %d dBm (%d quarter-dBm)",
              LANG_WIFI_TX_POWER_QDB / 4, LANG_WIFI_TX_POWER_QDB);
 
-    /* Disable WiFi power save entirely.
-     * Any PS mode transition (MIN→MAX or MIN→NONE) causes the WiFi driver to
-     * TX a null data frame to the AP. That RF burst droops the 3.3 V rail
-     * enough to fire the hardware brownout detector (~2.43 V threshold) whenever
-     * it coincides with other CPU/DMA activity — e.g. the start of I2S playback.
-     * WIFI_PS_NONE keeps the radio always awake so no null frames are ever sent. */
-    esp_wifi_set_ps(WIFI_PS_NONE);
-    ESP_LOGI(TAG, "WiFi power save disabled (WIFI_PS_NONE)");
-
     return ESP_OK;
 }
 
