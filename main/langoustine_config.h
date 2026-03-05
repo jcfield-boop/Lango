@@ -101,6 +101,31 @@
 #define LANG_I2S_DOUT    17   /* to MAX98357A DIN                  */
 #define LANG_I2S_DIN     18   /* from INMP441 SD                   */
 
+/* Software volume scale: 0–256, where 256 = 100% (0 dB), 128 = 50% (−6 dB).
+ * Lower values reduce peak amp current and prevent brownouts on weak PSUs. */
+#ifndef LANG_AUDIO_VOLUME
+#define LANG_AUDIO_VOLUME  32
+#endif
+
+/* MAX98357A SD (shutdown) pin — optional amp power gating.
+ * Wire SD pin to this GPIO; the driver pulls it high before playback and low
+ * after, eliminating idle current draw and preventing turn-on pop.
+ * Set to -1 (default) if the SD pin is floating / not connected to a GPIO.
+ * Example: wire SD to GPIO 45 and set LANG_AMP_SD_GPIO 45 here. */
+#ifndef LANG_AMP_SD_GPIO
+#define LANG_AMP_SD_GPIO  45
+#endif
+
+/* PTT button — BOOT button, active low, internal pull-up */
+#define LANG_PTT_GPIO              0
+
+/* Microphone capture parameters (INMP441, 16kHz 16-bit mono) */
+#define LANG_MIC_SAMPLE_RATE    16000
+#define LANG_MIC_BITS              16
+#define LANG_MIC_READ_CHUNK_BYTES 512   /* ~16 ms of audio per I2S read */
+#define LANG_MIC_STACK_SIZE      4096
+#define LANG_MIC_TASK_PRIO          5
+
 /* I2C bus (camera SCCB + future PCA9685 servos) */
 #define LANG_I2C_SDA      9
 #define LANG_I2C_SCL     10

@@ -136,6 +136,15 @@ static void led_task(void *arg)
             break;
         }
 
+        case LED_LISTENING: {
+            /* Pulsing white (R+G+B equal) — mic is active */
+            float t = (float)step / ANIM_PERIOD_TICKS;
+            float bright = (1.0f - cosf(2.0f * (float)M_PI * t)) * 0.5f;
+            uint8_t v = scale(LED_MAX_BRIGHT, (uint8_t)(bright * 255.0f));
+            r = v; g = v; b = v;
+            break;
+        }
+
         case LED_ERROR: {
             /* Fast red flash, auto-revert to READY after ANIM_ERROR_CYCLES */
             uint32_t phase = step % (ANIM_FAST_ON + ANIM_FAST_OFF);

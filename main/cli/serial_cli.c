@@ -278,6 +278,57 @@ static int cmd_speaker_test(int argc, char **argv)
     return (ret == ESP_OK) ? 0 : 1;
 }
 
+/* --- mic_test command — 3s capture from INMP441, print RMS/peak --- */
+static int cmd_mic_test(int argc, char **argv)
+{
+    const int SAMPLE_RATE  = 16000;
+    const int DURATION_MS  = 3000;
+    const int CHUNK_BYTES  = 512;
+    const int TOTAL_BYTES  = (SAMPLE_RATE * 2 * DURATION_MS) / 1000; /* 16-bit mono */
+
+    uint8_t *buf = ps_malloc(TOTAL_BYTES);
+    if (!buf) {
+        printf("Out of PSRAM\n");
+        return 1;
+    }
+
+    printf("Recording %d ms from INMP441 mic (speak now)...\n", DURATION_MS);
+
+    int pos = 0;
+    while (pos < TOTAL_BYTES) {
+        int want = TOTAL_BYTES - pos;
+        if (want > CHUNK_BYTES) want = CHUNK_BYTES;
+        size_t got = 0;
+        esp_err_t ret = i2s_audio_read(buf + pos, want, &got, 200);
+        if (ret != ESP_OK) {
+            printf("i2s_audio_read error: %s\n", esp_err_to_name(ret));
+            free(buf);
+            return 1;
+        }
+        pos += (int)got;
+    }
+
+    /* Compute RMS and peak from 16-bit signed samples */
+    int16_t *samples  = (int16_t *)buf;
+    int      n        = TOTAL_BYTES / 2;
+    int32_t  peak     = 0;
+    int64_t  sum_sq   = 0;
+    for (int i = 0; i < n; i++) {
+        int32_t s = samples[i];
+        if (s < 0) s = -s;
+        if (s > peak) peak = s;
+        sum_sq += (int64_t)samples[i] * samples[i];
+    }
+    int rms = (int)sqrtf((float)(sum_sq / n));
+
+    printf("Mic test done: samples=%d peak=%d RMS=%d\n", n, (int)peak, rms);
+    if (rms < 50) printf("  Hint: very quiet — check wiring or speak louder.\n");
+    else          printf("  Mic OK (RMS > 50).\n");
+
+    free(buf);
+    return 0;
+}
+
 /* --- say command (TTS + I2S playback) --- */
 static int cmd_say(int argc, char **argv)
 {
@@ -1192,6 +1243,14 @@ esp_err_t serial_cli_init(void)
         .func    = &cmd_speaker_test,
     };
     esp_console_cmd_register(&spk_test_cmd);
+
+    /* mic_test */
+    esp_console_cmd_t mic_test_cmd = {
+        .command = "mic_test",
+        .help    = "Record 3 s from INMP441 mic and print peak/RMS energy",
+        .func    = &cmd_mic_test,
+    };
+    esp_console_cmd_register(&mic_test_cmd);
 
     /* tts_model */
     tts_model_args.model = arg_str1(NULL, NULL, "<model>", "TTS model ID");

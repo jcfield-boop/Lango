@@ -5,12 +5,17 @@
 #include "esp_log.h"
 #include "driver/i2s_std.h"
 #include "driver/i2s_types.h"
+#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_wifi.h"
 
 static const char *TAG = "i2s_audio";
 
-/* I2S TX channel handle (I2S_NUM_0, master, TX only) */
-static i2s_chan_handle_t s_tx_handle = NULL;
+/* I2S TX/RX channel handles (I2S_NUM_0, master, full-duplex) */
+static i2s_chan_handle_t s_tx_handle  = NULL;
+static i2s_chan_handle_t s_rx_handle  = NULL;
+static bool             s_rx_enabled = false;  /* true after RX init+enable */
 
 /* Track current I2S configuration to avoid unnecessary reconfigures */
 static uint32_t s_current_sample_rate = 0;
@@ -116,6 +121,8 @@ static esp_err_t i2s_configure(uint32_t sample_rate, i2s_data_bit_width_t bits)
     esp_err_t ret;
 
     if (s_current_sample_rate != 0) {
+        /* Full-duplex: RX shares the clock — disable before reconfiguring */
+        if (s_rx_enabled) i2s_channel_disable(s_rx_handle);
         i2s_channel_disable(s_tx_handle);
     }
 
@@ -165,6 +172,14 @@ static esp_err_t i2s_configure(uint32_t sample_rate, i2s_data_bit_width_t bits)
         return ret;
     }
 
+    /* Re-enable RX after clock reconfiguration (skip on first-time TX init) */
+    if (s_rx_enabled) {
+        ret = i2s_channel_enable(s_rx_handle);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "i2s_channel_enable (RX) failed: %s", esp_err_to_name(ret));
+        }
+    }
+
     s_current_sample_rate = sample_rate;
     s_current_bits        = (uint32_t)bits;
     ESP_LOGI(TAG, "I2S configured: %u Hz, %u-bit", (unsigned)sample_rate, (unsigned)bits);
@@ -180,24 +195,69 @@ esp_err_t i2s_audio_init(void)
         return ESP_OK;
     }
 
-    /* Create TX-only channel on I2S_NUM_0 */
+    /* Create full-duplex TX+RX channel pair on I2S_NUM_0.
+     * Both channels share BCLK and LRCLK (MAX98357A + INMP441 use the same lines). */
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    esp_err_t ret = i2s_new_channel(&chan_cfg, &s_tx_handle, NULL);
+    esp_err_t ret = i2s_new_channel(&chan_cfg, &s_tx_handle, &s_rx_handle);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "i2s_new_channel failed: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    /* Initial configuration: 16kHz, 16-bit mono (matches most TTS output) */
+    /* Initial TX configuration: 16kHz, 16-bit mono (matches most TTS output) */
     ret = i2s_configure(16000, I2S_DATA_BIT_WIDTH_16BIT);
     if (ret != ESP_OK) {
         i2s_del_channel(s_tx_handle);
+        i2s_del_channel(s_rx_handle);
         s_tx_handle = NULL;
+        s_rx_handle = NULL;
         return ret;
     }
 
-    ESP_LOGI(TAG, "I2S audio init OK (BCLK=%d LRCLK=%d DOUT=%d)",
-             LANG_I2S_BCLK, LANG_I2S_LRCLK, LANG_I2S_DOUT);
+    /* RX channel: INMP441 microphone, 16kHz 16-bit mono.
+     * BCLK/WS set to I2S_GPIO_UNUSED because they are already claimed by TX. */
+    i2s_std_config_t rx_cfg = {
+        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(LANG_MIC_SAMPLE_RATE),
+        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,
+                                                     I2S_SLOT_MODE_MONO),
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = I2S_GPIO_UNUSED,   /* shared with TX */
+            .ws   = I2S_GPIO_UNUSED,   /* shared with TX */
+            .dout = I2S_GPIO_UNUSED,
+            .din  = LANG_I2S_DIN,
+            .invert_flags = {
+                .mclk_inv = false,
+                .bclk_inv = false,
+                .ws_inv   = false,
+            },
+        },
+    };
+    ret = i2s_channel_init_std_mode(s_rx_handle, &rx_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "i2s_channel_init_std_mode (RX) failed: %s", esp_err_to_name(ret));
+        /* Non-fatal: TX still works for speaker output */
+    } else {
+        ret = i2s_channel_enable(s_rx_handle);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "i2s_channel_enable (RX) failed: %s", esp_err_to_name(ret));
+        } else {
+            s_rx_enabled = true;
+            ESP_LOGI(TAG, "I2S RX (mic) enabled on GPIO %d", LANG_I2S_DIN);
+        }
+    }
+
+    ESP_LOGI(TAG, "I2S audio init OK (BCLK=%d LRCLK=%d DOUT=%d DIN=%d)",
+             LANG_I2S_BCLK, LANG_I2S_LRCLK, LANG_I2S_DOUT, LANG_I2S_DIN);
+
+#if LANG_AMP_SD_GPIO >= 0
+    /* Configure amp shutdown pin — output, start low (amp off) */
+    gpio_reset_pin(LANG_AMP_SD_GPIO);
+    gpio_set_direction(LANG_AMP_SD_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(LANG_AMP_SD_GPIO, 0);
+    ESP_LOGI(TAG, "Amp SD pin GPIO%d configured (amp off)", LANG_AMP_SD_GPIO);
+#endif
+
     return ESP_OK;
 }
 
@@ -238,16 +298,39 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
         if (ret != ESP_OK) return ret;
     }
 
-    /* Stream PCM data in 4KB chunks */
+    /* Stream PCM data in 4KB chunks with software volume scaling.
+     * LANG_AUDIO_VOLUME (0–256, 128 = 50% = -6 dB) reduces peak amp current
+     * to prevent brownouts on USB/limited PSU rails. */
     const uint8_t *pcm    = wav_data + info.pcm_offset;
     size_t         remain = info.pcm_len;
     size_t         written;
+    int16_t        vol_buf[2048];   /* 4096 bytes = 2048 samples, stack is fine */
 
-    ESP_LOGI(TAG, "Playing WAV: %u bytes PCM", (unsigned)remain);
+    /* Max-sleep WiFi modem during playback — audio is already in PSRAM,
+     * no network activity needed. Frees ~100 mA on the ESP32 3.3V rail. */
+    esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
+
+#if LANG_AMP_SD_GPIO >= 0
+    /* Enable amp: pull SD high, wait for amp to stabilise (~10 ms) */
+    gpio_set_level(LANG_AMP_SD_GPIO, 1);
+    vTaskDelay(pdMS_TO_TICKS(10));
+#endif
+
+    ESP_LOGI(TAG, "Playing WAV: %u bytes PCM (vol=%d/256)", (unsigned)remain, LANG_AUDIO_VOLUME);
 
     while (remain > 0) {
         size_t chunk = remain < 4096 ? remain : 4096;
+#if LANG_AUDIO_VOLUME < 256
+        /* Scale 16-bit samples; safe for both mono and stereo */
+        size_t samples = chunk / 2;
+        const int16_t *src = (const int16_t *)pcm;
+        for (size_t i = 0; i < samples; i++) {
+            vol_buf[i] = (int16_t)(((int32_t)src[i] * LANG_AUDIO_VOLUME) >> 8);
+        }
+        ret = i2s_channel_write(s_tx_handle, vol_buf, chunk, &written, pdMS_TO_TICKS(1000));
+#else
         ret = i2s_channel_write(s_tx_handle, pcm, chunk, &written, pdMS_TO_TICKS(1000));
+#endif
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "i2s_channel_write error: %s", esp_err_to_name(ret));
             return ret;
@@ -256,6 +339,26 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
         remain -= written;
     }
 
+    /* Restore normal modem sleep after playback */
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+
+#if LANG_AMP_SD_GPIO >= 0
+    /* Disable amp: pull SD low — zero idle current, no hiss between utterances */
+    gpio_set_level(LANG_AMP_SD_GPIO, 0);
+#endif
+
     ESP_LOGI(TAG, "Playback complete");
     return ESP_OK;
+}
+
+esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint32_t timeout_ms)
+{
+    if (!s_rx_handle || !s_rx_enabled) {
+        ESP_LOGE(TAG, "I2S RX not ready — call i2s_audio_init() first");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!buf || buf_size == 0 || !bytes_read) return ESP_ERR_INVALID_ARG;
+
+    return i2s_channel_read(s_rx_handle, buf, buf_size, bytes_read,
+                            pdMS_TO_TICKS(timeout_ms));
 }

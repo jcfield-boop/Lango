@@ -33,3 +33,17 @@ esp_err_t i2s_audio_init(void);
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG if header is malformed.
  */
 esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len);
+
+/**
+ * @brief Read raw 16kHz 16-bit mono PCM from the INMP441 microphone.
+ *
+ * Reads up to buf_size bytes from the I2S RX channel (always 16kHz, 16-bit mono).
+ * Thread-safe to call from any task, but only one task should call this at a time.
+ *
+ * @param buf         Buffer to receive PCM samples.
+ * @param buf_size    Size of buf in bytes.
+ * @param bytes_read  Output: actual bytes read.
+ * @param timeout_ms  Timeout in milliseconds.
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE if RX not ready.
+ */
+esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint32_t timeout_ms);

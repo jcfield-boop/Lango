@@ -77,19 +77,17 @@ var hasMediaRec = !!(window.MediaRecorder && navigator.mediaDevices && navigator
 
 /* Modes:
  *   'browser' — SpeechRecognition + speechSynthesis (Chrome/Edge, best)
- *   'device'  — MediaRecorder → device Groq STT/TTS
  *   'text'    — no mic at all
+ * (Device mic mode removed: the onboard INMP441 mic handles voice input directly.)
  */
 var modes = [];
 if (hasSpeechRec && hasSpeechSynth) modes.push('browser');
-if (hasMediaRec) modes.push('device');
 modes.push('text');
-var modeIdx = 0;
-var mode = modes[0];
+var modeIdx = modes.indexOf('text');  /* default to text — device speaks via I2S */
+var mode = modes[modeIdx];
 
 function modeLabel(m){
   if (m === 'browser') return '&#x1F4BB; Browser voice (Web Speech API)';
-  if (m === 'device')  return '&#x1F4F1; Device voice (Groq STT/TTS)';
   return '&#x2328; Text only';
 }
 function cycleMode(){
@@ -106,11 +104,7 @@ function applyMode(){
     hint.textContent = 'text mode';
   } else {
     btn.disabled = false;
-    if (mode === 'browser') {
-      hint.textContent = 'click or hold space — uses browser mic';
-    } else {
-      hint.textContent = 'hold to speak \u00B7 space \u2014 streams to device';
-    }
+    hint.textContent = 'click or hold space — uses browser mic';
   }
 }
 applyMode();
@@ -202,10 +196,6 @@ function handleMessage(text, ttsId){
   if (streamBubble){
     streamBubble.className = 'msg-bubble';
     streamBubble.textContent = text;
-    if (ttsId && mode === 'device'){
-      var btn = mkReplayBtn(ttsId);
-      streamBubble.parentElement.appendChild(btn);
-    }
     streamBubble = null;
   } else {
     var row = document.createElement('div');
@@ -214,26 +204,14 @@ function handleMessage(text, ttsId){
     bubble.className = 'msg-bubble';
     bubble.textContent = text;
     row.appendChild(bubble);
-    if (ttsId && mode === 'device') row.appendChild(mkReplayBtn(ttsId));
     transcript.appendChild(row);
   }
   transcript.scrollTop = transcript.scrollHeight;
 
-  /* TTS playback */
+  /* TTS playback via browser speech synthesis */
   if (mode === 'browser' && hasSpeechSynth) {
     speakBrowser(text);
-  } else if (mode === 'device' && ttsId) {
-    playDeviceTTS(ttsId);
   }
-}
-
-function mkReplayBtn(ttsId){
-  var btn = document.createElement('button');
-  btn.className = 'tts-replay';
-  btn.title = 'Replay';
-  btn.textContent = '\u25B6';
-  btn.onclick = function(){ playDeviceTTS(ttsId); };
-  return btn;
 }
 
 /* ── Browser TTS (speechSynthesis) ── */
@@ -246,15 +224,7 @@ function speakBrowser(text){
   window.speechSynthesis.speak(utt);
 }
 
-/* ── Device TTS (Groq /tts/<id>) ── */
-function playDeviceTTS(id){
-  setStatus('speaking');
-  var audio = new Audio('/tts/' + id);
-  audio.onended = audio.onerror = function(){ setStatus('idle'); };
-  audio.play().catch(function(){ setStatus('idle'); });
-}
-
-/* ── Text prompt (both modes) ── */
+/* ── Text prompt ── */
 function sendText(){
   var inp = document.getElementById('text-input');
   var text = inp.value.trim();
@@ -307,52 +277,12 @@ function stopBrowserSTT(){
   if (statusBadge.textContent === 'recording...') setStatus('idle');
 }
 
-/* ── Device audio (MediaRecorder → device Groq STT) ── */
-var recorder = null, recording = false;
-
-function startDeviceRec(){
-  if (!ws || ws.readyState !== 1 || recording) return;
-  navigator.mediaDevices.getUserMedia({audio:true, video:false})
-  .then(function(stream){
-    var opts = {mimeType:'audio/webm;codecs=opus'};
-    try{ recorder = new MediaRecorder(stream, opts); }
-    catch(e){ recorder = new MediaRecorder(stream); }
-    var mime = recorder.mimeType || 'audio/webm;codecs=opus';
-    recorder.ondataavailable = function(ev){
-      if (ev.data && ev.data.size > 0 && ws && ws.readyState === 1) ws.send(ev.data);
-    };
-    ws.send(JSON.stringify({type:'audio_start', mime:mime, chat_id:chatId}));
-    recorder.start(250);
-    recording = true;
-    document.getElementById('ptt-btn').classList.add('active');
-    setStatus('recording');
-  })
-  .catch(function(){ showError('Microphone access denied'); });
-}
-
-function stopDeviceRec(){
-  if (!recording || !recorder) return;
-  recording = false;
-  try{ recorder.stop(); recorder.stream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
-  recorder = null;
-  document.getElementById('ptt-btn').classList.remove('active');
-  setTimeout(function(){
-    if (ws && ws.readyState === 1){
-      ws.send(JSON.stringify({type:'audio_end', chat_id:chatId}));
-      startStreamBubble();
-      setStatus('stt_processing');
-    }
-  }, 120);
-}
-
-/* ── PTT unified handlers ── */
+/* ── PTT handlers (browser speech mode only) ── */
 function onPTTDown(){
   if (mode === 'browser') startBrowserSTT();
-  else if (mode === 'device') startDeviceRec();
 }
 function onPTTUp(){
   if (mode === 'browser') stopBrowserSTT();
-  else if (mode === 'device') stopDeviceRec();
 }
 
 var pttBtn = document.getElementById('ptt-btn');

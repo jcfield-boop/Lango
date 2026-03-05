@@ -262,6 +262,62 @@ esp_err_t audio_ring_reset_for_client(const char *chat_id)
     }
     s_ring.write_pos = 0;
     s_ring.active    = false;
+    s_ring.committed = false;   /* allow future recordings */
     xSemaphoreGive(s_ring.lock);
+    return ESP_OK;
+}
+
+esp_err_t audio_ring_open_wav(const char *chat_id, uint32_t sample_rate,
+                               uint16_t channels, uint16_t bits)
+{
+    /* Open the ring, then write a 44-byte WAV header with placeholder sizes */
+    esp_err_t ret = audio_ring_open(chat_id, "audio/wav");
+    if (ret != ESP_OK) return ret;
+
+    /* Standard 44-byte PCM WAV header; data chunk size is 0 (patched at commit) */
+    uint32_t byte_rate  = sample_rate * channels * (bits / 8);
+    uint16_t block_align = (uint16_t)(channels * (bits / 8));
+
+    uint8_t hdr[44] = {0};
+    memcpy(hdr +  0, "RIFF", 4);
+    /* RIFF chunk size placeholder — patched later */
+    memcpy(hdr +  8, "WAVE", 4);
+    memcpy(hdr + 12, "fmt ", 4);
+    uint32_t fmt_sz  = 16;
+    uint16_t pcm_fmt = 1;
+    memcpy(hdr + 16, &fmt_sz,       4);
+    memcpy(hdr + 20, &pcm_fmt,      2);
+    memcpy(hdr + 22, &channels,     2);
+    memcpy(hdr + 24, &sample_rate,  4);
+    memcpy(hdr + 28, &byte_rate,    4);
+    memcpy(hdr + 32, &block_align,  2);
+    memcpy(hdr + 34, &bits,         2);
+    memcpy(hdr + 36, "data", 4);
+    /* data chunk size placeholder — patched later */
+
+    return audio_ring_append(hdr, sizeof(hdr));
+}
+
+esp_err_t audio_ring_patch_wav_sizes(void)
+{
+    if (!s_ring.buf) return ESP_ERR_INVALID_STATE;
+
+    xSemaphoreTake(s_ring.lock, portMAX_DELAY);
+
+    if (!s_ring.active || s_ring.write_pos < 44) {
+        xSemaphoreGive(s_ring.lock);
+        ESP_LOGW(TAG, "audio_ring_patch_wav_sizes: ring not active or too small");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uint32_t data_bytes = (uint32_t)(s_ring.write_pos - 44);
+    uint32_t riff_bytes = (uint32_t)(s_ring.write_pos - 8);
+
+    memcpy(s_ring.buf +  4, &riff_bytes, 4);   /* RIFF chunk size */
+    memcpy(s_ring.buf + 40, &data_bytes, 4);   /* data chunk size */
+
+    xSemaphoreGive(s_ring.lock);
+    ESP_LOGI(TAG, "WAV sizes patched: riff=%u data=%u",
+             (unsigned)riff_bytes, (unsigned)data_bytes);
     return ESP_OK;
 }
