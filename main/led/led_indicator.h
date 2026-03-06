@@ -12,6 +12,7 @@
  *   LED_LISTENING  — pulsing white     (mic active: PTT held or wake word)
  *   LED_ERROR      — fast red flash    (auto-reverts to READY after ~5s)
  *   LED_OTA        — rapid magenta flash (OTA download in progress)
+ *   LED_CAPTURING  — solid bright white (webcam illumination; auto-reverts to THINKING after ~3s)
  *
  * GPIO configured via LANG_LED_GPIO in langoustine_config.h (default: 48).
  */
@@ -25,6 +26,7 @@ typedef enum {
     LED_ERROR      = 5,
     LED_LISTENING  = 6,
     LED_OTA        = 7,   /* rapid magenta flash: OTA download in progress */
+    LED_CAPTURING  = 8,   /* solid bright white: webcam illumination during capture */
 } led_state_t;
 
 /**

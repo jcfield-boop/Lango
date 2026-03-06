@@ -488,14 +488,20 @@ static void agent_loop_task(void *arg)
             cJSON_AddItemToObject(asst_msg, "content", build_assistant_content(&resp));
             cJSON_AddItemToArray(messages, asst_msg);
 
-            /* Track if capture_image was invoked this turn */
+            /* Track if capture_image was invoked this turn; flash LED white for illumination */
             for (int ci = 0; ci < resp.call_count; ci++) {
                 if (strcmp(resp.calls[ci].name, "capture_image") == 0) {
-                    capture_image_called = true; break;
+                    capture_image_called = true;
+                    led_indicator_set(LED_CAPTURING);
+                    break;
                 }
             }
 
             cJSON *tool_results = build_tool_results(&resp, &msg, tool_output, TOOL_OUTPUT_SIZE);
+
+            if (capture_image_called) {
+                led_indicator_set(LED_THINKING);
+            }
             cJSON *result_msg = cJSON_CreateObject();
             cJSON_AddStringToObject(result_msg, "role", "user");
             cJSON_AddItemToObject(result_msg, "content", tool_results);

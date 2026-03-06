@@ -63,7 +63,7 @@ CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=16
 # Console: UART primary only (GPIO43/44)
 # USB Serial/JTAG secondary disabled — GPIO19/20 are dedicated to USB OTG host (webcam)
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
-# CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG is not set
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 
 # USB OTG host configuration for UVC webcam
 # Larger control transfer buffer to fit UVC descriptor sets (> default 256 bytes)

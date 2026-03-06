@@ -25,6 +25,10 @@ static const char *TAG = "led";
 
 /* Max brightness (0-255): 60 = comfortable for desk use */
 #define LED_MAX_BRIGHT  60
+/* Capture flash brightness: high white for webcam illumination */
+#define LED_CAPTURE_BRIGHT  200
+/* Auto-revert capture state after ~3 s (150 ticks × 20 ms) */
+#define ANIM_CAPTURE_TICKS  150
 
 /* Animation period in ticks (1 tick = 20 ms) */
 #define ANIM_PERIOD_TICKS  200  /* 4 s breathing cycle */
@@ -163,6 +167,19 @@ static void led_task(void *arg)
             if (phase < ANIM_FAST_ON) {
                 r = LED_MAX_BRIGHT;
                 b = LED_MAX_BRIGHT;
+            }
+            break;
+        }
+
+        case LED_CAPTURING: {
+            /* Solid bright white — webcam illumination during capture.
+             * Boost green/blue slightly vs red to compensate WS2812 warm tint.
+             * Auto-reverts to LED_THINKING after ~3 s as a safety fallback. */
+            r = LED_CAPTURE_BRIGHT * 3 / 4;   /* 150 — reduce warm-red tint */
+            g = LED_CAPTURE_BRIGHT;            /* 200 */
+            b = LED_CAPTURE_BRIGHT;
+            if (step >= ANIM_CAPTURE_TICKS) {
+                atomic_store(&s_state, LED_THINKING);
             }
             break;
         }
