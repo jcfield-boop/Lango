@@ -47,7 +47,7 @@
 #define LANG_AGENT_STACK             (24 * 1024)
 #define LANG_AGENT_PRIO              6
 #define LANG_AGENT_CORE              1
-#define LANG_AGENT_MAX_HISTORY       15
+#define LANG_AGENT_MAX_HISTORY       30
 #define LANG_AGENT_MAX_TOOL_ITER     10
 #define LANG_MAX_TOOL_CALLS          4
 #define LANG_AGENT_SEND_WORKING_STATUS 1
@@ -150,8 +150,8 @@
 #define LANG_MEMORY_MAX_BYTES        (6 * 1024)
 #define LANG_SOUL_FILE               "/lfs/config/SOUL.md"
 #define LANG_USER_FILE               "/lfs/config/USER.md"
-#define LANG_SESSION_MAX_MSGS        15
-#define LANG_SESSION_HISTORY_MAX_BYTES (6 * 1024)
+#define LANG_SESSION_MAX_MSGS        30
+#define LANG_SESSION_HISTORY_MAX_BYTES (12 * 1024)
 
 /* Cron / Heartbeat */
 #define LANG_CRON_FILE               "/lfs/cron.json"

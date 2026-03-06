@@ -34,6 +34,9 @@
 #include "audio/audio_pipeline.h"
 #include "audio/stt_client.h"
 #include "audio/tts_client.h"
+#include "audio/i2s_audio.h"
+#include "audio/microphone.h"
+#include "audio/wake_word.h"
 #include "camera/uvc_camera.h"
 #include "led/led_indicator.h"
 #include "mdns.h"
@@ -229,10 +232,22 @@ void app_main(void)
     bootstrap_dirs();
     bootstrap_defaults();
 
-    /* Browser audio pipeline (STT/TTS via Groq) — always required */
+    /* Audio pipeline (STT/TTS via Groq) — always required */
     ESP_ERROR_CHECK(audio_pipeline_init());
     ESP_ERROR_CHECK(stt_client_init());
     ESP_ERROR_CHECK(tts_client_init());
+
+    /* Local mic + PTT — always enabled; amp stays gated off (LANG_I2S_AUDIO_ENABLED=0)
+     * so there is no brownout risk. wake_word_init() returns ESP_ERR_NOT_SUPPORTED
+     * gracefully when esp-sr is absent, falling back to PTT-only via microphone_start(). */
+    ESP_ERROR_CHECK(i2s_audio_init());
+    ESP_ERROR_CHECK(microphone_init());
+    if (wake_word_init() == ESP_OK) {
+        wake_word_start();
+    } else {
+        ESP_LOGI(TAG, "wake_word unavailable, using PTT-only");
+        microphone_start();
+    }
 
     /* UVC camera — best-effort; continues if no webcam is connected */
     uvc_camera_init();

@@ -763,6 +763,84 @@ static int cmd_log_level(int argc, char **argv)
     return 0;
 }
 
+/* --- set_weather_location command --- */
+static struct {
+    struct arg_str *location;
+    struct arg_end *end;
+} weather_location_args;
+
+static int cmd_set_weather_location(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&weather_location_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, weather_location_args.end, argv[0]);
+        return 1;
+    }
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open("weather_config", NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        printf("NVS error: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    nvs_set_str(nvs, "location", weather_location_args.location->sval[0]);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+    printf("Default weather location set to: %s\n", weather_location_args.location->sval[0]);
+    return 0;
+}
+
+/* --- set_notify_topic command --- */
+static struct {
+    struct arg_str *topic;
+    struct arg_end *end;
+} notify_topic_args;
+
+static int cmd_set_notify_topic(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&notify_topic_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, notify_topic_args.end, argv[0]);
+        return 1;
+    }
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open("notify_config", NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        printf("NVS error: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    nvs_set_str(nvs, "topic", notify_topic_args.topic->sval[0]);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+    printf("Default ntfy topic set to: %s\n", notify_topic_args.topic->sval[0]);
+    return 0;
+}
+
+/* --- set_notify_server command --- */
+static struct {
+    struct arg_str *server;
+    struct arg_end *end;
+} notify_server_args;
+
+static int cmd_set_notify_server(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&notify_server_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, notify_server_args.end, argv[0]);
+        return 1;
+    }
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open("notify_config", NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        printf("NVS error: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    nvs_set_str(nvs, "server", notify_server_args.server->sval[0]);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+    printf("ntfy server set to: %s\n", notify_server_args.server->sval[0]);
+    return 0;
+}
+
 /* --- tg_allow / tg_disallow / tg_allowlist commands --- */
 static struct {
     struct arg_str *chat_id;
@@ -1155,6 +1233,39 @@ esp_err_t serial_cli_init(void)
         .argtable = &log_level_args,
     };
     esp_console_cmd_register(&log_level_cmd);
+
+    /* set_weather_location */
+    weather_location_args.location = arg_str1(NULL, NULL, "<location>", "City, zip, or lat,lon");
+    weather_location_args.end      = arg_end(1);
+    esp_console_cmd_t weather_loc_cmd = {
+        .command  = "set_weather_location",
+        .help     = "Set default weather location (e.g. \"San Francisco\" or \"37.77,-122.41\")",
+        .func     = &cmd_set_weather_location,
+        .argtable = &weather_location_args,
+    };
+    esp_console_cmd_register(&weather_loc_cmd);
+
+    /* set_notify_topic */
+    notify_topic_args.topic = arg_str1(NULL, NULL, "<topic>", "ntfy topic name");
+    notify_topic_args.end   = arg_end(1);
+    esp_console_cmd_t notify_topic_cmd = {
+        .command  = "set_notify_topic",
+        .help     = "Set default ntfy push notification topic",
+        .func     = &cmd_set_notify_topic,
+        .argtable = &notify_topic_args,
+    };
+    esp_console_cmd_register(&notify_topic_cmd);
+
+    /* set_notify_server */
+    notify_server_args.server = arg_str1(NULL, NULL, "<url>", "ntfy server URL (default: https://ntfy.sh)");
+    notify_server_args.end    = arg_end(1);
+    esp_console_cmd_t notify_server_cmd = {
+        .command  = "set_notify_server",
+        .help     = "Set ntfy server URL (for self-hosted instances)",
+        .func     = &cmd_set_notify_server,
+        .argtable = &notify_server_args,
+    };
+    esp_console_cmd_register(&notify_server_cmd);
 
     ESP_ERROR_CHECK(esp_console_start_repl(repl));
     ESP_LOGI(TAG, "Serial CLI started");

@@ -139,12 +139,117 @@ static char *patch_tool_input_with_context(const llm_tool_call_t *call, const mi
     return patched;
 }
 
+/* ── Parallel tool execution ──────────────────────────────────── */
+
+typedef struct {
+    const llm_tool_call_t *call;
+    const char            *input;       /* points into patched or call->input */
+    char                  *output;      /* ps_malloc(TOOL_OUTPUT_SIZE) */
+    TaskHandle_t           notify_task;
+} tool_exec_ctx_t;
+
+static void tool_exec_task(void *arg)
+{
+    tool_exec_ctx_t *ctx = (tool_exec_ctx_t *)arg;
+    tool_registry_execute(ctx->call->name, ctx->input, ctx->output, TOOL_OUTPUT_SIZE);
+    xTaskNotifyGive(ctx->notify_task);
+    vTaskDelete(NULL);
+}
+
 static cJSON *build_tool_results(const llm_response_t *resp, const mimi_msg_t *msg,
                                  char *tool_output, size_t tool_output_size)
 {
     cJSON *content = cJSON_CreateArray();
+    int n = resp->call_count;
 
-    for (int i = 0; i < resp->call_count; i++) {
+    /* Parallel path: run independent tool calls concurrently */
+    if (n > 1) {
+        tool_exec_ctx_t ctxs[LANG_MAX_TOOL_CALLS];
+        char *patched[LANG_MAX_TOOL_CALLS];
+        bool all_alloc = true;
+        int tasks_spawned = 0;
+        TaskHandle_t self = xTaskGetCurrentTaskHandle();
+
+        memset(ctxs,    0, n * sizeof(tool_exec_ctx_t));
+        memset(patched, 0, n * sizeof(char *));
+
+        /* Allocate per-call PSRAM output buffers */
+        for (int i = 0; i < n; i++) {
+            ctxs[i].output = ps_malloc(TOOL_OUTPUT_SIZE);
+            if (!ctxs[i].output) { all_alloc = false; break; }
+            ctxs[i].output[0] = '\0';
+        }
+
+        if (all_alloc) {
+            /* Spawn a task per tool call */
+            for (int i = 0; i < n; i++) {
+                const llm_tool_call_t *call = &resp->calls[i];
+                patched[i]          = patch_tool_input_with_context(call, msg);
+                ctxs[i].call        = call;
+                ctxs[i].input       = patched[i] ? patched[i] :
+                                      (call->input ? call->input : "{}");
+                ctxs[i].notify_task = self;
+
+                {
+                    char mon[128];
+                    snprintf(mon, sizeof(mon), "%s %.80s", call->name, ctxs[i].input);
+                    for (char *p = mon; *p; p++) if (*p == '\n' || *p == '\r') *p = ' ';
+                    ws_server_broadcast_monitor("tool", mon);
+                }
+
+                if (xTaskCreate(tool_exec_task, "tool_par", 8192,
+                                &ctxs[i], 5, NULL) == pdPASS) {
+                    tasks_spawned++;
+                } else {
+                    ESP_LOGW(TAG, "tool_par create failed, running inline");
+                    tool_registry_execute(call->name, ctxs[i].input,
+                                          ctxs[i].output, TOOL_OUTPUT_SIZE);
+                }
+            }
+
+            /* Wait for all spawned tasks */
+            for (int i = 0; i < tasks_spawned; i++) {
+                ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(60000));
+            }
+
+            /* Collect results in call order */
+            for (int i = 0; i < n; i++) {
+                const llm_tool_call_t *call = &resp->calls[i];
+                const char *out = ctxs[i].output;
+                int out_len = (int)strlen(out);
+                ESP_LOGI(TAG, "Tool [par] %s: %d bytes", call->name, out_len);
+
+                if (strncmp(out, "Error:", 6) == 0) {
+                    char emsg[160];
+                    snprintf(emsg, sizeof(emsg), "[%s] %.100s", call->name, out);
+                    ws_server_broadcast_monitor("error", emsg);
+                } else {
+                    char preview[128];
+                    snprintf(preview, sizeof(preview), "[%s] %d bytes: %.40s%s",
+                             call->name, out_len, out, out_len > 40 ? "..." : "");
+                    for (char *p = preview; *p; p++) if (*p == '\n' || *p == '\r') *p = ' ';
+                    ws_server_broadcast_monitor("tool", preview);
+                }
+
+                cJSON *rb = cJSON_CreateObject();
+                cJSON_AddStringToObject(rb, "type", "tool_result");
+                cJSON_AddStringToObject(rb, "tool_use_id", call->id);
+                cJSON_AddStringToObject(rb, "content", out);
+                cJSON_AddItemToArray(content, rb);
+
+                free(ctxs[i].output);
+                free(patched[i]);
+            }
+            return content;
+        }
+
+        /* OOM: free any allocated buffers and fall through to sequential */
+        for (int i = 0; i < n; i++) { free(ctxs[i].output); }
+        ESP_LOGW(TAG, "Parallel tool PSRAM alloc failed, falling back to sequential");
+    }
+
+    /* Sequential path (n==1 or OOM fallback) */
+    for (int i = 0; i < n; i++) {
         const llm_tool_call_t *call = &resp->calls[i];
         const char *tool_input = call->input ? call->input : "{}";
         char *patched_input = patch_tool_input_with_context(call, msg);
@@ -268,6 +373,7 @@ static void agent_loop_task(void *arg)
         bool recovery_tried = false;
         bool retry_done = false;
         bool oom_restart = false;
+        bool capture_image_called = false;
         bool is_telegram = (strcmp(msg.channel, MIMI_CHAN_TELEGRAM) == 0);
         int32_t tg_placeholder_id = -1;
 
@@ -381,6 +487,13 @@ static void agent_loop_task(void *arg)
             cJSON_AddItemToObject(asst_msg, "content", build_assistant_content(&resp));
             cJSON_AddItemToArray(messages, asst_msg);
 
+            /* Track if capture_image was invoked this turn */
+            for (int ci = 0; ci < resp.call_count; ci++) {
+                if (strcmp(resp.calls[ci].name, "capture_image") == 0) {
+                    capture_image_called = true; break;
+                }
+            }
+
             cJSON *tool_results = build_tool_results(&resp, &msg, tool_output, TOOL_OUTPUT_SIZE);
             cJSON *result_msg = cJSON_CreateObject();
             cJSON_AddStringToObject(result_msg, "role", "user");
@@ -445,9 +558,10 @@ static void agent_loop_task(void *arg)
                 }
                 esp_err_t tts_err = tts_generate(tts_text, tts_id);
 
+                const char *img_url = capture_image_called ? "/camera/latest.jpg" : NULL;
                 if (tts_err == ESP_OK && tts_id[0]) {
                     /* Send message with tts_id so browser auto-plays */
-                    ws_server_send_with_tts(msg.chat_id, final_text, tts_id);
+                    ws_server_send_with_tts(msg.chat_id, final_text, tts_id, img_url);
                 } else {
                     /* No TTS — send message-only dispatch via outbound queue */
                     mimi_msg_t out = {0};

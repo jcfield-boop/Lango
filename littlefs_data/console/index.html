@@ -38,6 +38,8 @@ header h1{font-size:1rem;color:#7ec8e3;font-weight:600;white-space:nowrap}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
 .tts-play{background:#1e1e1e;border:1px solid #3a3a3a;border-radius:12px;color:#888;cursor:pointer;font-size:0.75rem;padding:2px 10px;margin-top:3px}
 .tts-play:hover{color:#b07ee3;border-color:#b07ee3}
+.capture-img{max-width:100%;border-radius:8px;margin-top:6px;border:1px solid #333;display:block;cursor:pointer}
+.capture-img:hover{border-color:#555}
 #error-bar{background:#5a1f1f;color:#ffaaaa;font-size:0.78rem;padding:5px 14px;flex-shrink:0;display:none}
 #input-area{background:#1a1a1a;border-top:1px solid #333;padding:10px 12px;flex-shrink:0;display:flex;gap:8px;align-items:center}
 #text-input{flex:1;background:#252525;color:#ddd;border:1px solid #3a3a3a;padding:7px 12px;border-radius:20px;font-size:0.88rem;outline:none;font-family:inherit}
@@ -241,7 +243,7 @@ function connect() {
       /* Chat-filtered events */
       if (d.chat_id && d.chat_id !== chatId) return;
       if      (d.type === 'token')   { handleToken(d.content); }
-      else if (d.type === 'message') handleMessage(d.content, d.tts_id);
+      else if (d.type === 'message') handleMessage(d.content, d.tts_id, d.image_url);
       else if (d.type === 'status')  { setStatus(d.stage); }
       else if (d.type === 'error')   { showError(d.code + ': ' + (d.message || '')); addLog('err', d.code + ': ' + d.message); }
     } catch(e) {}
@@ -295,7 +297,7 @@ function handleToken(delta) {
   transcript.scrollTop = transcript.scrollHeight;
 }
 
-function handleMessage(text, ttsId) {
+function handleMessage(text, ttsId, imageUrl) {
   streamingLogged = false;
   addLog('msg', '[resp] ' + text.substring(0, 120));
   var row;
@@ -312,6 +314,14 @@ function handleMessage(text, ttsId) {
     row.className = 'msg-row asst';
     row.appendChild(b);
     transcript.appendChild(row);
+  }
+  if (imageUrl) {
+    var img = document.createElement('img');
+    img.className = 'capture-img';
+    img.src = imageUrl + '?t=' + Date.now();
+    img.alt = 'Captured image';
+    img.onclick = function() { window.open(this.src, '_blank'); };
+    row.appendChild(img);
   }
   if (ttsId) {
     var btn = document.createElement('button');

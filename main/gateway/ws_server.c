@@ -1354,7 +1354,7 @@ esp_err_t ws_server_start(void)
     httpd_ssl_config_t ssl_cfg         = HTTPD_SSL_CONFIG_DEFAULT();
     ssl_cfg.httpd.server_port          = LANG_WSS_PORT;
     ssl_cfg.httpd.ctrl_port            = LANG_WSS_PORT + 1;
-    ssl_cfg.httpd.max_open_sockets     = 4;
+    ssl_cfg.httpd.max_open_sockets     = 8;
     ssl_cfg.httpd.stack_size           = 10240;
     ssl_cfg.httpd.max_uri_handlers     = 24;
     ssl_cfg.httpd.send_wait_timeout    = 30;
@@ -1509,7 +1509,8 @@ esp_err_t ws_server_send(const char *chat_id, const char *text)
 }
 
 /* Send {"type":"message","content":"...","tts_id":"<id>"} */
-esp_err_t ws_server_send_with_tts(const char *chat_id, const char *text, const char *tts_id)
+esp_err_t ws_server_send_with_tts(const char *chat_id, const char *text,
+                                  const char *tts_id, const char *image_url)
 {
     if (!s_server) return ESP_ERR_INVALID_STATE;
 
@@ -1526,6 +1527,9 @@ esp_err_t ws_server_send_with_tts(const char *chat_id, const char *text, const c
     cJSON_AddStringToObject(resp, "chat_id", chat_id);
     if (tts_id && tts_id[0]) {
         cJSON_AddStringToObject(resp, "tts_id", tts_id);
+    }
+    if (image_url && image_url[0]) {
+        cJSON_AddStringToObject(resp, "image_url", image_url);
     }
 
     char *json_str = cJSON_PrintUnformatted(resp);

@@ -40,8 +40,9 @@ esp_err_t ws_server_start(void);
 /** Send a final message to a specific WebSocket client by chat_id. */
 esp_err_t ws_server_send(const char *chat_id, const char *text);
 
-/** Send a final message with optional TTS ID (triggers browser audio playback). */
-esp_err_t ws_server_send_with_tts(const char *chat_id, const char *text, const char *tts_id);
+/** Send a final message with optional TTS ID and optional image URL. */
+esp_err_t ws_server_send_with_tts(const char *chat_id, const char *text,
+                                  const char *tts_id, const char *image_url);
 
 /** Send a streaming token delta to a client. */
 esp_err_t ws_server_send_token(const char *chat_id, const char *delta);

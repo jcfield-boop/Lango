@@ -16,6 +16,8 @@
 #include "tools/tool_rss.h"
 #include "tools/tool_rule.h"
 #include "tools/tool_capture_image.h"
+#include "tools/tool_weather.h"
+#include "tools/tool_notify.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -480,6 +482,46 @@ esp_err_t tool_registry_init(void)
         .execute = tool_capture_image_execute,
     };
     register_tool(&ci);
+
+    /* Register get_weather */
+    mimi_tool_t wt = {
+        .name        = "get_weather",
+        .description = "Get current weather and 3-day forecast for a location. "
+                       "If no location is given, uses the configured default (or IP-based auto-detection).",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"location\":{\"type\":\"string\","
+            "\"description\":\"City name, zip code, or coordinates (lat,lon). "
+            "Omit to use default location.\"}"
+            "},\"required\":[]}",
+        .execute = tool_weather_execute,
+    };
+    register_tool(&wt);
+
+    /* Register send_notification */
+    mimi_tool_t nt = {
+        .name        = "send_notification",
+        .description = "Send a push notification to the user's phone via ntfy.sh. "
+                       "Use for alerts, reminders, and status updates the user wants on their phone.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"message\":{\"type\":\"string\","
+            "\"description\":\"Notification body text\"},"
+            "\"title\":{\"type\":\"string\","
+            "\"description\":\"Notification title (optional)\"},"
+            "\"priority\":{\"type\":\"string\","
+            "\"enum\":[\"min\",\"low\",\"default\",\"high\",\"urgent\"],"
+            "\"description\":\"Notification priority (default: default)\"},"
+            "\"tags\":{\"type\":\"string\","
+            "\"description\":\"Comma-separated ntfy tags/emojis (e.g. \\\"warning,robot\\\")\"},"
+            "\"topic\":{\"type\":\"string\","
+            "\"description\":\"ntfy topic to publish to (overrides NVS default)\"}"
+            "},\"required\":[\"message\"]}",
+        .execute = tool_notify_execute,
+    };
+    register_tool(&nt);
 
     build_tools_json();
 
