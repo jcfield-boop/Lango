@@ -11,6 +11,7 @@
  *   LED_SPEAKING   — pulsing cyan      (TTS/I2S playback)
  *   LED_LISTENING  — pulsing white     (mic active: PTT held or wake word)
  *   LED_ERROR      — fast red flash    (auto-reverts to READY after ~5s)
+ *   LED_OTA        — rapid magenta flash (OTA download in progress)
  *
  * GPIO configured via LANG_LED_GPIO in langoustine_config.h (default: 48).
  */
@@ -23,6 +24,7 @@ typedef enum {
     LED_SPEAKING   = 4,
     LED_ERROR      = 5,
     LED_LISTENING  = 6,
+    LED_OTA        = 7,   /* rapid magenta flash: OTA download in progress */
 } led_state_t;
 
 /**

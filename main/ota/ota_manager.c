@@ -1,6 +1,7 @@
 #include "ota_manager.h"
 #include "langoustine_config.h"
 #include "gateway/ws_server.h"
+#include "led/led_indicator.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -48,6 +49,7 @@ esp_err_t ota_update_from_url(const char *url)
         ESP_LOGI(TAG, "%s", msg);
         ws_server_broadcast_monitor("ota", msg);
     }
+    led_indicator_set(LED_OTA);   /* rapid magenta flash during download */
 
     esp_http_client_config_t http_cfg = {
         .url                   = url,

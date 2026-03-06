@@ -156,6 +156,16 @@ static void led_task(void *arg)
             }
             break;
         }
+
+        case LED_OTA: {
+            /* Rapid magenta flash (R+B) — OTA download in progress */
+            uint32_t phase = step % (ANIM_FAST_ON + ANIM_FAST_OFF);
+            if (phase < ANIM_FAST_ON) {
+                r = LED_MAX_BRIGHT;
+                b = LED_MAX_BRIGHT;
+            }
+            break;
+        }
         }
 
         send_pixel(r, g, b);
