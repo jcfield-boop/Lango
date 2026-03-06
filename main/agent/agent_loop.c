@@ -15,6 +15,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <sys/stat.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -558,7 +559,14 @@ static void agent_loop_task(void *arg)
                 }
                 esp_err_t tts_err = tts_generate(tts_text, tts_id);
 
-                const char *img_url = capture_image_called ? "/camera/latest.jpg" : NULL;
+                /* Only include image URL if a capture actually succeeded (file exists) */
+                const char *img_url = NULL;
+                if (capture_image_called) {
+                    struct stat img_st;
+                    if (stat(LANG_CAMERA_CAPTURE_PATH, &img_st) == 0 && img_st.st_size > 0) {
+                        img_url = "/camera/latest.jpg";
+                    }
+                }
                 if (tts_err == ESP_OK && tts_id[0]) {
                     /* Send message with tts_id so browser auto-plays */
                     ws_server_send_with_tts(msg.chat_id, final_text, tts_id, img_url);
