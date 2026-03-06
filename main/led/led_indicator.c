@@ -25,10 +25,8 @@ static const char *TAG = "led";
 
 /* Max brightness (0-255): 60 = comfortable for desk use */
 #define LED_MAX_BRIGHT  60
-/* Capture flash brightness: high white for webcam illumination */
-#define LED_CAPTURE_BRIGHT  200
-/* Auto-revert capture state after ~3 s (150 ticks × 20 ms) */
-#define ANIM_CAPTURE_TICKS  150
+/* Flash fade ticks: 30 × 20 ms = 600 ms exponential decay white→off */
+#define ANIM_FLASH_FADE_TICKS  30
 
 /* Animation period in ticks (1 tick = 20 ms) */
 #define ANIM_PERIOD_TICKS  200  /* 4 s breathing cycle */
@@ -172,13 +170,23 @@ static void led_task(void *arg)
         }
 
         case LED_CAPTURING: {
-            /* Solid bright white — webcam illumination during capture.
-             * Boost green/blue slightly vs red to compensate WS2812 warm tint.
-             * Auto-reverts to LED_THINKING after ~3 s as a safety fallback. */
-            r = LED_CAPTURE_BRIGHT * 3 / 4;   /* 150 — reduce warm-red tint */
-            g = LED_CAPTURE_BRIGHT;            /* 200 */
-            b = LED_CAPTURE_BRIGHT;
-            if (step >= ANIM_CAPTURE_TICKS) {
+            /* Maximum white during capture — agent transitions to LED_FLASH_FADE when done.
+             * No auto-revert: the vision API call can take up to 30 s. */
+            r = 255; g = 255; b = 255;
+            break;
+        }
+
+        case LED_FLASH_FADE: {
+            /* Post-capture afterglow: exponential decay from 255→0 over ~600 ms.
+             * Mimics a traditional camera flash fading after the shutter closes. */
+            if (step < ANIM_FLASH_FADE_TICKS) {
+                /* e^(-5t) decay mapped to 0..1 over the fade window */
+                float t = (float)step / ANIM_FLASH_FADE_TICKS;
+                float v = expf(-5.0f * t);
+                uint8_t bv = (uint8_t)(v * 255.0f);
+                r = bv; g = bv; b = bv;
+            } else {
+                r = 0; g = 0; b = 0;
                 atomic_store(&s_state, LED_THINKING);
             }
             break;

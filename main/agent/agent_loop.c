@@ -500,7 +500,8 @@ static void agent_loop_task(void *arg)
             cJSON *tool_results = build_tool_results(&resp, &msg, tool_output, TOOL_OUTPUT_SIZE);
 
             if (capture_image_called) {
-                led_indicator_set(LED_THINKING);
+                /* Trigger post-capture fade (exponential decay white→off) before resuming */
+                led_indicator_set(LED_FLASH_FADE);
             }
             cJSON *result_msg = cJSON_CreateObject();
             cJSON_AddStringToObject(result_msg, "role", "user");
