@@ -30,6 +30,7 @@ extern const uint8_t s_server_key_end[]  asm("_binary_server_key_pem_end");
 #include "nvs.h"
 #include "cJSON.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "memory/psram_alloc.h"
 
 static const char *TAG = "ws";
@@ -48,6 +49,7 @@ static char s_cors_origin[128] = "*";
 
 static httpd_handle_t s_server = NULL;
 static httpd_handle_t s_redirect_server = NULL;
+static TaskHandle_t s_ws_ping_task = NULL;
 
 static esp_err_t redirect_handler(httpd_req_t *req)
 {
@@ -125,6 +127,43 @@ static void remove_client(int fd)
             ESP_LOGI(TAG, "Client disconnected: %s", s_clients[i].chat_id);
             s_clients[i].active = false;
             return;
+        }
+    }
+}
+
+/* Periodic WS ping — keeps browser connections alive through the recv_wait_timeout */
+#define WS_PING_INTERVAL_MS  20000
+
+static void ws_ping_task(void *arg)
+{
+    static const uint8_t ping_payload[] = "ping";
+    httpd_ws_frame_t ping_pkt = {
+        .type    = HTTPD_WS_TYPE_PING,
+        .payload = (uint8_t *)ping_payload,
+        .len     = sizeof(ping_payload) - 1,
+        .final   = true,
+    };
+
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(WS_PING_INTERVAL_MS));
+        if (!s_server) continue;
+
+        xSemaphoreTake(s_clients_lock, portMAX_DELAY);
+        int fds[LANG_WS_MAX_CLIENTS];
+        int count = 0;
+        for (int i = 0; i < LANG_WS_MAX_CLIENTS; i++) {
+            if (s_clients[i].active) fds[count++] = s_clients[i].fd;
+        }
+        xSemaphoreGive(s_clients_lock);
+
+        for (int i = 0; i < count; i++) {
+            esp_err_t err = httpd_ws_send_frame_async(s_server, fds[i], &ping_pkt);
+            if (err != ESP_OK) {
+                ESP_LOGD(TAG, "ping fd=%d failed (%s), removing", fds[i], esp_err_to_name(err));
+                xSemaphoreTake(s_clients_lock, portMAX_DELAY);
+                remove_client(fds[i]);
+                xSemaphoreGive(s_clients_lock);
+            }
         }
     }
 }
@@ -832,8 +871,7 @@ static esp_err_t skill_get_handler(httpd_req_t *req)
 
     FILE *f = fopen(path, "r");
     if (!f) {
-        httpd_resp_set_type(req, "text/plain; charset=utf-8");
-        httpd_resp_sendstr(req, "");
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Skill not found");
         return ESP_OK;
     }
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
@@ -1320,7 +1358,7 @@ esp_err_t ws_server_start(void)
     ssl_cfg.httpd.stack_size           = 10240;
     ssl_cfg.httpd.max_uri_handlers     = 24;
     ssl_cfg.httpd.send_wait_timeout    = 30;
-    ssl_cfg.httpd.recv_wait_timeout    = 30;
+    ssl_cfg.httpd.recv_wait_timeout    = 120;  /* extended: WS ping keeps connection alive */
     ssl_cfg.httpd.uri_match_fn         = httpd_uri_match_wildcard;
     ssl_cfg.servercert                 = s_server_cert;
     ssl_cfg.servercert_len             = s_server_cert_end - s_server_cert;
@@ -1418,6 +1456,11 @@ esp_err_t ws_server_start(void)
         };
         httpd_register_uri_handler(s_redirect_server, &redir_any);
         ESP_LOGI(TAG, "HTTP redirect server on port %d", LANG_WS_PORT);
+    }
+
+    /* WebSocket keepalive ping task (Core 0, low priority) */
+    if (!s_ws_ping_task) {
+        xTaskCreatePinnedToCore(ws_ping_task, "ws_ping", 2048, NULL, 2, &s_ws_ping_task, 0);
     }
 
     ESP_LOGI(TAG, "HTTPS server started on port %d (WSS: /ws, Voice: /, Dev: /console)", LANG_WSS_PORT);

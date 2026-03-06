@@ -21,7 +21,7 @@ static const char *TAG = "tts";
 #define TTS_ENDPOINT_MAX  256
 #define TTS_MODEL_MAX     64
 #define TTS_VOICE_MAX     64
-#define TTS_TTL_S         300   /* 5-minute cache TTL */
+#define TTS_TTL_S         900   /* 15-minute cache TTL */
 #define TTS_GROW_STEP     (64 * 1024)
 
 /* ── In-memory PSRAM cache ─────────────────────────────────────── */
