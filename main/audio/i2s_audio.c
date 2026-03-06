@@ -326,9 +326,7 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
     }
 
     /* Reconfigure I2S only if sample rate or bit depth changed.
-     *
-     * WiFi PS mode is managed globally (WIFI_PS_NONE set at connect time in
-     * wifi_manager.c) so no per-playback WiFi transitions are needed here. */
+     * WiFi PS is disabled globally (WIFI_PS_NONE) so no per-playback transitions needed. */
     if (info.sample_rate != s_current_sample_rate ||
         (uint32_t)bits    != s_current_bits) {
         ret = i2s_configure(info.sample_rate, bits);

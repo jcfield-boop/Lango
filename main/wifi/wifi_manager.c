@@ -93,6 +93,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "Connected! IP: %s", s_ip_str);
         s_retry_count = 0;
         s_connected = true;
+        esp_wifi_set_ps(WIFI_PS_NONE);   /* disable modem sleep — prevents PS-null RF bursts drooping 3.3V rail */
         if (s_reconnect_timer) {
             esp_timer_stop(s_reconnect_timer);
         }
