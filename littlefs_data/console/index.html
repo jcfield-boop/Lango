@@ -200,7 +200,7 @@ input:focus{border-color:#555}
 /* ── Globals ── */
 var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 var chatId = 'ws_' + Math.floor(Math.random() * 99999);
-var ws, reconnectTimer;
+var ws, reconnectTimer, wsEverConnected = false;
 var dot = document.getElementById('ws-dot');
 var statusBadge = document.getElementById('status-badge');
 var transcript = document.getElementById('transcript');
@@ -223,10 +223,10 @@ function connect() {
   dot.className = '';
   var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(proto + '//' + location.host + '/ws');
-  ws.onopen = function() { dot.className = 'on'; setStatus('idle'); addLog('ws', 'Connected'); };
+  ws.onopen = function() { dot.className = 'on'; setStatus('idle'); wsEverConnected = true; addLog('ws', 'Connected'); };
   ws.onclose = function() {
     dot.className = 'err'; setStatus('offline');
-    addLog('err', 'Disconnected — retry 4s');
+    addLog('err', wsEverConnected ? 'Disconnected — retry 4s' : 'Connecting — retry 4s');
     reconnectTimer = setTimeout(connect, 4000);
   };
   ws.onerror = function() {};

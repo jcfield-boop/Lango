@@ -19,9 +19,16 @@ static TaskHandle_t  s_usb_lib_task     = NULL;
 
 static void usb_lib_task(void *arg)
 {
+    ESP_LOGI(TAG, "usb_lib_task running (waiting for USB events)");
     while (1) {
-        uint32_t event_flags;
-        usb_host_lib_handle_events(portMAX_DELAY, &event_flags);
+        uint32_t event_flags = 0;
+        /* Use a 10 s timeout to emit a heartbeat if nothing arrives */
+        esp_err_t err = usb_host_lib_handle_events(pdMS_TO_TICKS(10000), &event_flags);
+        if (err == ESP_ERR_TIMEOUT) {
+            ESP_LOGI(TAG, "usb_lib_task alive — no USB events in 10 s (no device connected?)");
+            continue;
+        }
+        ESP_LOGI(TAG, "usb_lib_task event: flags=0x%lx", (unsigned long)event_flags);
         if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
             usb_host_device_free_all();
         }
