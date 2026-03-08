@@ -503,21 +503,23 @@ esp_err_t tool_registry_init(void)
     mimi_tool_t nt = {
         .name        = "send_notification",
         .description = "Send a push notification to the user's phone via ntfy.sh. "
-                       "Use for alerts, reminders, and status updates the user wants on their phone.",
+                       "Use for alerts, reminders, and status updates. "
+                       "Only 'message' is required — choose a concise title yourself and omit priority/tags unless the situation warrants them. "
+                       "Do NOT ask the user for title or priority; just send it.",
         .input_schema_json =
             "{\"type\":\"object\","
             "\"properties\":{"
             "\"message\":{\"type\":\"string\","
             "\"description\":\"Notification body text\"},"
             "\"title\":{\"type\":\"string\","
-            "\"description\":\"Notification title (optional)\"},"
+            "\"description\":\"Short title — pick one yourself, do not ask the user\"},"
             "\"priority\":{\"type\":\"string\","
             "\"enum\":[\"min\",\"low\",\"default\",\"high\",\"urgent\"],"
-            "\"description\":\"Notification priority (default: default)\"},"
+            "\"description\":\"Priority — omit unless urgent; defaults to 'default'\"},"
             "\"tags\":{\"type\":\"string\","
-            "\"description\":\"Comma-separated ntfy tags/emojis (e.g. \\\"warning,robot\\\")\"},"
+            "\"description\":\"Comma-separated ntfy tags/emojis (e.g. \\\"warning,robot\\\") — omit if unsure\"},"
             "\"topic\":{\"type\":\"string\","
-            "\"description\":\"ntfy topic to publish to (overrides NVS default)\"}"
+            "\"description\":\"ntfy topic (omit to use device default)\"}"
             "},\"required\":[\"message\"]}",
         .execute = tool_notify_execute,
     };
