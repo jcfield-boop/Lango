@@ -2,6 +2,7 @@
 #include "langoustine_config.h"
 
 #include <string.h>
+#include <inttypes.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -41,7 +42,29 @@ static void driver_event_cb(const uvc_host_driver_event_data_t *event, void *use
 {
     if (event->type == UVC_HOST_DRIVER_EVENT_DEVICE_CONNECTED) {
         s_device_connected = true;
-        ESP_LOGI(TAG, "UVC device connected (addr=%d)", event->device_connected.dev_addr);
+        uint8_t dev_addr   = event->device_connected.dev_addr;
+        uint8_t stream_idx = event->device_connected.uvc_stream_index;
+        ESP_LOGI(TAG, "UVC device connected (addr=%d, stream=%d, frames=%d)",
+                 dev_addr, stream_idx, (int)event->device_connected.frame_info_num);
+
+        /* Log every supported frame format so we know what to request */
+        uvc_host_frame_info_t frames[24];
+        size_t num = sizeof(frames) / sizeof(frames[0]);
+        if (uvc_host_get_frame_list(dev_addr, stream_idx, &frames, &num) == ESP_OK) {
+            for (size_t i = 0; i < num; i++) {
+                const char *fmt =
+                    (frames[i].format == UVC_VS_FORMAT_MJPEG)   ? "MJPEG" :
+                    (frames[i].format == UVC_VS_FORMAT_YUY2)    ? "YUY2"  :
+                    (frames[i].format == UVC_VS_FORMAT_H264)    ? "H264"  :
+                    (frames[i].format == UVC_VS_FORMAT_H265)    ? "H265"  : "OTHER";
+                uint32_t fps_val = frames[i].default_interval
+                    ? 10000000u / frames[i].default_interval : 0;
+                ESP_LOGI(TAG, "  format[%d] %s %ux%u @%"PRIu32"fps",
+                         (int)i, fmt, frames[i].h_res, frames[i].v_res, fps_val);
+            }
+        } else {
+            ESP_LOGW(TAG, "  uvc_host_get_frame_list failed");
+        }
     }
 }
 
@@ -55,23 +78,28 @@ static void stream_event_cb(const uvc_host_stream_event_data_t *event, void *use
 
 /* ── Frame capture context ─────────────────────────────────────── */
 
+/* Number of frames to discard before capturing — allows AEC/AGC to settle */
+#define CAMERA_WARMUP_FRAMES  15
+
 typedef struct {
     uint8_t          *buf;
     size_t            buf_size;
     size_t            frame_len;
     SemaphoreHandle_t sem;
     bool              captured;
+    int               skip;       /* frames left to discard */
 } capture_ctx_t;
 
-/*
- * Returns true  → frame processed, driver reclaims buffer immediately.
- * Returns false → frame NOT yet processed, caller must call uvc_host_frame_return().
- * We copy data inline and return true so we avoid the extra return call.
- */
 static bool frame_cb(const uvc_host_frame_t *frame, void *user_ctx)
 {
     capture_ctx_t *ctx = (capture_ctx_t *)user_ctx;
     if (!ctx || ctx->captured) return true;
+
+    /* Discard warmup frames so AEC/AGC can settle */
+    if (ctx->skip > 0) {
+        ctx->skip--;
+        return true;
+    }
 
     size_t copy_len = frame->data_len;
     if (copy_len > ctx->buf_size) {
@@ -168,11 +196,26 @@ esp_err_t uvc_camera_capture(uint8_t *buf, size_t buf_size,
         .buf_size  = buf_size,
         .frame_len = 0,
         .captured  = false,
+        .skip      = CAMERA_WARMUP_FRAMES,
     };
     ctx.sem = xSemaphoreCreateBinary();
     if (!ctx.sem) return ESP_ERR_NO_MEM;
 
-    /* Try 640×480 MJPEG @ 15fps, fall back to 320×240 */
+    /* Try formats in order of preference.
+     * fps=0 means "use camera default fps" per the UVC host API.
+     * h_res=0, v_res=0 with DEFAULT format lets the camera pick everything. */
+    typedef struct { uint16_t w, h; float fps; enum uvc_host_stream_format fmt; } try_t;
+    static const try_t tries[] = {
+        {640, 480,  0, UVC_VS_FORMAT_MJPEG},
+        {320, 240,  0, UVC_VS_FORMAT_MJPEG},
+        {640, 480, 30, UVC_VS_FORMAT_MJPEG},
+        {320, 240, 30, UVC_VS_FORMAT_MJPEG},
+        {640, 480, 25, UVC_VS_FORMAT_MJPEG},
+        {320, 240, 25, UVC_VS_FORMAT_MJPEG},
+        {  0,   0,  0, UVC_VS_FORMAT_MJPEG},
+        {  0,   0,  0, UVC_VS_FORMAT_DEFAULT},
+    };
+
     uvc_host_stream_config_t stream_cfg = {
         .event_cb = stream_event_cb,
         .frame_cb = frame_cb,
@@ -182,12 +225,6 @@ esp_err_t uvc_camera_capture(uint8_t *buf, size_t buf_size,
             .vid              = UVC_HOST_ANY_VID,
             .pid              = UVC_HOST_ANY_PID,
             .uvc_stream_index = 0,
-        },
-        .vs_format = {
-            .h_res  = 640,
-            .v_res  = 480,
-            .fps    = 15.0f,
-            .format = UVC_VS_FORMAT_MJPEG,
         },
         .advanced = {
             .number_of_frame_buffers = 2,
@@ -199,18 +236,26 @@ esp_err_t uvc_camera_capture(uint8_t *buf, size_t buf_size,
     };
 
     uvc_host_stream_hdl_t stream_hdl = NULL;
-    esp_err_t ret = uvc_host_stream_open(&stream_cfg, pdMS_TO_TICKS(timeout_ms / 2), &stream_hdl);
-    if (ret != ESP_OK) {
-        /* Try lower resolution */
-        stream_cfg.vs_format.h_res = 320;
-        stream_cfg.vs_format.v_res = 240;
-        ret = uvc_host_stream_open(&stream_cfg, pdMS_TO_TICKS(timeout_ms / 2), &stream_hdl);
+    esp_err_t ret = ESP_FAIL;
+    for (size_t i = 0; i < sizeof(tries) / sizeof(tries[0]); i++) {
+        stream_cfg.vs_format.h_res  = tries[i].w;
+        stream_cfg.vs_format.v_res  = tries[i].h;
+        stream_cfg.vs_format.fps    = tries[i].fps;
+        stream_cfg.vs_format.format = tries[i].fmt;
+        ESP_LOGI(TAG, "Trying %ux%u @%.0ffps fmt=%d",
+                 tries[i].w, tries[i].h, tries[i].fps, (int)tries[i].fmt);
+        ret = uvc_host_stream_open(&stream_cfg, pdMS_TO_TICKS(500), &stream_hdl);
+        if (ret == ESP_OK) break;
     }
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "uvc_host_stream_open failed: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "uvc_host_stream_open failed all formats: %s", esp_err_to_name(ret));
         vSemaphoreDelete(ctx.sem);
         return ESP_ERR_NOT_FOUND;
     }
+    ESP_LOGI(TAG, "Stream opened: %ux%u @%.0ffps fmt=%d",
+             stream_cfg.vs_format.h_res, stream_cfg.vs_format.v_res,
+             stream_cfg.vs_format.fps,   (int)stream_cfg.vs_format.format);
+
 
     ret = uvc_host_stream_start(stream_hdl);
     if (ret != ESP_OK) {

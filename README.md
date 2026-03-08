@@ -18,20 +18,42 @@ Talk to it through a browser, a Telegram bot, or a serial terminal. It thinks wi
 
 | Module | Purpose |
 |--------|---------|
-| USB webcam (UVC) | Vision input via USB-A port |
+| USB webcam (UVC + UAC) | Vision input + microphone via USB-A port |
 
-> **Note:** Local I2S speaker/microphone hardware (MAX98357A + INMP441) has been removed.
-> All audio is handled in the browser: the Web Speech API captures voice input, Groq Whisper
-> transcribes it on-device, and TTS audio is streamed back to the browser as a WAV file.
+### Voice input options
+
+| Method | How it works |
+|--------|-------------|
+| **Browser voice** | Click Record in the web UI — browser sends WebM audio, Groq Whisper transcribes |
+| **Webcam PTT** | Hold the BOOT button (GPIO0) while speaking into the webcam's built-in mic — release to transcribe |
+
+> The webcam PTT path works with any USB composite device that exposes a UAC (USB Audio Class) microphone alongside UVC video — most modern webcams qualify. The LED turns white while listening and blue when the agent is thinking.
+>
+> If no UAC device is detected at boot, the firmware falls back to the legacy I2S microphone path (INMP441 on GPIO 18) if that hardware is wired.
 
 ### Pin Map
 
 | GPIO | Signal | Connected to |
 |------|--------|-------------|
+| 0 | PTT button | BOOT button (active low, built-in pull-up) |
 | 19 | USB D− | USB OTG host (webcam) |
 | 20 | USB D+ | USB OTG host (webcam) |
+| 38 | LED | WS2812 NeoPixel status indicator |
 | 43 | UART0 TX | Serial CLI |
 | 44 | UART0 RX | Serial CLI |
+
+### LED states
+
+| Color | State |
+|-------|-------|
+| Red (solid) | Booting |
+| Yellow (blink) | Connecting to WiFi |
+| Green (breathing) | Ready / idle |
+| Blue (pulse) | Agent thinking |
+| Cyan (pulse) | Generating TTS |
+| White (pulse) | Listening (PTT held) |
+| White (flash → fade) | Camera capture flash |
+| Red (fast flash) | Error |
 
 ### Wiring — USB webcam
 
@@ -39,7 +61,7 @@ Wire a USB-A female connector:
 - D− → GPIO 19, D+ → GPIO 20 (handled by the internal USB OTG transceiver)
 - VBUS (5 V, up to 500 mA) from an external 5 V rail — **not** from an ESP32 GPIO
 
-Most cheap UVC-compatible webcams work (Logitech C270, etc.).
+Most cheap UVC-compatible webcams work. For PTT mic, the webcam must also expose a UAC audio interface (most do). The ESP32's USB OTG is Full-Speed only (12 Mbps) — High-Speed-only devices will not enumerate.
 
 ---
 
@@ -48,11 +70,15 @@ Most cheap UVC-compatible webcams work (Logitech C270, etc.).
 | Feature | Details |
 |---------|---------|
 | **LLM** | Claude (Anthropic), OpenAI, or any OpenRouter model — streaming responses |
-| **STT** | Groq Whisper — browser streams WebM audio, transcribed server-side |
+| **STT** | Groq Whisper — browser WebM audio or webcam UAC PCM, transcribed on-device |
 | **TTS** | Groq PlayAI — spoken reply cached in PSRAM, served as WAV and played in browser |
 | **Vision** | USB webcam → MJPEG frame → Claude vision API → spoken description |
+| **Webcam PTT** | Hold BOOT button → speak into webcam mic → release → agent responds |
 | **Telegram** | Long-poll bot — full conversation with the same agent |
 | **WebSocket UI** | Browser voice interface at `https://langoustine.local` (WSS) |
+| **Home Assistant** | Query entity state and call services (lights, switches, climate, etc.) |
+| **Klipper / Moonraker** | 3D printer status, temps, print progress, gcode control |
+| **Push notifications** | ntfy.sh push to phone — agent-initiated or rule-triggered |
 | **Cron** | Agent-scheduled recurring and one-shot jobs |
 | **Rules engine** | Condition/action automations (temp alerts, HA triggers, …) |
 | **OTA** | Firmware update over WiFi via CLI or HTTP |
@@ -60,9 +86,9 @@ Most cheap UVC-compatible webcams work (Logitech C270, etc.).
 | **Serial CLI** | Full REPL on UART0 (115200 baud) |
 | **Monitor panel** | Real-time event stream (LLM provider/model, tool calls, search provider) |
 
-### Built-in agent tools (24+)
+### Built-in agent tools
 
-`web_search` · `get_current_time` · `read_file` · `write_file` · `edit_file` · `list_dir` · `search_files` · `http_request` · `send_email` · `cron_add/list/remove` · `ha_request` · `klipper_request` · `gpio_read/write/mode` · `wifi_scan` · `rss_fetch` · `device_temp` · `system_info` · `memory_write` · `memory_append_today` · `rule_create/list/delete` · **`capture_image`**
+`web_search` · `get_current_time` · `read_file` · `write_file` · `edit_file` · `list_dir` · `search_files` · `http_request` · `send_email` · `cron_add/list/remove` · `ha_request` · `klipper_request` · `gpio_read/write/mode` · `wifi_scan` · `rss_fetch` · `device_temp` · `system_info` · `memory_write` · `memory_append_today` · `rule_create/list/delete` · `capture_image` · `send_notification` · `get_weather`
 
 ---
 
@@ -84,7 +110,8 @@ source ~/esp/esp-idf/export.sh
 cp main/langoustine_secrets.h.example main/langoustine_secrets.h
 # edit main/langoustine_secrets.h
 
-# 3. Generate sdkconfig and build
+# 3. Download components, generate sdkconfig, and build
+idf.py update-dependencies
 rm -f sdkconfig   # required when adding/removing components
 idf.py set-target esp32s3
 idf.py build
@@ -109,23 +136,21 @@ python -m esptool --chip esp32s3 -b 460800 --before default_reset --after hard_r
 ### Flash (app only — subsequent updates)
 
 ```bash
+# OTA (no cable needed):
+SKIP_BUILD=1 bash scripts/ota_deploy.sh <device-ip>
+
+# Or via serial:
 python -m esptool --chip esp32s3 -p /dev/cu.usbserial-* -b 460800 \
   --before default-reset --after hard-reset \
   write-flash --flash-mode dio --flash-size 32MB --flash-freq 80m \
   0x20000 build/langoustine.bin
 ```
 
-Or OTA (no cable needed):
-
-```bash
-SKIP_BUILD=1 bash scripts/ota_deploy.sh <device-ip>
-```
-
 ---
 
 ## Configuration
 
-All secrets and settings can be applied **without a rebuild** via the serial CLI.
+### Core secrets (no rebuild needed)
 
 ```
 lango> set_wifi <ssid> <password>
@@ -143,6 +168,28 @@ lango> config_show            # verify everything
 2. **Build-time** — `main/langoustine_secrets.h` (gitignored; copy from `.example`).
 3. **Defaults** — empty strings in `langoustine_config.h`.
 
+### Third-party service credentials (`/lfs/config/SERVICES.md`)
+
+Edit this file via the web UI or serial CLI (`write_file`) to configure integrations:
+
+```markdown
+## Home Assistant
+ha_url: http://192.168.0.29:8123
+ha_token: <long-lived-access-token>
+
+## Klipper / Moonraker
+moonraker_url: http://192.168.0.50:7125
+moonraker_apikey:
+
+## Email
+smtp_host: smtp.gmail.com
+smpt_port: 587
+username: you@gmail.com
+password: <app-password>
+from_address: you@gmail.com
+to_address: you@me.com
+```
+
 ### LLM providers
 
 ```
@@ -150,10 +197,6 @@ lango> set_api_key <key>        # sets provider to "anthropic" (default)
 ```
 
 To switch providers, `POST /api/config` with `{"provider":"openai"}` or `{"provider":"openrouter"}`. OpenRouter gives access to hundreds of models with a single key.
-
-### Supported models
-
-Any model accessible via the configured provider. Defaults to `claude-opus-4-5`.
 
 ---
 
@@ -169,25 +212,68 @@ Navigate to `https://langoustine.local` (or `https://<device-ip>`).
 - **Text mode:** Type a message and press Enter.
 - The developer console at `/console` shows a real-time monitor feed: LLM provider/model, tool calls, search provider, heartbeat events.
 
+### Webcam PTT (push-to-talk)
+
+With a UAC+UVC webcam plugged into the USB-A port:
+
+1. The serial log shows `UAC device connected` on plug-in.
+2. Hold the **BOOT button** (GPIO0) — LED turns white.
+3. Speak into the webcam's microphone.
+4. Release the button — LED turns blue (thinking), then green when done.
+5. The response plays as TTS in the browser and/or Telegram.
+
+Maximum recording: 8 seconds (auto-commits). Browser voice continues to work independently.
+
 ### Telegram
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
 2. `lango> set_tg_token <token>` — restart to activate.
 3. Start a conversation — the bot uses the same agent and full tool set.
 
-### Serial CLI
+### Home Assistant
 
-Connect at 115200 baud. Type `help` for a full command list. Key commands:
+Configure `ha_url` and `ha_token` in SERVICES.md, then ask naturally:
 
 ```
-wifi_status          show connection and IP
-config_show          all settings with their source (NVS / build)
-capture              grab a JPEG from the USB webcam → /lfs/captures/latest.jpg
-tool_exec <n> '{…}'  run any registered tool directly
-memory_read          dump MEMORY.md
-ota <url>            update firmware over WiFi
-restart              reboot
+"Turn off the kitchen lights"
+"What's the temperature in the living room?"
+"Is the front door locked?"
+"Set the thermostat to 72°F"
 ```
+
+The `ha_request` tool makes REST calls to your local HA instance directly over LAN. Dangerous endpoints (restart, delete) are blocked.
+
+### Klipper / 3D printer
+
+Configure `moonraker_url` in SERVICES.md (must include port `:7125`):
+
+```
+"What's the printer doing?"
+"What's the bed temperature?"
+"How much filament is left on this print?"
+"Pause the print"
+```
+
+The `klipper_request` tool calls Moonraker's REST API. Machine-level endpoints (system reboot, file delete) are blocked.
+
+### Push notifications (ntfy.sh)
+
+Configure a topic, then ask the agent to alert you:
+
+```
+lango> set_notify_topic my-langoustine-alerts
+lango> set_notify_server https://ntfy.sh   # optional — default is ntfy.sh
+```
+
+Install the [ntfy app](https://ntfy.sh) on your phone and subscribe to the same topic. Then:
+
+```
+"Notify me when the print finishes"
+"Send me a push notification if the temperature drops below 60°F"
+"Alert me via push when the front door opens"
+```
+
+The `send_notification` tool supports title, priority (`urgent`/`high`/`default`/`low`/`min`), and emoji tags. You can also self-host ntfy.
 
 ### Webcam
 
@@ -198,23 +284,39 @@ lango> capture                          # saves latest.jpg to LittleFS
 GET https://langoustine.local/camera/latest.jpg   # view in browser
 ```
 
-Ask the agent "What do you see?" and it will capture a frame, send it to the Claude vision API, and speak the description.
+Ask the agent "What do you see?" and it will capture a frame, send it to the Claude vision API, and speak the description. The LED flashes white on capture then fades.
+
+### Serial CLI
+
+Connect at 115200 baud. Type `help` for a full command list. Key commands:
+
+```
+wifi_status              show connection and IP
+config_show              all settings with their source (NVS / build)
+capture                  grab a JPEG from the USB webcam → /lfs/captures/latest.jpg
+tool_exec <n> '{…}'      run any registered tool directly
+memory_read              dump MEMORY.md
+ota <url>                update firmware over WiFi
+set_notify_topic <t>     set default ntfy push topic
+set_notify_server <url>  set ntfy server (for self-hosted)
+restart                  reboot
+```
 
 ---
 
 ## Filesystem layout (`/lfs`)
 
 ```
-/lfs/config/    SOUL.md    — system prompt / personality
-                USER.md    — user name, timezone, preferences
-                SERVICES.md — third-party credentials (HA, email, Klipper…)
-/lfs/memory/    MEMORY.md  — long-term episodic memory (6 KB max)
+/lfs/config/    SOUL.md      — system prompt / personality
+                USER.md      — user name, timezone, preferences
+                SERVICES.md  — third-party credentials (HA, Klipper, email…)
+/lfs/memory/    MEMORY.md    — long-term episodic memory (6 KB max)
 /lfs/sessions/  <chat_id>.json — per-user conversation history
-/lfs/skills/    *.md       — skill definitions loaded by the agent
-/lfs/captures/  latest.jpg — most recent webcam capture
+/lfs/skills/    *.md         — skill definitions loaded by the agent
+/lfs/captures/  latest.jpg   — most recent webcam capture
 /lfs/console/   index.html, dev.html
-/lfs/cron.json             — scheduled jobs
-/lfs/HEARTBEAT.md          — periodic task checklist (every 30 min)
+/lfs/cron.json               — scheduled jobs
+/lfs/HEARTBEAT.md            — periodic task checklist (every 30 min)
 ```
 
 Edit `SOUL.md` to change personality. Edit `USER.md` to set your name and timezone.
@@ -233,8 +335,9 @@ Edit `SOUL.md` to change personality. Edit `USER.md` to set your name and timezo
 ## Architecture
 
 ```
-[Browser]──WSS──▶ ws_server.c ──▶ message_bus (inbound)
-[Telegram]────────▶ telegram_bot.c ─▶ message_bus (inbound)
+[Browser WSS]──────▶ ws_server.c ──▶ message_bus (inbound)
+[Webcam PTT]───────▶ uac_ptt_task ─▶ STT task ──▶ message_bus (inbound)
+[Telegram]─────────▶ telegram_bot.c ─▶ message_bus (inbound)
 [Cron / Heartbeat]──────────────────▶ message_bus (inbound)
                                               │
                                       agent_loop.c  (Core 1)
@@ -249,16 +352,24 @@ Edit `SOUL.md` to change personality. Edit `USER.md` to set your name and timezo
 
 | Core | Tasks |
 |------|-------|
-| 0 | WiFi/lwIP, HTTPS+WSS server, outbound dispatch, Telegram polling, serial CLI |
+| 0 | WiFi/lwIP, HTTPS+WSS server, outbound dispatch, Telegram polling, serial CLI, UAC PTT task |
 | 1 | Agent loop (LLM), STT task, TTS task, cron service |
 
-### Audio pipeline (browser voice)
+### Audio pipeline — browser voice
 
 1. Browser records via Web Speech API (WebM/Opus)
 2. Binary WebSocket frames → `audio_ring_append()` (256 KB PSRAM ring buffer)
 3. `audio_end` → STT task POSTs to Groq Whisper → transcript pushed as inbound message
 4. Agent replies → `tts_generate()` POSTs to Groq PlayAI → WAV cached in PSRAM (4 slots, 512 KB each, 5-min TTL)
 5. `{"type":"message","tts_id":"<8hex>"}` sent to browser → browser fetches `GET /tts/<id>` and plays WAV
+
+### Audio pipeline — webcam PTT
+
+1. USB host enumerates webcam composite device (UVC + UAC interfaces)
+2. UAC driver opens the RX interface; stream is started on BOOT button press
+3. `uac_host_device_read()` in PTT task → `audio_ring_append()` (same PSRAM ring)
+4. Button release → `audio_ring_patch_wav_sizes()` + `audio_ring_commit("ptt")` → STT task wakes
+5. Same STT → agent → TTS path as browser voice
 
 ### Flash partition map
 

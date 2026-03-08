@@ -577,8 +577,11 @@ static void agent_loop_task(void *arg)
                 if (tts_err == ESP_OK && tts_id[0]) {
                     /* Send message with tts_id so browser auto-plays */
                     ws_server_send_with_tts(msg.chat_id, final_text, tts_id, img_url);
+                } else if (img_url && strcmp(msg.channel, "websocket") == 0) {
+                    /* No TTS but have an image — send directly so image_url is included */
+                    ws_server_send_with_tts(msg.chat_id, final_text, NULL, img_url);
                 } else {
-                    /* No TTS — send message-only dispatch via outbound queue */
+                    /* No TTS, no image — send via outbound queue (handles Telegram etc.) */
                     mimi_msg_t out = {0};
                     strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
                     strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);

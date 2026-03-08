@@ -41,6 +41,7 @@ idf_component_register(
         "audio/microphone.c"
         "audio/wake_word.c"
         "audio/audio_pipeline.c"
+        "audio/uac_microphone.c"
         "llm/http_session.c"
         "audio/stt_client.c"
         "audio/tts_client.c"
@@ -57,5 +58,5 @@ idf_component_register(
         nvs_flash esp_wifi esp_netif esp_http_client esp_http_server
         esp_https_ota esp_https_server esp_event json console vfs app_update esp-tls
         driver esp_timer esp_driver_tsens espressif__mdns joltwallet__littlefs
-        mbedtls usb espressif__usb_host_uvc
+        mbedtls usb espressif__usb_host_uvc espressif__usb_host_uac
 )

@@ -37,6 +37,7 @@
 #include "audio/i2s_audio.h"
 #include "audio/microphone.h"
 #include "audio/wake_word.h"
+#include "audio/uac_microphone.h"
 #include "camera/uvc_camera.h"
 #include "led/led_indicator.h"
 #include "mdns.h"
@@ -237,20 +238,26 @@ void app_main(void)
     ESP_ERROR_CHECK(stt_client_init());
     ESP_ERROR_CHECK(tts_client_init());
 
-    /* Local mic + PTT — always enabled; amp stays gated off (LANG_I2S_AUDIO_ENABLED=0)
-     * so there is no brownout risk. wake_word_init() returns ESP_ERR_NOT_SUPPORTED
-     * gracefully when esp-sr is absent, falling back to PTT-only via microphone_start(). */
-    ESP_ERROR_CHECK(i2s_audio_init());
-    ESP_ERROR_CHECK(microphone_init());
-    if (wake_word_init() == ESP_OK) {
-        wake_word_start();
-    } else {
-        ESP_LOGI(TAG, "wake_word unavailable, using PTT-only");
-        microphone_start();
-    }
-
-    /* UVC camera — best-effort; continues if no webcam is connected */
+    /* UVC camera + UAC mic — both use the USB host, init together.
+     * uvc_camera_init() installs the USB host library and UVC driver.
+     * uac_microphone_init() then attaches the UAC driver to the same host. */
     uvc_camera_init();
+    if (uac_microphone_init() == ESP_OK) {
+        uac_microphone_start();
+        ESP_LOGI(TAG, "UAC mic: PTT ready (BOOT button) — browser voice also available");
+    } else {
+        /* No UAC mic (webcam not connected or FS-only device).
+         * Fall back to I2S PTT via INMP441 if hardware present. */
+        ESP_LOGW(TAG, "UAC mic unavailable — falling back to I2S PTT");
+        ESP_ERROR_CHECK(i2s_audio_init());
+        ESP_ERROR_CHECK(microphone_init());
+        if (wake_word_init() == ESP_OK) {
+            wake_word_start();
+        } else {
+            ESP_LOGI(TAG, "wake_word unavailable, using I2S PTT-only");
+            microphone_start();
+        }
+    }
 
     /* Initialize subsystems */
     ESP_ERROR_CHECK(message_bus_init());

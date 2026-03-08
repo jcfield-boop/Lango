@@ -11,13 +11,15 @@
 #include "esp_crt_bundle.h"
 #include "nvs.h"
 #include "cJSON.h"
+#include "llm/llm_proxy.h"
 #include "mbedtls/base64.h"
 
 static const char *TAG = "tool_img";
 
-#define API_KEY_MAX  320
-#define MODEL_MAX     64
-#define PROMPT_MAX   256
+#define API_KEY_MAX   320
+#define MODEL_MAX      64
+#define PROVIDER_MAX   32
+#define PROMPT_MAX    256
 
 /* ── Response accumulator ──────────────────────────────────────── */
 
@@ -138,6 +140,47 @@ static char *build_vision_body(const uint8_t *jpeg, size_t jpeg_len,
     return body;
 }
 
+/* ── OpenAI/OpenRouter vision body builder ─────────────────────── */
+
+static char *build_vision_body_openai(const uint8_t *jpeg, size_t jpeg_len,
+                                       const char *model, int max_tokens,
+                                       const char *prompt, size_t *body_len_out)
+{
+    /* "data:image/jpeg;base64," prefix embedded in the URL field */
+    static const char DATA_PREFIX[] = "data:image/jpeg;base64,";
+    size_t b64_max    = ((jpeg_len + 2) / 3) * 4 + 1;
+    size_t data_pfx   = sizeof(DATA_PREFIX) - 1;
+    size_t body_cap   = b64_max + data_pfx + 512 + PROMPT_MAX + MODEL_MAX;
+    char  *body       = ps_malloc(body_cap);
+    if (!body) return NULL;
+
+    int prefix_len = snprintf(body, body_cap,
+        "{\"model\":\"%s\","
+        "\"max_tokens\":%d,"
+        "\"messages\":[{\"role\":\"user\",\"content\":["
+        "{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/jpeg;base64,",
+        model, max_tokens);
+    if (prefix_len < 0 || (size_t)prefix_len >= body_cap) { free(body); return NULL; }
+
+    size_t b64_written = 0;
+    int rc = mbedtls_base64_encode(
+        (unsigned char *)body + prefix_len,
+        body_cap - (size_t)prefix_len,
+        &b64_written, jpeg, jpeg_len);
+    if (rc != 0) { ESP_LOGE(TAG, "base64 encode failed (%d)", rc); free(body); return NULL; }
+
+    int suffix_len = snprintf(body + prefix_len + b64_written,
+        body_cap - (size_t)prefix_len - b64_written,
+        "\"}},"
+        "{\"type\":\"text\",\"text\":\"%s\"}"
+        "]}]}",
+        prompt);
+    if (suffix_len < 0) { free(body); return NULL; }
+
+    *body_len_out = (size_t)prefix_len + b64_written + (size_t)suffix_len;
+    return body;
+}
+
 /* ── Main tool entry point ─────────────────────────────────────── */
 
 esp_err_t tool_capture_image_execute(const char *input_json,
@@ -185,24 +228,20 @@ esp_err_t tool_capture_image_execute(const char *input_json,
     /* 5. Save to LittleFS */
     save_jpeg(jpeg_buf, jpeg_len);  /* best-effort */
 
-    /* 6. Read API key from NVS (fall back to build-time key) */
+    /* 6. Get API key, model, provider from llm_proxy (already loaded from NVS at boot) */
     char api_key[API_KEY_MAX] = {0};
-    char model[MODEL_MAX] = LANG_LLM_DEFAULT_MODEL;
+    char model[MODEL_MAX]     = {0};
 
     nvs_handle_t nvs;
     if (nvs_open(LANG_NVS_LLM, NVS_READONLY, &nvs) == ESP_OK) {
         size_t len = sizeof(api_key);
         nvs_get_str(nvs, LANG_NVS_KEY_API_KEY, api_key, &len);
-        len = sizeof(model);
-        nvs_get_str(nvs, LANG_NVS_KEY_MODEL, model, &len);
         nvs_close(nvs);
     }
-    if (!api_key[0]) {
-        strncpy(api_key, LANG_SECRET_API_KEY, sizeof(api_key) - 1);
-    }
-    if (!model[0]) {
-        strncpy(model, LANG_LLM_DEFAULT_MODEL, sizeof(model) - 1);
-    }
+    if (!api_key[0]) strncpy(api_key, LANG_SECRET_API_KEY, sizeof(api_key) - 1);
+
+    const char *provider = llm_get_provider();
+    strncpy(model, llm_get_model(), sizeof(model) - 1);
 
     if (!api_key[0]) {
         free(jpeg_buf);
@@ -213,10 +252,19 @@ esp_err_t tool_capture_image_execute(const char *input_json,
         return ESP_OK;
     }
 
+    /* Determine provider: "openrouter" or "openai" use OpenAI-compat format */
+    bool use_openai = (strcmp(provider, "openrouter") == 0 ||
+                       strcmp(provider, "openai")     == 0);
+    const char *api_url = use_openai
+        ? (strcmp(provider, "openrouter") == 0 ? LANG_OPENROUTER_API_URL : LANG_OPENAI_API_URL)
+        : LANG_LLM_API_URL;
+    ESP_LOGI(TAG, "Vision API: provider=%s model=%s url=%s", provider, model, api_url);
+
     /* 7. Build JSON body */
     size_t body_len = 0;
-    char *body = build_vision_body(jpeg_buf, jpeg_len, model,
-                                   LANG_VISION_MAX_TOKENS, prompt, &body_len);
+    char *body = use_openai
+        ? build_vision_body_openai(jpeg_buf, jpeg_len, model, LANG_VISION_MAX_TOKENS, prompt, &body_len)
+        : build_vision_body(jpeg_buf, jpeg_len, model, LANG_VISION_MAX_TOKENS, prompt, &body_len);
     free(jpeg_buf);
 
     if (!body) {
@@ -233,18 +281,15 @@ esp_err_t tool_capture_image_execute(const char *input_json,
     }
     rb.data[0] = '\0';
 
-    /* 9. POST to Claude API */
-    char auth_hdr[API_KEY_MAX + 16];
-    snprintf(auth_hdr, sizeof(auth_hdr), "x-api-key: %s", api_key);
-
+    /* 9. POST to vision API */
     esp_http_client_config_t cfg = {
-        .url              = LANG_LLM_API_URL,
-        .method           = HTTP_METHOD_POST,
-        .timeout_ms       = 30000,
+        .url               = api_url,
+        .method            = HTTP_METHOD_POST,
+        .timeout_ms        = 30000,
         .crt_bundle_attach = esp_crt_bundle_attach,
-        .event_handler    = vision_http_event_cb,
-        .user_data        = &rb,
-        .buffer_size_tx   = 512,
+        .event_handler     = vision_http_event_cb,
+        .user_data         = &rb,
+        .buffer_size_tx    = 512,
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) {
@@ -255,8 +300,18 @@ esp_err_t tool_capture_image_execute(const char *input_json,
     }
 
     esp_http_client_set_header(client, "Content-Type", "application/json");
-    esp_http_client_set_header(client, "x-api-key", api_key);
-    esp_http_client_set_header(client, "anthropic-version", LANG_LLM_API_VERSION);
+    if (use_openai) {
+        char auth_bearer[API_KEY_MAX + 16];
+        snprintf(auth_bearer, sizeof(auth_bearer), "Bearer %s", api_key);
+        esp_http_client_set_header(client, "Authorization", auth_bearer);
+        if (strncmp(provider, "openrouter", 10) == 0) {
+            esp_http_client_set_header(client, "HTTP-Referer", LANG_OPENROUTER_REFERER);
+            esp_http_client_set_header(client, "X-Title",      LANG_OPENROUTER_TITLE);
+        }
+    } else {
+        esp_http_client_set_header(client, "x-api-key", api_key);
+        esp_http_client_set_header(client, "anthropic-version", LANG_LLM_API_VERSION);
+    }
     esp_http_client_set_post_field(client, body, (int)body_len);
 
     err = esp_http_client_perform(client);
@@ -265,15 +320,20 @@ esp_err_t tool_capture_image_execute(const char *input_json,
     free(body);
 
     if (err != ESP_OK || status != 200) {
-        ESP_LOGE(TAG, "Vision API HTTP %d: %s", status,
+        ESP_LOGE(TAG, "Vision API HTTP %d: %.200s", status,
                  rb.data[0] ? rb.data : "(no body)");
+        /* Save error body to LittleFS so it can be fetched for debugging */
+        if (rb.data[0]) {
+            FILE *ef = fopen("/lfs/captures/vision_err.json", "w");
+            if (ef) { fwrite(rb.data, 1, rb.len, ef); fclose(ef); }
+        }
         snprintf(output, output_size,
                  "Error: vision API returned HTTP %d", status);
         free(rb.data);
         return ESP_FAIL;
     }
 
-    /* 10. Parse response — extract content[0].text */
+    /* 10. Parse response — Anthropic: content[0].text  OpenAI: choices[0].message.content */
     cJSON *resp = cJSON_Parse(rb.data);
     free(rb.data);
 
@@ -283,12 +343,18 @@ esp_err_t tool_capture_image_execute(const char *input_json,
     }
 
     const char *description = NULL;
-    cJSON *content_arr = cJSON_GetObjectItemCaseSensitive(resp, "content");
-    if (cJSON_IsArray(content_arr) && cJSON_GetArraySize(content_arr) > 0) {
-        cJSON *first = cJSON_GetArrayItem(content_arr, 0);
-        cJSON *text  = cJSON_GetObjectItemCaseSensitive(first, "text");
-        if (cJSON_IsString(text)) {
-            description = text->valuestring;
+    if (use_openai) {
+        cJSON *choices = cJSON_GetObjectItemCaseSensitive(resp, "choices");
+        if (cJSON_IsArray(choices) && cJSON_GetArraySize(choices) > 0) {
+            cJSON *msg  = cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(choices, 0), "message");
+            cJSON *text = cJSON_GetObjectItemCaseSensitive(msg, "content");
+            if (cJSON_IsString(text)) description = text->valuestring;
+        }
+    } else {
+        cJSON *content_arr = cJSON_GetObjectItemCaseSensitive(resp, "content");
+        if (cJSON_IsArray(content_arr) && cJSON_GetArraySize(content_arr) > 0) {
+            cJSON *text = cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(content_arr, 0), "text");
+            if (cJSON_IsString(text)) description = text->valuestring;
         }
     }
 

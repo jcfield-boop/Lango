@@ -11,7 +11,7 @@
 static const char *TAG = "tool_klipper";
 
 /* Max bytes of Moonraker response body returned to the model */
-#define KLIPPER_BODY_MAX    2048
+#define KLIPPER_BODY_MAX    8192
 
 /* ── SERVICES.md parser ──────────────────────────────────────── */
 
