@@ -207,11 +207,17 @@ esp_err_t uac_microphone_init(void)
         return err;
     }
 
+    /* Brief delay: give the USB host + UVC driver time to finish enumerating any
+     * already-connected device before the UAC class driver registers.  Without
+     * this, both drivers race to process the composite-device connect event and
+     * can corrupt shared USB host state, causing a hard crash on boot. */
+    vTaskDelay(pdMS_TO_TICKS(500));
+
     /* Install UAC driver — USB host must already be running (uvc_camera_init done) */
     uac_host_driver_config_t uac_cfg = {
         .create_background_task = true,
-        .task_priority          = 5,
-        .stack_size             = 4096,
+        .task_priority          = 4,   /* one below UVC (5) to avoid priority inversion */
+        .stack_size             = 6144,
         .core_id                = 0,
         .callback               = uac_driver_event_cb,
         .callback_arg           = NULL,

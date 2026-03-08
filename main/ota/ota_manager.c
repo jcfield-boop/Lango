@@ -72,6 +72,7 @@ esp_err_t ota_update_from_url(const char *url)
         snprintf(msg, sizeof(msg), "OTA begin failed: %s", esp_err_to_name(ret));
         ESP_LOGE(TAG, "%s", msg);
         ws_server_broadcast_monitor("ota", msg);
+        led_indicator_set(LED_ERROR);
         return ret;
     }
 
@@ -84,6 +85,7 @@ esp_err_t ota_update_from_url(const char *url)
         ESP_LOGE(TAG, "%s", msg);
         ws_server_broadcast_monitor("ota", msg);
         esp_https_ota_abort(ota_handle);
+        led_indicator_set(LED_ERROR);
         return ret;
     }
     {
@@ -106,6 +108,7 @@ esp_err_t ota_update_from_url(const char *url)
         ESP_LOGE(TAG, "%s", msg);
         ws_server_broadcast_monitor("ota", msg);
         esp_https_ota_abort(ota_handle);
+        led_indicator_set(LED_ERROR);
         return ret;
     }
 
@@ -120,6 +123,7 @@ esp_err_t ota_update_from_url(const char *url)
         snprintf(msg, sizeof(msg), "OTA finish failed: %s", esp_err_to_name(ret));
         ESP_LOGE(TAG, "%s", msg);
         ws_server_broadcast_monitor("ota", msg);
+        led_indicator_set(LED_ERROR);
     }
 
     return ret;

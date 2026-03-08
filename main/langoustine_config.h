@@ -123,7 +123,7 @@
 #define LANG_MIC_SAMPLE_RATE    16000
 #define LANG_MIC_BITS              16
 #define LANG_MIC_READ_CHUNK_BYTES 512   /* ~16 ms of audio per I2S read */
-#define LANG_MIC_STACK_SIZE      4096
+#define LANG_MIC_STACK_SIZE      8192
 #define LANG_MIC_TASK_PRIO          5
 
 /* I2C bus (camera SCCB + future PCA9685 servos) */

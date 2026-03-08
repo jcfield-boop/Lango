@@ -1057,14 +1057,26 @@ static esp_err_t config_get_handler(httpd_req_t *req)
         }
     }
 
+    /* Read notify topic from NVS (not sensitive — show plaintext) */
+    char notify_topic[128] = {0};
+    {
+        nvs_handle_t nvs;
+        if (nvs_open("notify_config", NVS_READONLY, &nvs) == ESP_OK) {
+            size_t len = sizeof(notify_topic);
+            nvs_get_str(nvs, "topic", notify_topic, &len);
+            nvs_close(nvs);
+        }
+    }
+
     cJSON *j = cJSON_CreateObject();
-    cJSON_AddStringToObject(j, "provider",   llm_get_provider());
-    cJSON_AddStringToObject(j, "model",      llm_get_model());
-    cJSON_AddStringToObject(j, "api_key",    masked_api);
-    cJSON_AddStringToObject(j, "search_key", masked_search);
-    cJSON_AddStringToObject(j, "stt_key",    masked_stt);
-    cJSON_AddStringToObject(j, "tts_key",    masked_tts);
-    cJSON_AddStringToObject(j, "tts_voice",  tts_voice);
+    cJSON_AddStringToObject(j, "provider",     llm_get_provider());
+    cJSON_AddStringToObject(j, "model",        llm_get_model());
+    cJSON_AddStringToObject(j, "api_key",      masked_api);
+    cJSON_AddStringToObject(j, "search_key",   masked_search);
+    cJSON_AddStringToObject(j, "stt_key",      masked_stt);
+    cJSON_AddStringToObject(j, "tts_key",      masked_tts);
+    cJSON_AddStringToObject(j, "tts_voice",    tts_voice);
+    cJSON_AddStringToObject(j, "notify_topic", notify_topic);
     cJSON_AddBoolToObject(j, "verbose_logs", s_verbose_logs);
 
     char *json_str = cJSON_PrintUnformatted(j);
@@ -1161,6 +1173,19 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         && strnlen(tts_voice->valuestring, 64) <= 63) {
         nvs_set_str_safe(LANG_NVS_TTS, LANG_NVS_KEY_VOICE, tts_voice->valuestring);
         ESP_LOGI(TAG, "TTS voice set to: %s", tts_voice->valuestring);
+    }
+
+    cJSON *notify_topic  = cJSON_GetObjectItem(root, "notify_topic");
+    cJSON *notify_server = cJSON_GetObjectItem(root, "notify_server");
+    if (notify_topic && cJSON_IsString(notify_topic) && notify_topic->valuestring[0]
+        && strnlen(notify_topic->valuestring, 128) <= 127) {
+        nvs_set_str_safe("notify_config", "topic", notify_topic->valuestring);
+        ESP_LOGI(TAG, "Notify topic set to: %s", notify_topic->valuestring);
+    }
+    if (notify_server && cJSON_IsString(notify_server) && notify_server->valuestring[0]
+        && strnlen(notify_server->valuestring, 128) <= 127) {
+        nvs_set_str_safe("notify_config", "server", notify_server->valuestring);
+        ESP_LOGI(TAG, "Notify server set to: %s", notify_server->valuestring);
     }
 #undef CONFIG_FIELD_MAX
 

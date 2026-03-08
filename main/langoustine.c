@@ -211,7 +211,8 @@ void app_main(void)
 
     /* Phase 1: Core infrastructure */
     ESP_ERROR_CHECK(init_nvs());
-    esp_ota_mark_app_valid_cancel_rollback();   // write valid CRC'd otadata so OTA can resolve target slot
+    /* NOTE: esp_ota_mark_app_valid_cancel_rollback() is called after WiFi connects
+     * so a firmware that crashes before network is up will auto-rollback on next boot. */
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     /* PSRAM / SRAM stats (logged before LittleFS to capture peak-free state) */
@@ -289,10 +290,10 @@ void app_main(void)
 
             /* Advertise via mDNS */
             mdns_init();
-            mdns_hostname_set("langoustine");
+            mdns_hostname_set("lango");
             mdns_instance_name_set("Langoustine AI Assistant");
             mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
-            ESP_LOGI(TAG, "mDNS started: langoustine.local");
+            ESP_LOGI(TAG, "mDNS started: lango.local (also: langoustine.local via cert SAN)");
 
             /* Sync system clock via SNTP.
              * Set build timestamp immediately as fallback; SNTP will silently
@@ -319,6 +320,12 @@ void app_main(void)
             heartbeat_start();
             rule_engine_start();
             ESP_ERROR_CHECK(ws_server_start());
+
+            /* All services up — mark OTA slot valid so rollback is cancelled.
+             * Doing this here (after WiFi + services) means a firmware that
+             * crashes during boot or before network is ready will automatically
+             * roll back to the previous slot on the next boot attempt. */
+            esp_ota_mark_app_valid_cancel_rollback();
 
             led_indicator_set(LED_READY);
             ESP_LOGI(TAG, "All services started!");
