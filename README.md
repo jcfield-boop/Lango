@@ -25,20 +25,25 @@ Talk to it through a browser, a Telegram bot, or a serial terminal. It thinks wi
 | Method | How it works |
 |--------|-------------|
 | **Browser voice** | Click Record in the web UI — browser sends WebM audio, Groq Whisper transcribes |
-| **Webcam PTT** | Hold the BOOT button (GPIO0) while speaking into the webcam's built-in mic — release to transcribe |
+| **Wake word** | Say "Hi ESP" → INMP441 captures speech → VAD auto-commits → agent responds (no button needed) |
+| **INMP441 PTT** | Hold the BOOT button while speaking into the INMP441 mic — release to transcribe |
+| **Webcam PTT** | Hold the BOOT button while speaking into the webcam's built-in mic — release to transcribe |
 
-> The webcam PTT path works with any USB composite device that exposes a UAC (USB Audio Class) microphone alongside UVC video — most modern webcams qualify. The LED turns white while listening and blue when the agent is thinking.
->
-> If no UAC device is detected at boot, the firmware falls back to the legacy I2S microphone path (INMP441 on GPIO 18) if that hardware is wired.
+Wake word and INMP441 PTT are active when no UAC webcam is attached. When a webcam is present, the firmware switches to UAC mic + BOOT button PTT automatically. Browser voice always works regardless.
 
 ### Pin Map
 
 | GPIO | Signal | Connected to |
 |------|--------|-------------|
 | 0 | PTT button | BOOT button (active low, built-in pull-up) |
+| 15 | I2S BCLK | MAX98357A BCLK + INMP441 SCK |
+| 16 | I2S LRCLK | MAX98357A LRC + INMP441 WS |
+| 17 | I2S DOUT | MAX98357A DIN (speaker out) |
+| 18 | I2S DIN | INMP441 SD (mic in) |
 | 19 | USB D− | USB OTG host (webcam) |
 | 20 | USB D+ | USB OTG host (webcam) |
 | 38 | LED | WS2812 NeoPixel status indicator |
+| 42 | AMP_SD | MAX98357A shutdown (high = on) |
 | 43 | UART0 TX | Serial CLI |
 | 44 | UART0 RX | Serial CLI |
 
@@ -55,6 +60,31 @@ Talk to it through a browser, a Telegram bot, or a serial terminal. It thinks wi
 | White (flash → fade) | Camera capture flash |
 | Red (fast flash) | Error |
 
+### Wiring — MAX98357A (speaker amp)
+
+```
+VIN  → 5 V (USB rail — keeps amp peak current off the 3.3 V rail)
+GND  → GND
+DIN  → GPIO 17
+BCLK → GPIO 15
+LRC  → GPIO 16
+SD   → GPIO 42
+GAIN → GND (3 dB; floating = 12 dB)
+```
+
+Speaker wires: red → + terminal, black → − terminal. **Do not** connect the speaker's − to system GND (bridge-tied output).
+
+### Wiring — INMP441 (microphone)
+
+```
+VDD → 3.3 V  (max 3.6 V — never 5 V)
+GND → GND
+SD  → GPIO 18
+SCK → GPIO 15 (shared with MAX98357A)
+WS  → GPIO 16 (shared with MAX98357A)
+L/R → GND (left channel)
+```
+
 ### Wiring — USB webcam
 
 Wire a USB-A female connector:
@@ -70,7 +100,8 @@ Most cheap UVC-compatible webcams work. For PTT mic, the webcam must also expose
 | Feature | Details |
 |---------|---------|
 | **LLM** | Claude (Anthropic), OpenAI, or any OpenRouter model — streaming responses |
-| **STT** | Groq Whisper — browser WebM audio or webcam UAC PCM, transcribed on-device |
+| **Wake word** | "Hi ESP" via WakeNet9 + AFE (INMP441 only, no button needed) |
+| **STT** | Groq Whisper — browser WebM audio, INMP441 PCM, or webcam UAC PCM |
 | **TTS** | Groq PlayAI — spoken reply cached in PSRAM, served as WAV and played in browser |
 | **Vision** | USB webcam → MJPEG frame → Claude vision API → spoken description |
 | **Webcam PTT** | Hold BOOT button → speak into webcam mic → release → agent responds |
@@ -130,7 +161,8 @@ python -m esptool --chip esp32s3 -b 460800 --before default_reset --after hard_r
   0x8000   build/partition_table/partition-table.bin \
   0x1a000  build/ota_data_initial.bin \
   0x20000  build/langoustine.bin \
-  0x830000 build/littlefs.bin
+  0x830000 build/srmodels/srmodels.bin \
+  0xa30000 build/littlefs.bin
 ```
 
 ### Flash (app only — subsequent updates)
@@ -336,6 +368,7 @@ Edit `SOUL.md` to change personality. Edit `USER.md` to set your name and timezo
 
 ```
 [Browser WSS]──────▶ ws_server.c ──▶ message_bus (inbound)
+[Wake word / PTT]──▶ wake_word.c ──▶ STT task ──▶ message_bus (inbound)
 [Webcam PTT]───────▶ uac_ptt_task ─▶ STT task ──▶ message_bus (inbound)
 [Telegram]─────────▶ telegram_bot.c ─▶ message_bus (inbound)
 [Cron / Heartbeat]──────────────────▶ message_bus (inbound)
@@ -380,7 +413,8 @@ Edit `SOUL.md` to change personality. Edit `USER.md` to set your name and timezo
 | ota\_0 | 0x020000 | 4 MB |
 | ota\_1 | 0x420000 | 4 MB |
 | coredump | 0x820000 | 64 KB |
-| littlefs | 0x830000 | ~24 MB |
+| model | 0x830000 | 2 MB (WakeNet9 "Hi ESP") |
+| littlefs | 0xA30000 | ~22 MB |
 
 ---
 
