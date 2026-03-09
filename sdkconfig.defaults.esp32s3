@@ -83,6 +83,9 @@ CONFIG_SR_WN_WN9_HIESP=y
 # at default 2304-byte stack; keep default -Os optimization instead.
 # Heap corruption detection: catches double-free at ~10% overhead; clears on fix
 CONFIG_HEAP_CORRUPTION_DETECTION_BASIC=y
+# Allow FreeRTOS task stacks to be allocated from PSRAM (S3 has 16MB — use it)
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+
 # Verbose logging — all ESP_LOGD() visible
 CONFIG_LOG_DEFAULT_LEVEL_DEBUG=y
 CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y

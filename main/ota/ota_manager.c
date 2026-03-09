@@ -18,8 +18,8 @@
 static const char *TAG = "ota";
 
 /* Minimum free internal heap before starting OTA.
- * TLS handshake peaks at ~40 KB; 50 KB is safe even with esp-sr linked in. */
-#define OTA_MIN_FREE_HEAP   (50 * 1024)
+ * TLS handshake peaks at ~40 KB; 44 KB gives headroom on S3 with PSRAM. */
+#define OTA_MIN_FREE_HEAP   (44 * 1024)
 
 /* HTTP receive buffer for OTA download.
  * S3 has 16MB PSRAM — use a larger buffer for faster downloads. */

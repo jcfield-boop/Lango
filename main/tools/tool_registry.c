@@ -342,12 +342,12 @@ esp_err_t tool_registry_init(void)
     /* Register gpio_read */
     mimi_tool_t gr = {
         .name = "gpio_read",
-        .description = "Read the current logic level (HIGH or LOW) of an ESP32-C6 GPIO pin. "
-                       "Safe pins: 0-7, 10-17, 22. Blocked: 8 (LED), 9 (BOOT), 18-21 (flash).",
+        .description = "Read the current logic level (HIGH or LOW) of an ESP32-S3 GPIO pin. "
+                       "Valid pins: 0-21, 38-48. Blocked: 19-20 (USB OTG), 22-37 (Flash/PSRAM internal), 43-44 (UART CLI).",
         .input_schema_json =
             "{\"type\":\"object\","
             "\"properties\":{\"pin\":{\"type\":\"integer\","
-            "\"description\":\"GPIO pin number (0-22, excluding 8, 9, 18-21)\"}},"
+            "\"description\":\"GPIO pin number (valid: 0-21, 38-48; blocked: 19-20, 22-37, 43-44)\"}},"
             "\"required\":[\"pin\"]}",
         .execute = tool_gpio_read_execute,
     };

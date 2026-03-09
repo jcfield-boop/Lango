@@ -44,12 +44,12 @@
 #define LANG_WIFI_RETRY_MAX_MS       30000
 
 /* Agent Loop */
-#define LANG_AGENT_STACK             (24 * 1024)
+#define LANG_AGENT_STACK             (40 * 1024)
 #define LANG_AGENT_PRIO              6
 #define LANG_AGENT_CORE              1
 #define LANG_AGENT_MAX_HISTORY       30
 #define LANG_AGENT_MAX_TOOL_ITER     10
-#define LANG_MAX_TOOL_CALLS          4
+#define LANG_MAX_TOOL_CALLS          2
 #define LANG_AGENT_SEND_WORKING_STATUS 1
 
 /* Timezone (POSIX TZ format) */

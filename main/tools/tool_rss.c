@@ -271,7 +271,8 @@ esp_err_t tool_rss_execute(const char *input_json, char *output, size_t output_s
         return ESP_ERR_INVALID_ARG;
     }
 
-    const char *url = j_url->valuestring;
+    char url[512];
+    snprintf(url, sizeof(url), "%s", j_url->valuestring);
     int max_items = (j_max && cJSON_IsNumber(j_max)) ? j_max->valueint : 5;
     if (max_items < 1)  max_items = 1;
     if (max_items > RSS_MAX_ITEMS) max_items = RSS_MAX_ITEMS;

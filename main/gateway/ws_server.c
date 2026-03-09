@@ -471,9 +471,8 @@ static esp_err_t ws_handler(httpd_req_t *req)
         msg.content = strdup(content_item->valuestring);
         if (msg.content) {
             if (message_bus_push_inbound(&msg) != ESP_OK) {
-                ESP_LOGW(TAG, "Inbound bus full, drop WS prompt");
+                ESP_LOGW(TAG, "Inbound bus full, drop WS prompt from %s", chat_id);
                 free(msg.content);
-                ws_server_send_error(chat_id, "busy", "Agent is busy — please try again in a moment.");
             }
         }
 
@@ -488,9 +487,8 @@ static esp_err_t ws_handler(httpd_req_t *req)
             msg.content = strdup(content_item->valuestring);
             if (msg.content) {
                 if (message_bus_push_inbound(&msg) != ESP_OK) {
-                    ESP_LOGW(TAG, "Inbound bus full, drop WS prompt");
+                    ESP_LOGW(TAG, "Inbound bus full, drop WS prompt from %s", chat_id);
                     free(msg.content);
-                    ws_server_send_error(chat_id, "busy", "Agent is busy — please try again in a moment.");
                 }
             }
         }

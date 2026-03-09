@@ -99,19 +99,19 @@ esp_err_t tool_klipper_execute(const char *input_json, char *output, size_t outp
         return ESP_OK;
     }
 
-    const char *method   = "GET";
-    const char *endpoint = NULL;
-    const char *body_str = NULL;
+    char method[16]    = "GET";
+    char endpoint[256] = {0};
+    char body_str[512] = {0};
 
     cJSON *jm = cJSON_GetObjectItemCaseSensitive(root, "method");
     cJSON *je = cJSON_GetObjectItemCaseSensitive(root, "endpoint");
     cJSON *jb = cJSON_GetObjectItemCaseSensitive(root, "body");
 
-    if (cJSON_IsString(jm) && jm->valuestring[0]) method   = jm->valuestring;
-    if (cJSON_IsString(je))                        endpoint = je->valuestring;
-    if (cJSON_IsString(jb) && jb->valuestring[0]) body_str = jb->valuestring;
+    if (cJSON_IsString(jm) && jm->valuestring[0]) snprintf(method,   sizeof(method),   "%s", jm->valuestring);
+    if (cJSON_IsString(je))                        snprintf(endpoint, sizeof(endpoint), "%s", je->valuestring);
+    if (cJSON_IsString(jb) && jb->valuestring[0]) snprintf(body_str, sizeof(body_str), "%s", jb->valuestring);
 
-    if (!endpoint || endpoint[0] == '\0') {
+    if (endpoint[0] == '\0') {
         cJSON_Delete(root);
         klipper_err(output, output_size, 0, "missing_endpoint", "endpoint is required");
         return ESP_OK;
@@ -165,8 +165,8 @@ esp_err_t tool_klipper_execute(const char *input_json, char *output, size_t outp
     free(resp_buf);
 
     {
-        char mon[80];
-        snprintf(mon, sizeof(mon), "%s %s → %d (%d bytes%s)",
+        char mon[320];
+        snprintf(mon, sizeof(mon), "%s %.256s → %d (%d bytes%s)",
                  method, endpoint, result.http_status, result.bytes,
                  result.truncated ? ", truncated" : "");
         ws_server_broadcast_monitor("klipper", mon);

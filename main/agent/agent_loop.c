@@ -27,7 +27,7 @@
 
 static const char *TAG = "agent";
 
-#define TOOL_OUTPUT_SIZE  (8 * 1024)
+#define TOOL_OUTPUT_SIZE  (16 * 1024)
 
 /* Progress callback: sends token deltas to the WS client */
 typedef struct {
@@ -199,7 +199,7 @@ static cJSON *build_tool_results(const llm_response_t *resp, const mimi_msg_t *m
                     ws_server_broadcast_monitor("tool", mon);
                 }
 
-                if (xTaskCreate(tool_exec_task, "tool_par", 8192,
+                if (xTaskCreate(tool_exec_task, "tool_par", 16384,
                                 &ctxs[i], 5, NULL) == pdPASS) {
                     tasks_spawned++;
                 } else {
@@ -299,7 +299,7 @@ static void agent_loop_task(void *arg)
 
     /* Allocate large persistent buffers in PSRAM */
     char *system_prompt = ps_calloc(1, LANG_CONTEXT_BUF_SIZE);  /* 32KB from PSRAM */
-    char *tool_output   = int_calloc(1, TOOL_OUTPUT_SIZE);       /*  8KB from SRAM */
+    char *tool_output   = ps_calloc(1, TOOL_OUTPUT_SIZE);        /* 16KB from PSRAM */
 
     if (!system_prompt || !tool_output) {
         ESP_LOGE(TAG, "Failed to allocate agent buffers");
@@ -648,7 +648,7 @@ esp_err_t agent_loop_init(void)
 
 esp_err_t agent_loop_start(void)
 {
-    /* Pin to Core 1 (AI pipeline core) */
+    /* Pin to Core 1 (AI pipeline core); stack must be in SRAM (accesses LittleFS/NVS) */
     BaseType_t ret = xTaskCreatePinnedToCore(
         agent_loop_task, "agent_loop",
         LANG_AGENT_STACK, NULL,
