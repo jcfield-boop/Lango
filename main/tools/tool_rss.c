@@ -11,7 +11,7 @@
 
 static const char *TAG = "tool_rss";
 
-#define RSS_BUF_SIZE    (8 * 1024)
+#define RSS_BUF_SIZE    (16 * 1024)
 #define RSS_MAX_ITEMS   10
 #define RSS_FIELD_MAX   256
 #define RSS_SUMMARY_MAX 200

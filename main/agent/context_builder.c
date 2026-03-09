@@ -107,9 +107,9 @@ esp_err_t context_build_system_prompt(char *buf, size_t size)
     }
 
     /* Long-term memory from PSRAM-allocated buffer */
-    char *mem_buf = ps_malloc(4096);
+    char *mem_buf = ps_malloc(LANG_MEMORY_MAX_BYTES);
     if (mem_buf) {
-        if (memory_read_long_term(mem_buf, 4096) == ESP_OK && mem_buf[0]) {
+        if (memory_read_long_term(mem_buf, LANG_MEMORY_MAX_BYTES) == ESP_OK && mem_buf[0]) {
             off += snprintf(buf + off, size - off, "\n## Long-term Memory\n\n%s\n", mem_buf);
         }
         free(mem_buf);

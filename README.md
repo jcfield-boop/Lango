@@ -99,7 +99,7 @@ Most cheap UVC-compatible webcams work. For PTT mic, the webcam must also expose
 
 | Feature | Details |
 |---------|---------|
-| **LLM** | Claude (Anthropic), OpenAI, or any OpenRouter model — streaming responses |
+| **LLM** | Claude (Anthropic), OpenAI, or any OpenRouter model — token-by-token streaming to browser |
 | **Wake word** | "Hi ESP" via WakeNet9 + AFE — supported in firmware, requires INMP441 (not currently wired) |
 | **STT** | Groq Whisper — browser WebM audio or webcam UAC PCM |
 | **TTS** | Groq PlayAI — WAV cached in PSRAM, served to browser at `/tts/<id>` (local speaker not currently wired) |
@@ -241,7 +241,7 @@ Navigate to `https://langoustine.local` (or `https://<device-ip>`).
 > **First visit:** the device uses a self-signed TLS certificate. In Safari: *Show Details → Visit Website → confirm in Keychain*. In Chrome: type `thisisunsafe` on the warning page.
 
 - **Voice mode:** Click **Record**, speak, click **Stop** — the browser sends WebM audio, Groq Whisper transcribes it, the LLM replies, and TTS audio plays back in the browser.
-- **Text mode:** Type a message and press Enter.
+- **Text mode:** Type a message and press Enter. Tokens stream word-by-word as the LLM generates.
 - The developer console at `/console` shows a real-time monitor feed: LLM provider/model, tool calls, search provider, heartbeat events.
 
 ### Webcam PTT (push-to-talk)
@@ -342,7 +342,7 @@ restart                  reboot
 /lfs/config/    SOUL.md      — system prompt / personality
                 USER.md      — user name, timezone, preferences
                 SERVICES.md  — third-party credentials (HA, Klipper, email…)
-/lfs/memory/    MEMORY.md    — long-term episodic memory (6 KB max)
+/lfs/memory/    MEMORY.md    — long-term episodic memory (16 KB max)
 /lfs/sessions/  <chat_id>.json — per-user conversation history
 /lfs/skills/    *.md         — skill definitions loaded by the agent
 /lfs/captures/  latest.jpg   — most recent webcam capture

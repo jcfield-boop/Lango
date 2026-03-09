@@ -1,5 +1,6 @@
 #include "tool_http.h"
 #include "gateway/ws_server.h"
+#include "memory/psram_alloc.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -10,7 +11,7 @@
 
 static const char *TAG = "tool_http";
 
-#define HTTP_RESP_BUF_SIZE (4 * 1024)
+#define HTTP_RESP_BUF_SIZE (8 * 1024)
 
 typedef struct {
     char *data;
@@ -105,7 +106,7 @@ esp_err_t tool_http_execute(const char *input_json, char *output, size_t output_
     bool is_post = (strcasecmp(method, "POST") == 0);
 
     http_resp_t resp = {0};
-    resp.data = malloc(HTTP_RESP_BUF_SIZE);
+    resp.data = ps_malloc(HTTP_RESP_BUF_SIZE);
     if (!resp.data) {
         cJSON_Delete(input);
         snprintf(output, output_size, "Error: out of memory");

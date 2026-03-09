@@ -23,31 +23,47 @@
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "cJSON.h"
 
 static const char *TAG = "agent";
 
-#define TOOL_OUTPUT_SIZE  (16 * 1024)
+#define TOOL_OUTPUT_SIZE      (32 * 1024)
+#define WS_TOKEN_MIN_CHARS    8
+#define WS_TOKEN_MIN_US       150000
 
 /* Progress callback: sends token deltas to the WS client */
 typedef struct {
-    size_t last_sent_len;
-    char   chat_id[32];
+    size_t   last_sent_len;
+    uint64_t last_sent_us;
+    char     chat_id[32];
+    char     channel[16];
 } ws_stream_ctx_t;
 
 static void ws_stream_progress(const char *text, size_t len, void *ctx)
 {
     ws_stream_ctx_t *sc = (ws_stream_ctx_t *)ctx;
+    if (!sc || !sc->chat_id[0]) return;
+
+    /* Only stream WebSocket channels — Telegram uses placeholder/edit */
+    if (strcmp(sc->channel, "websocket") != 0) return;
+
     if (len <= sc->last_sent_len) return;
 
-    /* Show a brief preview in the monitor log */
-    size_t tail = (len > 50) ? (len - 50) : 0;
-    char preview[80];
-    snprintf(preview, sizeof(preview), "+%zu chars: ...%.50s",
-             len - sc->last_sent_len, text + tail);
-    for (char *p = preview; *p; p++) if (*p == '\n' || *p == '\r') *p = ' ';
-    ws_server_broadcast_monitor_verbose("stream", preview);
+    const char *delta    = text + sc->last_sent_len;
+    size_t      delta_len = len - sc->last_sent_len;
+
+    /* Gate: avoid flooding with tiny fragments */
+    uint64_t now_us   = (uint64_t)esp_timer_get_time();
+    bool enough_chars = delta_len >= WS_TOKEN_MIN_CHARS;
+    bool enough_time  = (now_us - sc->last_sent_us) >= WS_TOKEN_MIN_US;
+    if (!enough_chars && !enough_time) return;
+
+    ws_server_send_token(sc->chat_id, delta);
     sc->last_sent_len = len;
+    sc->last_sent_us  = now_us;
+
+    ws_server_broadcast_monitor("llm", delta);
 }
 
 static cJSON *build_assistant_content(const llm_response_t *resp)
@@ -405,8 +421,9 @@ static void agent_loop_task(void *arg)
             }
         }
 
-        ws_stream_ctx_t stream_ctx = { .last_sent_len = 0 };
+        ws_stream_ctx_t stream_ctx = { .last_sent_len = 0, .last_sent_us = 0 };
         strncpy(stream_ctx.chat_id, msg.chat_id, sizeof(stream_ctx.chat_id) - 1);
+        strncpy(stream_ctx.channel, msg.channel, sizeof(stream_ctx.channel) - 1);
 
         while (iteration < LANG_AGENT_MAX_TOOL_ITER) {
 #if LANG_AGENT_SEND_WORKING_STATUS

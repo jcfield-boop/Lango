@@ -12,8 +12,8 @@
 
 static const char *TAG = "session";
 
-/* Increased from 6KB: Langoustine TTS responses can be longer */
-#define SESS_LINE_BUF  12288
+/* Matches LANG_SESSION_HISTORY_MAX_BYTES */
+#define SESS_LINE_BUF  (LANG_SESSION_HISTORY_MAX_BYTES)
 
 static void session_path(const char *chat_id, char *buf, size_t size)
 {

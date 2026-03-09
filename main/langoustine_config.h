@@ -58,7 +58,7 @@
 /* LLM */
 #define LANG_LLM_DEFAULT_MODEL       "claude-opus-4-5"
 #define LANG_LLM_PROVIDER_DEFAULT    "anthropic"
-#define LANG_LLM_MAX_TOKENS          1000
+#define LANG_LLM_MAX_TOKENS          2048
 #define LANG_LLM_API_URL             "https://api.anthropic.com/v1/messages"
 #define LANG_OPENAI_API_URL          "https://api.openai.com/v1/chat/completions"
 #define LANG_OPENROUTER_API_URL      "https://openrouter.ai/api/v1/chat/completions"
@@ -134,8 +134,8 @@
 #define LANG_I2S_AUDIO_ENABLED  0
 
 /* Message Bus */
-#define LANG_BUS_QUEUE_LEN           16
-#define LANG_OUTBOUND_STACK          (6 * 1024)
+#define LANG_BUS_QUEUE_LEN           48
+#define LANG_OUTBOUND_STACK          (8 * 1024)
 #define LANG_OUTBOUND_PRIO           5
 #define LANG_OUTBOUND_CORE           0
 
@@ -147,11 +147,11 @@
 #define LANG_LFS_SKILLS_DIR          "/lfs/skills"
 #define LANG_LFS_TTS_CACHE_DIR       "/lfs/tts"
 #define LANG_MEMORY_FILE             "/lfs/memory/MEMORY.md"
-#define LANG_MEMORY_MAX_BYTES        (6 * 1024)
+#define LANG_MEMORY_MAX_BYTES        (16 * 1024)
 #define LANG_SOUL_FILE               "/lfs/config/SOUL.md"
 #define LANG_USER_FILE               "/lfs/config/USER.md"
-#define LANG_SESSION_MAX_MSGS        30
-#define LANG_SESSION_HISTORY_MAX_BYTES (12 * 1024)
+#define LANG_SESSION_MAX_MSGS        50
+#define LANG_SESSION_HISTORY_MAX_BYTES (24 * 1024)
 
 /* Cron / Heartbeat */
 #define LANG_CRON_FILE               "/lfs/cron.json"
@@ -168,7 +168,7 @@
 #define LANG_VISION_MAX_TOKENS          512
 
 /* Web Search */
-#define LANG_TAVILY_BUF_SIZE         (16 * 1024)
+#define LANG_TAVILY_BUF_SIZE         (32 * 1024)
 
 /* Skills */
 #define LANG_SKILLS_PREFIX           "/lfs/skills/"

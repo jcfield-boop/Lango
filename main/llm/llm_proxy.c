@@ -895,8 +895,8 @@ esp_err_t llm_chat_tools(const char *system_prompt,
 #define SSE_TC_MAX     MIMI_MAX_TOOL_CALLS
 
 /* Rate-limit thresholds for progress callbacks */
-#define SSE_PROGRESS_MIN_CHARS  200
-#define SSE_PROGRESS_MIN_US     (2LL * 1000 * 1000)
+#define SSE_PROGRESS_MIN_CHARS  8
+#define SSE_PROGRESS_MIN_US     150000LL
 
 typedef struct {
     char        id[64];
