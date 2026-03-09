@@ -75,6 +75,9 @@ CONFIG_USB_HOST_HW_BUFFER_BIAS_IN=y
 # Disable for USB-powered bring-up; re-enable (or set level 0) for production on clean PSU.
 CONFIG_ESP_BROWNOUT_DET=n
 
+# ESP-SR WakeNet9 model selection: "Hi ESP" wake word
+CONFIG_SR_WN_WN9_HIESP=y
+
 # Debug build — disable for production
 # NOTE: CONFIG_COMPILER_OPTIMIZATION_NONE=y (-O0) causes sys_evt stack overflow
 # at default 2304-byte stack; keep default -Os optimization instead.

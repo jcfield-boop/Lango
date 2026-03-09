@@ -98,12 +98,22 @@ static void uac_ptt_task(void *arg)
     ESP_LOGI(TAG, "UAC PTT task started on Core %d (GPIO %d)",
              xPortGetCoreID(), LANG_PTT_GPIO);
 
-    bool       was_pressed = false;
-    TickType_t press_start = 0;
+    bool       was_pressed   = false;
+    TickType_t press_start   = 0;
+    TickType_t last_log_tick = 0;
     uint8_t    chunk[512];
 
     while (1) {
         bool pressed = s_uac_connected && (gpio_get_level(LANG_PTT_GPIO) == 0);
+
+        /* Periodic diagnostic: log UAC connection state every 5 s while idle */
+        if (!was_pressed) {
+            TickType_t now = xTaskGetTickCount();
+            if ((now - last_log_tick) > pdMS_TO_TICKS(5000)) {
+                ESP_LOGI(TAG, "UAC PTT idle: connected=%d", s_uac_connected);
+                last_log_tick = now;
+            }
+        }
 
         if (pressed && !was_pressed) {
             /* ── Button just pressed — open stream + WAV ring ── */
@@ -207,11 +217,12 @@ esp_err_t uac_microphone_init(void)
         return err;
     }
 
-    /* Brief delay: give the USB host + UVC driver time to finish enumerating any
-     * already-connected device before the UAC class driver registers.  Without
-     * this, both drivers race to process the composite-device connect event and
-     * can corrupt shared USB host state, causing a hard crash on boot. */
-    vTaskDelay(pdMS_TO_TICKS(500));
+    /* Increased delay (2 s): the USB host may not replay DEVICE_CONNECTED to class
+     * drivers that register after enumeration completes.  If the webcam finishes
+     * UVC enumeration in < 500 ms, uac_driver_event_cb never fires → s_uac_connected
+     * stays false.  2 s gives the USB stack ample time to re-announce the device
+     * to any newly-registered class driver on most hardware. */
+    vTaskDelay(pdMS_TO_TICKS(2000));
 
     /* Install UAC driver — USB host must already be running (uvc_camera_init done) */
     uac_host_driver_config_t uac_cfg = {
