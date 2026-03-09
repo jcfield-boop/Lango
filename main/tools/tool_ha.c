@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "cJSON.h"
 #include "gateway/ws_server.h"
+#include "memory/psram_alloc.h"
 
 static const char *TAG = "tool_ha";
 
@@ -152,7 +153,7 @@ esp_err_t tool_ha_execute(const char *input_json, char *output, size_t output_si
     memset(creds.token, 0, sizeof(creds.token));  /* zero token — now in auth_header */
 
     /* Allocate response buffer */
-    char *resp_buf = malloc(HA_BODY_MAX + 1);
+    char *resp_buf = ps_malloc(HA_BODY_MAX + 1);
     if (!resp_buf) {
         cJSON_Delete(root);
         memset(auth_header, 0, sizeof(auth_header));

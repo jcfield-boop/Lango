@@ -99,7 +99,7 @@ Most cheap UVC-compatible webcams work. For PTT mic, the webcam must also expose
 
 | Feature | Details |
 |---------|---------|
-| **LLM** | Claude (Anthropic), OpenAI, or any OpenRouter model — token-by-token streaming to browser |
+| **LLM** | Claude (Anthropic), OpenAI, or any OpenRouter model — token-by-token streaming to browser; 4096 max output tokens; 64 KB context buffer |
 | **Wake word** | "Hi ESP" via WakeNet9 + AFE — supported in firmware, requires INMP441 (not currently wired) |
 | **STT** | Groq Whisper — browser WebM audio or webcam UAC PCM |
 | **TTS** | Groq PlayAI — WAV cached in PSRAM, served to browser at `/tts/<id>` (local speaker not currently wired) |

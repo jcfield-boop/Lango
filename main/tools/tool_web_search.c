@@ -381,7 +381,7 @@ static esp_err_t search_tavily(const char *query, const char *api_key, char **ou
     cJSON *answer  = cJSON_GetObjectItem(root, "answer");
     cJSON *results = cJSON_GetObjectItem(root, "results");
 
-    char *output = malloc(4096);
+    char *output = ps_malloc(4096);
     if (!output) { cJSON_Delete(root); return ESP_ERR_NO_MEM; }
     int pos = 0;
 

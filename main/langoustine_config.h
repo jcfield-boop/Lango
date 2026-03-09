@@ -58,7 +58,7 @@
 /* LLM */
 #define LANG_LLM_DEFAULT_MODEL       "claude-opus-4-5"
 #define LANG_LLM_PROVIDER_DEFAULT    "anthropic"
-#define LANG_LLM_MAX_TOKENS          2048
+#define LANG_LLM_MAX_TOKENS          4096
 #define LANG_LLM_API_URL             "https://api.anthropic.com/v1/messages"
 #define LANG_OPENAI_API_URL          "https://api.openai.com/v1/chat/completions"
 #define LANG_OPENROUTER_API_URL      "https://openrouter.ai/api/v1/chat/completions"
@@ -74,7 +74,7 @@
 #define LANG_AUDIO_MAX_UPLOAD_BYTES  (512 * 1024) /* max audio upload size */
 #define LANG_TTS_BUF_SIZE            (512 * 1024) /* 512KB per TTS cache entry */
 #define LANG_TTS_CACHE_MAX           4            /* max concurrent TTS cache entries */
-#define LANG_CONTEXT_BUF_SIZE        (32 * 1024)  /* 32KB context buffer in PSRAM */
+#define LANG_CONTEXT_BUF_SIZE        (64 * 1024)  /* 64KB context buffer in PSRAM */
 
 /* Core Assignment */
 #define LANG_STT_CORE                1

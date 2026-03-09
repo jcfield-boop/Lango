@@ -33,7 +33,7 @@ static esp_err_t resp_append(resp_buf_t *rb, const char *src, size_t n)
 {
     if (rb->len + n >= rb->cap) {
         size_t new_cap = rb->cap + n + 1024;
-        char *tmp = realloc(rb->data, new_cap);
+        char *tmp = ps_realloc(rb->data, new_cap);
         if (!tmp) return ESP_ERR_NO_MEM;
         rb->data = tmp;
         rb->cap  = new_cap;
@@ -273,7 +273,7 @@ esp_err_t tool_capture_image_execute(const char *input_json,
     }
 
     /* 8. Allocate response buffer */
-    resp_buf_t rb = { .data = malloc(4096), .len = 0, .cap = 4096 };
+    resp_buf_t rb = { .data = ps_malloc(4096), .len = 0, .cap = 4096 };
     if (!rb.data) {
         free(body);
         snprintf(output, output_size, "Error: out of memory for response buffer");
