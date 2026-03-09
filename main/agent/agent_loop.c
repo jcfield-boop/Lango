@@ -8,6 +8,7 @@
 #include "tools/tool_registry.h"
 #include "gateway/ws_server.h"
 #include "tools/tool_memory.h"
+#include "tools/tool_web_search.h"
 #include "audio/tts_client.h"
 #include "telegram/telegram_bot.h"
 #include "led/led_indicator.h"
@@ -316,6 +317,7 @@ static void agent_loop_task(void *arg)
         if (err != ESP_OK) continue;
 
         memory_tool_reset_turn();
+        web_search_reset_turn();
 
         ESP_LOGI(TAG, "Processing message from %s:%s", msg.channel, msg.chat_id);
         {

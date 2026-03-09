@@ -18,6 +18,9 @@
 #include "tools/tool_capture_image.h"
 #include "tools/tool_weather.h"
 #include "tools/tool_notify.h"
+#include "tools/tool_device_restart.h"
+#include "tools/tool_memory_read.h"
+#include "tools/tool_session.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -524,6 +527,44 @@ esp_err_t tool_registry_init(void)
         .execute = tool_notify_execute,
     };
     register_tool(&nt);
+
+    /* Register device_restart */
+    mimi_tool_t dr = {
+        .name = "device_restart",
+        .description = "Restart the device cleanly. Use after configuration changes that require a reboot, or when requested by the user.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{},"
+            "\"required\":[]}",
+        .execute = tool_device_restart_execute,
+    };
+    register_tool(&dr);
+
+    /* Register memory_read */
+    mimi_tool_t mr = {
+        .name = "memory_read",
+        .description = "Read the full contents of MEMORY.md — your long-term memory store. Use to review, deduplicate, or reference stored facts, preferences, and instructions before writing new memories.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{},"
+            "\"required\":[]}",
+        .execute = tool_memory_read_execute,
+    };
+    register_tool(&mr);
+
+    /* Register session_clear */
+    mimi_tool_t sc = {
+        .name = "session_clear",
+        .description = "Delete the conversation history for a chat session. Use when the user asks to forget the conversation or start fresh.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"chat_id\":{\"type\":\"string\","
+            "\"description\":\"The chat_id of the session to clear (from current conversation context)\"}"
+            "},\"required\":[\"chat_id\"]}",
+        .execute = tool_session_clear_execute,
+    };
+    register_tool(&sc);
 
     build_tools_json();
 

@@ -63,6 +63,11 @@ esp_err_t tool_cron_add_execute(const char *input_json, char *output, size_t out
             cJSON_Delete(root);
             return ESP_ERR_INVALID_ARG;
         }
+        if (interval->valuedouble < 60) {
+            snprintf(output, output_size, "Error: minimum interval_s is 60 (1 minute) to prevent agent spam");
+            cJSON_Delete(root);
+            return ESP_ERR_INVALID_ARG;
+        }
         job.interval_s = (uint32_t)interval->valuedouble;
         job.delete_after_run = false;
     } else if (strcmp(schedule_type, "at") == 0) {

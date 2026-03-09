@@ -1,5 +1,6 @@
 #include "tools/tool_files.h"
 #include "mimi_config.h"
+#include "memory/psram_alloc.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,8 +15,16 @@ static const char *TAG = "tool_files";
 
 #define MAX_FILE_SIZE (32 * 1024)
 
+/* Paths that the LLM may NOT write or edit (prompt injection protection) */
+static const char * const WRITE_DENYLIST[] = {
+    "/lfs/config/SOUL.md",
+    "/lfs/config/SERVICES.md",
+    "/lfs/cron.json",
+    NULL
+};
+
 /**
- * Validate that a path starts with /spiffs/ and contains no ".." traversal.
+ * Validate that a path starts with /lfs/ and contains no ".." traversal.
  */
 static bool validate_path(const char *path)
 {
@@ -23,6 +32,17 @@ static bool validate_path(const char *path)
     if (strncmp(path, "/lfs/", 5) != 0) return false;
     if (strstr(path, "..") != NULL) return false;
     return true;
+}
+
+/**
+ * Returns true if path is in the write denylist.
+ */
+static bool path_is_write_denied(const char *path)
+{
+    for (int i = 0; WRITE_DENYLIST[i]; i++) {
+        if (strcmp(path, WRITE_DENYLIST[i]) == 0) return true;
+    }
+    return false;
 }
 
 /* ── read_file ─────────────────────────────────────────────── */
@@ -79,6 +99,11 @@ esp_err_t tool_write_file_execute(const char *input_json, char *output, size_t o
         cJSON_Delete(root);
         return ESP_ERR_INVALID_ARG;
     }
+    if (path_is_write_denied(path)) {
+        snprintf(output, output_size, "Error: writes to %s are not permitted", path);
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
     if (!content) {
         snprintf(output, output_size, "Error: missing 'content' field");
         cJSON_Delete(root);
@@ -130,6 +155,11 @@ esp_err_t tool_edit_file_execute(const char *input_json, char *output, size_t ou
         cJSON_Delete(root);
         return ESP_ERR_INVALID_ARG;
     }
+    if (path_is_write_denied(path)) {
+        snprintf(output, output_size, "Error: edits to %s are not permitted", path);
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
     if (!old_str || !new_str) {
         snprintf(output, output_size, "Error: missing 'old_string' or 'new_string' field");
         cJSON_Delete(root);
@@ -159,8 +189,8 @@ esp_err_t tool_edit_file_execute(const char *input_json, char *output, size_t ou
     size_t old_len = strlen(old_str);
     size_t new_len = strlen(new_str);
     size_t max_result = file_size + (new_len > old_len ? new_len - old_len : 0) + 1;
-    char *buf = malloc(file_size + 1);
-    char *result = malloc(max_result);
+    char *buf = ps_malloc(file_size + 1);
+    char *result = ps_malloc(max_result);
     if (!buf || !result) {
         free(buf);
         free(result);

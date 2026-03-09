@@ -128,11 +128,11 @@ esp_err_t tool_memory_write_execute(const char *input_json,
     }
 
     /* Hard confidence gate */
-    if (confidence < 0.5) {
+    if (confidence < 0.7) {
         cJSON_Delete(root);
         char reason[64];
         snprintf(reason, sizeof(reason),
-                 "confidence %.2f below minimum 0.5", confidence);
+                 "confidence %.2f below minimum 0.7", confidence);
         return tool_err(output, output_size, "low_confidence", reason);
     }
 

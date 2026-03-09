@@ -131,13 +131,29 @@ esp_err_t tool_http_execute(const char *input_json, char *output, size_t output_
         return ESP_FAIL;
     }
 
-    /* Apply custom headers */
+    /* Apply custom headers — validate name (alphanum + '-') and strip CR/LF from value */
     if (j_headers && cJSON_IsObject(j_headers)) {
         cJSON *h;
         cJSON_ArrayForEach(h, j_headers) {
-            if (cJSON_IsString(h)) {
-                esp_http_client_set_header(client, h->string, h->valuestring);
+            if (!cJSON_IsString(h)) continue;
+            /* Validate header name: only alphanumeric and '-' */
+            bool name_ok = true;
+            for (const char *p = h->string; *p; p++) {
+                if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+                      (*p >= '0' && *p <= '9') || *p == '-')) {
+                    name_ok = false;
+                    break;
+                }
             }
+            if (!name_ok) continue;
+            /* Strip CR and LF from header value */
+            char safe_val[256];
+            size_t vi = 0;
+            for (const char *p = h->valuestring; *p && vi < sizeof(safe_val) - 1; p++) {
+                if (*p != '\r' && *p != '\n') safe_val[vi++] = *p;
+            }
+            safe_val[vi] = '\0';
+            esp_http_client_set_header(client, h->string, safe_val);
         }
     }
 

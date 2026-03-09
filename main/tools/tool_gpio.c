@@ -9,20 +9,21 @@
 static const char *TAG = "tool_gpio";
 
 /* ── Pin safety ─────────────────────────────────────────────────
- * Valid GPIO range on ESP32-C6: 0–22
+ * Valid GPIO range on ESP32-S3-WROOM-2: 0–21, 38–48
  * Blocked:
- *   Pin 8  — WS2812 RGB LED on most devkit boards
- *   Pin 9  — BOOT button (strapping, input-only)
- *   18-21  — SPI flash interface (internal module wiring)
+ *   19–20  — USB OTG D+/D- (shared with USB Serial/JTAG)
+ *   22–37  — Internal Flash/PSRAM bus (writing corrupts memory)
+ *   43     — UART0 TX (serial CLI)
+ *   44     — UART0 RX (serial CLI)
  */
-#define GPIO_PIN_MAX  22
+#define GPIO_PIN_MAX  48
 
 static bool gpio_pin_blocked(int pin)
 {
     if (pin < 0 || pin > GPIO_PIN_MAX) return true;
-    if (pin == 8)  return true;  /* WS2812 LED */
-    if (pin == 9)  return true;  /* BOOT button */
-    if (pin >= 18 && pin <= 21) return true;  /* SPI flash */
+    if (pin == 19 || pin == 20) return true;  /* USB OTG */
+    if (pin >= 22 && pin <= 37) return true;  /* Flash/PSRAM internal */
+    if (pin == 43 || pin == 44) return true;  /* UART0 CLI */
     return false;
 }
 
@@ -44,8 +45,8 @@ static int parse_pin(const char *input_json, char *output, size_t output_size)
 
     if (gpio_pin_blocked(pin)) {
         snprintf(output, output_size,
-                 "Error: pin %d is not available (blocked or out of range 0-%d, excluding 8,9,18-21)",
-                 pin, GPIO_PIN_MAX);
+                 "Error: pin %d is not available (valid: 0-21, 38-48; blocked: 19-20 USB, 22-37 Flash/PSRAM, 43-44 UART)",
+                 pin);
         return -1;
     }
     return pin;
@@ -90,8 +91,8 @@ esp_err_t tool_gpio_write_execute(const char *input_json, char *output, size_t o
     if (gpio_pin_blocked(pin)) {
         cJSON_Delete(input);
         snprintf(output, output_size,
-                 "Error: pin %d is not available (blocked or out of range 0-%d, excluding 8,9,18-21)",
-                 pin, GPIO_PIN_MAX);
+                 "Error: pin %d is not available (valid: 0-21, 38-48; blocked: 19-20 USB, 22-37 Flash/PSRAM, 43-44 UART)",
+                 pin);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -153,8 +154,8 @@ esp_err_t tool_gpio_mode_execute(const char *input_json, char *output, size_t ou
     if (gpio_pin_blocked(pin)) {
         cJSON_Delete(input);
         snprintf(output, output_size,
-                 "Error: pin %d is not available (blocked or out of range 0-%d, excluding 8,9,18-21)",
-                 pin, GPIO_PIN_MAX);
+                 "Error: pin %d is not available (valid: 0-21, 38-48; blocked: 19-20 USB, 22-37 Flash/PSRAM, 43-44 UART)",
+                 pin);
         return ESP_ERR_INVALID_ARG;
     }
 

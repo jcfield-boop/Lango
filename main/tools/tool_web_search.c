@@ -27,6 +27,15 @@ static char s_search_key[128] = {0};
 static uint32_t s_total_searches        = 0;
 static uint32_t s_search_cost_millicents = 0;
 
+/* Per-turn rate limiting: cap searches per agent turn to limit runaway cost */
+#define SEARCH_MAX_PER_TURN  5
+static int s_search_calls_this_turn = 0;
+
+void web_search_reset_turn(void)
+{
+    s_search_calls_this_turn = 0;
+}
+
 #define SEARCH_BUF_SIZE      (20 * 1024)  /* Web search with summary=1 ~12-15KB */
 #define SUMMARIZER_BUF_SIZE  (12 * 1024)  /* Summarizer response ~3-8KB */
 #define SUMMARIZER_KEY_MAX   256
@@ -414,6 +423,15 @@ esp_err_t tool_web_search_execute(const char *input_json, char *output, size_t o
                  "Set it via Settings tab at http://<device-ip> or `set_search_key <key>` in CLI.");
         return ESP_ERR_INVALID_STATE;
     }
+
+    if (s_search_calls_this_turn >= SEARCH_MAX_PER_TURN) {
+        snprintf(output, output_size,
+                 "Search limit reached: max %d searches per turn to control costs. "
+                 "Use the information already gathered to answer the question.",
+                 SEARCH_MAX_PER_TURN);
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_search_calls_this_turn++;
 
     /* Parse input to get query */
     cJSON *input = cJSON_Parse(input_json);

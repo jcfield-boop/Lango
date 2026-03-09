@@ -119,7 +119,7 @@ Most cheap UVC-compatible webcams work. For PTT mic, the webcam must also expose
 
 ### Built-in agent tools
 
-`web_search` · `get_current_time` · `read_file` · `write_file` · `edit_file` · `list_dir` · `search_files` · `http_request` · `send_email` · `cron_add/list/remove` · `ha_request` · `klipper_request` · `gpio_read/write/mode` · `wifi_scan` · `rss_fetch` · `device_temp` · `system_info` · `memory_write` · `memory_append_today` · `rule_create/list/delete` · `capture_image` · `send_notification` · `get_weather`
+`web_search` · `get_current_time` · `read_file` · `write_file` · `edit_file` · `list_dir` · `search_files` · `http_request` · `send_email` · `cron_add/list/remove` · `ha_request` · `klipper_request` · `gpio_read/write/mode` · `wifi_scan` · `rss_fetch` · `device_temp` · `system_info` · `memory_write` · `memory_read` · `memory_append_today` · `rule_create/list/delete` · `capture_image` · `send_notification` · `get_weather` · `device_restart` · `session_clear`
 
 ---
 

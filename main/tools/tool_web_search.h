@@ -34,3 +34,9 @@ const char *tool_web_search_get_key(void);
  * @param cost_millicents Estimated cost in 1/1000 cents at Brave Pro rate (may be NULL)
  */
 void tool_web_search_get_stats(uint32_t *calls, uint32_t *cost_millicents);
+
+/**
+ * Reset the per-turn search call counter. Call once per inbound message
+ * before the ReAct loop begins (alongside memory_tool_reset_turn).
+ */
+void web_search_reset_turn(void);
