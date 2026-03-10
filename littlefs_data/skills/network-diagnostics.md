@@ -71,7 +71,7 @@ Format:
 ## Delivery
 - **Channel:** Telegram (if called via Telegram)
 - **Format:** Bullet points + status indicators
-- **File output:** Save results to `/spiffs/memory/network-scan-<YYYY-MM-DD>.md`
+- **File output:** Save results to `/lfs/memory/network-scan-<YYYY-MM-DD>.md`
 
 ## Notes
 - mDNS discovery is **LAN-only** (no remote access)

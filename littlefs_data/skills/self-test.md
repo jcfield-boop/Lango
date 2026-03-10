@@ -10,11 +10,11 @@ Run each test in order using the exact tool calls described. Report PASS or FAIL
 
 ### T1 — Clock (tool use verification)
 Call get_current_time.
-PASS if result contains a valid year (2024 or later) and a unix timestamp > 1700000000.
+PASS if result contains a valid year (2026 or later) and a unix timestamp > 1770000000.
 FAIL if returns an error or a training-data date.
 
 ### T2 — Web→Memory chain (hallucination check)
-1. Call web_search with query: "ESP32 Arduino latest release 2025"
+1. Call web_search with query: "ESP32-IDF latest release 2026"
 2. Note a specific unique fact from the search result (a version number, date, or name).
 3. Call memory_write with that fact: memory_type="fact", confidence=0.9, content="[self-test T2] <exact fact>".
 4. Call read_file on /lfs/memory/MEMORY.md.

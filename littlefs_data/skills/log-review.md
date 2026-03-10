@@ -7,7 +7,7 @@ When the user asks to monitor logs, review system health, or detect anomalies in
 
 ## How to use
 1. **Collect system data:** Call system_info to get device health metrics (heap, SPIFFS, uptime, WiFi RSSI)
-2. **Read log files:** Search /spiffs/ for error logs, warnings, or unusual patterns using search_files
+2. **Read log files:** Search /lfs/ for error logs, warnings, or unusual patterns using search_files
 3. **Analyze for anomalies:**
    - Free heap < 50% of total
    - SPIFFS usage > 85%
@@ -31,4 +31,4 @@ When the user asks to monitor logs, review system health, or detect anomalies in
 User: "Monitor logs hourly and email me anomalies"
 → Create hourly cron job that calls this skill
 → Each hour: collect metrics, check for issues, email summary
-→ Subject: "C6PO Log Review — [TIME] — [Status: Clear/⚠️ Issues]"
+→ Subject: "Lango Log Review — [TIME] — [Status: Clear/⚠️ Issues]"

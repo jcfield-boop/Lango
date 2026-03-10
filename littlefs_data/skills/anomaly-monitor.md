@@ -1,6 +1,6 @@
 # Anomaly Monitor Skill
 
-Monitor system health hourly and log all metrics to `/spiffs/memory/uptime-log.md`.
+Monitor system health hourly and log all metrics to `/lfs/memory/uptime-log.md`.
 
 ## When to use
 Triggered hourly by cron job to:
@@ -12,12 +12,12 @@ Triggered hourly by cron job to:
 ```
 Message: ANOMALY_MONITOR_EXECUTE
 Frequency: Every 3600 seconds (hourly)
-Channel: Telegram (5538967144)
+Channel: websocket (alerts sent via Telegram if thresholds exceeded)
 ```
 
 ## Steps
 1. **Collect metrics:** Call system_info, device_temp, get_current_time
-2. **Load previous snapshot:** Read last line from `/spiffs/memory/uptime-log.md`
+2. **Load previous snapshot:** Read last line from `/lfs/memory/uptime-log.md`
 3. **Compare uptime:**
    - If current_uptime < previous_uptime → **CRASH DETECTED**
    - Calculate downtime window (time since last check)
@@ -30,7 +30,7 @@ Channel: Telegram (5538967144)
    - WiFi RSSI (dBm)
    - Device temp (°C)
    - Uptime (formatted)
-5. **APPEND to log:** Write formatted entry to `/spiffs/memory/uptime-log.md`
+5. **APPEND to log:** Write formatted entry to `/lfs/memory/uptime-log.md`
 6. **Check thresholds:**
    - Heap < 50 KB → ALERT
    - SPIFFS > 85% → ALERT

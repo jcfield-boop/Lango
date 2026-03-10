@@ -8,7 +8,7 @@ Also useful as a heartbeat/cron task.
 
 ## How to use
 1. Use get_current_time for today's date
-2. Read /spiffs/memory/MEMORY.md for user preferences and context
+2. Read /lfs/memory/MEMORY.md for user preferences and context
 3. Read today's daily note if it exists
 4. Gather news — prefer rss_fetch over web_search where possible to save API credits:
    - Tech: `rss_fetch https://hnrss.org/frontpage max_items=5`  (Hacker News)
@@ -17,12 +17,12 @@ Also useful as a heartbeat/cron task.
    - Use web_search only for topics with no suitable feed, or for weather/stock queries
 5. Compile a concise briefing covering:
    - Date and time
-   - Weather (if location known from /spiffs/config/USER.md — use web_search)
+   - Weather (if location known from /lfs/config/USER.md — use web_search)
    - Top news/updates from feeds above, filtered to user interests
    - Any pending tasks from memory
    - Any scheduled cron jobs
 6. Before responding: call write_file with append=true to log to today's daily note
-   at /spiffs/memory/<YYYY-MM-DD>.md (use the date from step 1).
+   at /lfs/memory/<YYYY-MM-DD>.md (use the date from step 1).
    Content: "## Daily Briefing\n- <one sentence summary of key topics covered>\n"
 
 ## Feed sources (curated)

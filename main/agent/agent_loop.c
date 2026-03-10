@@ -16,6 +16,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <stdatomic.h>
 #include <sys/stat.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -27,6 +28,7 @@
 #include "cJSON.h"
 
 static const char *TAG = "agent";
+static _Atomic bool s_agent_busy = false;
 
 #define TOOL_OUTPUT_SIZE      (32 * 1024)
 #define WS_TOKEN_MIN_CHARS    8
@@ -332,6 +334,7 @@ static void agent_loop_task(void *arg)
         esp_err_t err = message_bus_pop_inbound(&msg, UINT32_MAX);
         if (err != ESP_OK) continue;
 
+        atomic_store(&s_agent_busy, true);
         memory_tool_reset_turn();
         web_search_reset_turn();
 
@@ -644,12 +647,13 @@ static void agent_loop_task(void *arg)
 
         free(msg.content);
 
-
         if (oom_restart) {
             ws_server_broadcast_monitor("system", "OOM restart in 3s...");
             vTaskDelay(pdMS_TO_TICKS(3000));
             esp_restart();
         }
+
+        atomic_store(&s_agent_busy, false);
 
         ESP_LOGI(TAG, "PSRAM free: %d bytes  SRAM free: %d bytes",
                  (int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
@@ -683,3 +687,5 @@ esp_err_t agent_loop_start(void)
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     return ESP_FAIL;
 }
+
+bool agent_loop_is_busy(void) { return atomic_load(&s_agent_busy); }

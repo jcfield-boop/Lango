@@ -1320,6 +1320,32 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── GET /api/ota/status ─────────────────────────────────────── */
+
+static esp_err_t ota_status_handler(httpd_req_t *req)
+{
+    if (!request_is_authed(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+        return ESP_OK;
+    }
+    ota_status_t st = ota_get_status();
+    static const char *state_names[] = {
+        "idle", "pending", "downloading", "verifying", "rebooting", "error"
+    };
+    const char *state_str = (st.state <= OTA_STATE_ERROR)
+                            ? state_names[st.state] : "unknown";
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+             "{\"state\":\"%s\",\"progress_pct\":%u,"
+             "\"new_version\":\"%s\",\"error_msg\":\"%s\"}",
+             state_str, (unsigned)st.progress_pct,
+             st.new_version, st.error_msg);
+    httpd_resp_set_type(req, "application/json");
+    apply_cors(req);
+    httpd_resp_sendstr(req, buf);
+    return ESP_OK;
+}
+
 /* ── GET /api/logs ───────────────────────────────────────────── */
 
 static esp_err_t logs_handler(httpd_req_t *req)
@@ -1485,6 +1511,8 @@ esp_err_t ws_server_start(void)
     /* OTA */
     httpd_uri_t ota_uri = { .uri = "/api/ota", .method = HTTP_POST, .handler = ota_post_handler };
     httpd_register_uri_handler(s_server, &ota_uri);
+    httpd_uri_t ota_status_uri = { .uri = "/api/ota/status", .method = HTTP_GET, .handler = ota_status_handler };
+    httpd_register_uri_handler(s_server, &ota_status_uri);
 
     /* HTTP → HTTPS redirect server on port 80 */
     httpd_config_t redir_cfg    = HTTPD_DEFAULT_CONFIG();

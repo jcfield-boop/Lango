@@ -2,6 +2,7 @@
 #include "langoustine_config.h"
 #include "gateway/ws_server.h"
 #include "led/led_indicator.h"
+#include "agent/agent_loop.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -18,15 +19,52 @@
 static const char *TAG = "ota";
 
 /* Minimum free internal heap before starting OTA.
- * TLS handshake on S3 with PSRAM offloading peaks at ~28 KB; 28 KB allows
- * OTA to proceed when the agent is active (~34 KB observed minimum). */
-#define OTA_MIN_FREE_HEAP   (28 * 1024)
+ * Checked only after agent is idle — idle SRAM free is ~42KB.
+ * 28KB guards against concurrent non-agent SRAM consumers and TLS handshake peak. */
+#define OTA_MIN_FREE_HEAP    (28 * 1024)
 
-/* HTTP receive buffer for OTA download.
- * S3 has 16MB PSRAM — use a larger buffer for faster downloads. */
-#define OTA_HTTP_BUF_SIZE   (16 * 1024)
+/* HTTP receive buffer for OTA download. */
+#define OTA_HTTP_BUF_SIZE    (16 * 1024)
 
+/* How long to wait for agent to finish before aborting OTA. */
+#define OTA_WAIT_TIMEOUT_MS  (30 * 1000)
+#define OTA_WAIT_POLL_MS     500
+#define OTA_WAIT_LOG_MS      5000
+
+/* ── Status tracking ─────────────────────────────────────────── */
+
+static portMUX_TYPE  s_status_mux  = portMUX_INITIALIZER_UNLOCKED;
+static ota_status_t  s_status      = { .state = OTA_STATE_IDLE };
 static volatile bool s_ota_running = false;
+static char          s_ota_url[256];
+
+static void status_set(ota_state_t state, uint8_t pct,
+                       const char *version, const char *err_msg)
+{
+    portENTER_CRITICAL(&s_status_mux);
+    s_status.state        = state;
+    s_status.progress_pct = pct;
+    if (version) {
+        strncpy(s_status.new_version, version, sizeof(s_status.new_version) - 1);
+        s_status.new_version[sizeof(s_status.new_version) - 1] = '\0';
+    }
+    if (err_msg) {
+        strncpy(s_status.error_msg, err_msg, sizeof(s_status.error_msg) - 1);
+        s_status.error_msg[sizeof(s_status.error_msg) - 1] = '\0';
+    } else {
+        s_status.error_msg[0] = '\0';
+    }
+    portEXIT_CRITICAL(&s_status_mux);
+}
+
+ota_status_t ota_get_status(void)
+{
+    ota_status_t snap;
+    portENTER_CRITICAL(&s_status_mux);
+    snap = s_status;
+    portEXIT_CRITICAL(&s_status_mux);
+    return snap;
+}
 
 /* ── Core update logic (blocking) ─────────────────────────────── */
 
@@ -34,23 +72,54 @@ esp_err_t ota_update_from_url(const char *url)
 {
     if (!url || !url[0]) return ESP_ERR_INVALID_ARG;
 
+    /* Step 1: Wait for agent to finish current turn */
+    status_set(OTA_STATE_PENDING, 0, NULL, NULL);
+    ws_server_broadcast_monitor("ota", "OTA pending: waiting for agent to finish...");
+
+    int waited_ms = 0, log_accum = 0;
+    while (agent_loop_is_busy()) {
+        vTaskDelay(pdMS_TO_TICKS(OTA_WAIT_POLL_MS));
+        waited_ms  += OTA_WAIT_POLL_MS;
+        log_accum  += OTA_WAIT_POLL_MS;
+        if (log_accum >= OTA_WAIT_LOG_MS) {
+            char msg[80];
+            snprintf(msg, sizeof(msg),
+                     "OTA pending: waiting for agent... (%ds / 30s)",
+                     waited_ms / 1000);
+            ws_server_broadcast_monitor("ota", msg);
+            log_accum = 0;
+        }
+        if (waited_ms >= OTA_WAIT_TIMEOUT_MS) {
+            const char *abort_msg = "OTA aborted: agent did not finish in 30s";
+            ESP_LOGW(TAG, "%s", abort_msg);
+            ws_server_broadcast_monitor("ota", abort_msg);
+            status_set(OTA_STATE_ERROR, 0, NULL, abort_msg);
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+
+    /* Step 2: Heap guard (agent is idle — heap is at maximum for this path) */
     uint32_t free_heap = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     if (free_heap < OTA_MIN_FREE_HEAP) {
         char msg[80];
-        snprintf(msg, sizeof(msg), "OTA aborted: heap too low (%lu B, need %d B)",
+        snprintf(msg, sizeof(msg),
+                 "OTA aborted: heap too low (%lu B, need %d B)",
                  (unsigned long)free_heap, OTA_MIN_FREE_HEAP);
         ESP_LOGW(TAG, "%s", msg);
         ws_server_broadcast_monitor("ota", msg);
+        status_set(OTA_STATE_ERROR, 0, NULL, msg);
         return ESP_ERR_NO_MEM;
     }
 
+    /* Step 3: Begin download */
     {
         char msg[128];
         snprintf(msg, sizeof(msg), "OTA start: %.90s", url);
         ESP_LOGI(TAG, "%s", msg);
         ws_server_broadcast_monitor("ota", msg);
     }
-    led_indicator_set(LED_OTA);   /* rapid magenta flash during download */
+    led_indicator_set(LED_OTA);
+    status_set(OTA_STATE_DOWNLOADING, 0, NULL, NULL);
 
     esp_http_client_config_t http_cfg = {
         .url                   = url,
@@ -73,11 +142,12 @@ esp_err_t ota_update_from_url(const char *url)
         snprintf(msg, sizeof(msg), "OTA begin failed: %s", esp_err_to_name(ret));
         ESP_LOGE(TAG, "%s", msg);
         ws_server_broadcast_monitor("ota", msg);
+        status_set(OTA_STATE_ERROR, 0, NULL, msg);
         led_indicator_set(LED_ERROR);
         return ret;
     }
 
-    /* Validate image header before writing any bytes */
+    /* Step 4: Validate image header before writing any bytes */
     esp_app_desc_t new_desc;
     ret = esp_https_ota_get_img_desc(ota_handle, &new_desc);
     if (ret != ESP_OK) {
@@ -86,22 +156,43 @@ esp_err_t ota_update_from_url(const char *url)
         ESP_LOGE(TAG, "%s", msg);
         ws_server_broadcast_monitor("ota", msg);
         esp_https_ota_abort(ota_handle);
+        status_set(OTA_STATE_ERROR, 0, NULL, msg);
         led_indicator_set(LED_ERROR);
         return ret;
     }
     {
         const esp_app_desc_t *running = esp_app_get_description();
         char msg[128];
-        snprintf(msg, sizeof(msg), "OTA image OK: v%s → v%s",
+        snprintf(msg, sizeof(msg), "OTA image OK: v%s -> v%s",
                  running->version, new_desc.version);
         ESP_LOGI(TAG, "%s", msg);
         ws_server_broadcast_monitor("ota", msg);
+        status_set(OTA_STATE_DOWNLOADING, 0, new_desc.version, NULL);
     }
 
-    /* Stream and write the firmware */
+    /* Step 5: Stream and write with per-decile progress broadcasts */
+    int img_size = esp_https_ota_get_image_size(ota_handle);
+    int last_pct = -1;
     while (1) {
         ret = esp_https_ota_perform(ota_handle);
         if (ret != ESP_ERR_HTTPS_OTA_IN_PROGRESS) break;
+        if (img_size > 0) {
+            int read = esp_https_ota_get_image_len_read(ota_handle);
+            int pct  = (int)((int64_t)read * 100 / img_size);
+            if (pct < 0) pct = 0;
+            if (pct > 100) pct = 100;
+            int bucket = (pct / 10) * 10;
+            if (bucket > (last_pct / 10) * 10 && bucket > 0) {
+                char msg[64];
+                snprintf(msg, sizeof(msg),
+                         "OTA progress: %d%% (%d / %d bytes)", pct, read, img_size);
+                ws_server_broadcast_monitor("ota", msg);
+                last_pct = pct;
+            }
+            portENTER_CRITICAL(&s_status_mux);
+            s_status.progress_pct = (uint8_t)pct;
+            portEXIT_CRITICAL(&s_status_mux);
+        }
     }
     if (ret != ESP_OK) {
         char msg[80];
@@ -109,21 +200,26 @@ esp_err_t ota_update_from_url(const char *url)
         ESP_LOGE(TAG, "%s", msg);
         ws_server_broadcast_monitor("ota", msg);
         esp_https_ota_abort(ota_handle);
+        status_set(OTA_STATE_ERROR, 0, NULL, msg);
         led_indicator_set(LED_ERROR);
         return ret;
     }
 
+    /* Step 6: Verify, commit, reboot */
+    status_set(OTA_STATE_VERIFYING, 100, NULL, NULL);
     ret = esp_https_ota_finish(ota_handle);
     if (ret == ESP_OK) {
-        ws_server_broadcast_monitor("ota", "OTA complete — rebooting...");
+        status_set(OTA_STATE_REBOOTING, 100, NULL, NULL);
+        ws_server_broadcast_monitor("ota", "OTA complete - rebooting in 3s...");
         ESP_LOGI(TAG, "OTA successful, restarting");
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(3000));
         esp_restart();
     } else {
         char msg[80];
         snprintf(msg, sizeof(msg), "OTA finish failed: %s", esp_err_to_name(ret));
         ESP_LOGE(TAG, "%s", msg);
         ws_server_broadcast_monitor("ota", msg);
+        status_set(OTA_STATE_ERROR, 0, NULL, msg);
         led_indicator_set(LED_ERROR);
     }
 
@@ -132,12 +228,15 @@ esp_err_t ota_update_from_url(const char *url)
 
 /* ── Async task wrapper ──────────────────────────────────────────── */
 
-static char s_ota_url[256];
-
 static void ota_task(void *arg)
 {
     (void)arg;
-    ota_update_from_url(s_ota_url);
+    esp_err_t ret = ota_update_from_url(s_ota_url);
+    if (ret != ESP_OK) {
+        /* Hold ERROR state for 10s so clients can read it before it clears */
+        vTaskDelay(pdMS_TO_TICKS(10000));
+        status_set(OTA_STATE_IDLE, 0, NULL, NULL);
+    }
     s_ota_running = false;
     vTaskDelete(NULL);
 }
@@ -153,10 +252,13 @@ esp_err_t ota_start_async(const char *url)
     strncpy(s_ota_url, url, sizeof(s_ota_url) - 1);
     s_ota_url[sizeof(s_ota_url) - 1] = '\0';
 
+    /* Clear any previous error state before launching */
+    status_set(OTA_STATE_PENDING, 0, NULL, NULL);
     s_ota_running = true;
     BaseType_t ret = xTaskCreate(ota_task, "ota_update", 14 * 1024, NULL, 5, NULL);
     if (ret != pdPASS) {
         s_ota_running = false;
+        status_set(OTA_STATE_IDLE, 0, NULL, NULL);
         ws_server_broadcast_monitor("ota", "OTA task create failed (OOM)");
         return ESP_ERR_NO_MEM;
     }

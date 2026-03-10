@@ -19,7 +19,7 @@ smtp_host: smtp.gmail.com
 smtp_port: 465
 username: you@gmail.com
 password: xxxx xxxx xxxx xxxx
-from_address: C6PO <you@gmail.com>
+from_address: Lango <you@gmail.com>
 to_address: you@gmail.com
 
 ## Notes

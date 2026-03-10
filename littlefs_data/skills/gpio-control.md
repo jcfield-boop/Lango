@@ -41,7 +41,7 @@ Safe for general use: 0–7, 10–17, 22
 ```
 
 ## Named pins (from SERVICES.md)
-If a `## GPIO` section exists in /spiffs/config/SERVICES.md, refer to pins by name
+If a `## GPIO` section exists in /lfs/config/SERVICES.md, refer to pins by name
 instead of number. Example:
 ```
 ## GPIO

@@ -60,7 +60,12 @@ trap 'echo "==> Stopping HTTP server (pid $SERVER_PID)"; kill $SERVER_PID 2>/dev
 
 sleep 0.5  # give server time to start
 
-# ── 4. Trigger OTA ─────────────────────────────────────────────────
+# ── 4. Snapshot pre-OTA uptime (to detect genuine reboot) ──────────
+PRE_UPTIME=$(curl -sk --connect-timeout 5 "https://$DEVICE_HOST/api/sysinfo" \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['uptime_s'])" 2>/dev/null || echo "0")
+echo "==> Pre-OTA uptime: ${PRE_UPTIME}s"
+
+# ── 5. Trigger OTA ─────────────────────────────────────────────────
 echo "==> Triggering OTA on https://$DEVICE_HOST/api/ota"
 
 AUTH_ARGS=()
@@ -82,15 +87,48 @@ if ! echo "$RESPONSE" | grep -q '"ok":true'; then
     exit 1
 fi
 
-# ── 5. Wait for download to complete, then reboot ───────────────────
-echo "==> OTA started. Waiting for device to download (~$((BINARY_SIZE / 50000))s)..."
-sleep $((BINARY_SIZE / 50000 + 10))   # rough: ~50 KB/s on local WiFi + margin
+# ── 6. Poll /api/ota/status until rebooting, then confirm comeback ──
+# Account for: up to 30s agent-idle wait + download + 3s reboot grace
+MAX_WAIT=$((BINARY_SIZE / 50000 + 50))   # rough: ~50 KB/s + agent wait + margin
+echo "==> Polling OTA status (up to ${MAX_WAIT}s)..."
 
+REBOOTING=0
+for i in $(seq 1 $((MAX_WAIT / 2))); do
+    STATUS=$(curl -sk --connect-timeout 3 "https://$DEVICE_HOST/api/ota/status" \
+        | python3 -c "import sys,json; print(json.load(sys.stdin).get('state','?'))" 2>/dev/null || echo "unreachable")
+    PCT=$(curl -sk --connect-timeout 3 "https://$DEVICE_HOST/api/ota/status" \
+        | python3 -c "import sys,json; print(json.load(sys.stdin).get('progress_pct',0))" 2>/dev/null || echo "0")
+    printf "\r    status=%-12s pct=%3s%%  " "$STATUS" "$PCT"
+    if [ "$STATUS" = "rebooting" ]; then
+        REBOOTING=1
+        echo ""
+        echo "==> Device entering reboot..."
+        break
+    fi
+    if [ "$STATUS" = "error" ]; then
+        ERR=$(curl -sk --connect-timeout 3 "https://$DEVICE_HOST/api/ota/status" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin).get('error_msg','unknown'))" 2>/dev/null || echo "unknown")
+        echo ""
+        echo "ERROR: OTA failed on device: $ERR" >&2
+        exit 1
+    fi
+    sleep 2
+done
+echo ""
+
+if [ "$REBOOTING" = "0" ]; then
+    echo "WARNING: OTA did not reach rebooting state within ${MAX_WAIT}s — check serial console" >&2
+    exit 1
+fi
+
+# ── 7. Wait for device to come back with lower uptime ───────────────
 echo "==> Waiting for device to reboot and come back online..."
 for i in $(seq 1 40); do
-    if curl -ks --connect-timeout 2 "https://$DEVICE_HOST/health" >/dev/null 2>&1; then
+    NEW_UPTIME=$(curl -sk --connect-timeout 2 "https://$DEVICE_HOST/api/sysinfo" \
+        | python3 -c "import sys,json; print(json.load(sys.stdin)['uptime_s'])" 2>/dev/null || echo "-1")
+    if [ "$NEW_UPTIME" -ge 0 ] && [ "$NEW_UPTIME" -lt "$PRE_UPTIME" ] 2>/dev/null; then
         echo ""
-        echo "==> Device is back online! OTA complete."
+        echo "==> Device is back online (uptime=${NEW_UPTIME}s). OTA complete."
         exit 0
     fi
     printf "."

@@ -1,7 +1,7 @@
 # Cron Info Skill
 
 ## Purpose
-Display all scheduled recurring tasks (cron jobs) that C6PO will perform for you automatically.
+Display all scheduled recurring tasks (cron jobs) that Lango will perform for you automatically.
 
 ## Usage
 Ask me:

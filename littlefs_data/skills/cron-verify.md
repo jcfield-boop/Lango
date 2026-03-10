@@ -19,7 +19,7 @@ When the user asks to "verify cron", "test cron firing", "check cron timing", or
    - message: "cron-verify: CANARY {T_start}" (replace {T_start} with actual epoch number)
 3. Call cron_list and confirm the job appears. Note the job_id.
 4. Call write_file:
-   - path: /spiffs/memory/cron-verify.md
+   - path: /lfs/memory/cron-verify.md
    - content:
      ```
      # Cron Verify State
@@ -36,8 +36,8 @@ When the user asks to "verify cron", "test cron firing", "check cron timing", or
 
 ## Part 2: Check (run 2+ minutes after setup)
 
-1. Call read_file on /spiffs/memory/cron-verify.md to get job_id and expected_fire.
-2. Call search_files with pattern "CANARY" and prefix /spiffs/memory/ to look for the
+1. Call read_file on /lfs/memory/cron-verify.md to get job_id and expected_fire.
+2. Call search_files with pattern "CANARY" and prefix /lfs/memory/ to look for the
    fired message in the daily note.
 3. Call get_current_time to get current epoch T_now.
 
@@ -56,7 +56,7 @@ When the user asks to "verify cron", "test cron firing", "check cron timing", or
 - If job is gone but not logged, note "job fired but message was not processed"
 
 ### Cleanup:
-Call write_file on /spiffs/memory/cron-verify.md with content "# Cron Verify\ncleared\n"
+Call write_file on /lfs/memory/cron-verify.md with content "# Cron Verify\ncleared\n"
 to reset state.
 
 ---

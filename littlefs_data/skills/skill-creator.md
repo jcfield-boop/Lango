@@ -1,6 +1,6 @@
 # Skill Creator
 
-Create new skills for C6PO.
+Create new skills for Lango.
 
 ## When to use
 When the user asks to create a new skill, teach the bot something, or add a new capability.
@@ -13,7 +13,7 @@ When the user asks to create a new skill, teach the bot something, or add a new 
    - `## When to use` — trigger conditions
    - `## How to use` — step-by-step instructions
    - `## Example` — concrete example (optional but helpful)
-3. Save to `/spiffs/skills/<name>.md` using write_file
+3. Save to `/lfs/skills/<name>.md` using write_file
 4. The skill will be automatically available after the next conversation
 
 ## Best practices
@@ -24,4 +24,4 @@ When the user asks to create a new skill, teach the bot something, or add a new 
 
 ## Example
 To create a "translate" skill:
-write_file path="/spiffs/skills/translate.md" content="# Translate\n\nTranslate text between languages.\n\n## When to use\nWhen the user asks to translate text.\n\n## How to use\n1. Identify source and target languages\n2. Translate directly using your language knowledge\n3. For specialized terms, use web_search to verify\n"
+write_file path="/lfs/skills/translate.md" content="# Translate\n\nTranslate text between languages.\n\n## When to use\nWhen the user asks to translate text.\n\n## How to use\n1. Identify source and target languages\n2. Translate directly using your language knowledge\n3. For specialized terms, use web_search to verify\n"

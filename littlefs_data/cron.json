@@ -1,0 +1,40 @@
+{
+  "jobs": [
+    {
+      "id": "brfng001",
+      "name": "Daily Morning Briefing",
+      "enabled": true,
+      "kind": "every",
+      "interval_s": 86400,
+      "next_run": 1773237900,
+      "last_run": 0,
+      "delete_after_run": false,
+      "channel": "websocket",
+      "message": "Run the daily briefing for James: ARM stock price, top tech news from HN and ARM newsroom RSS feeds, weather in San Francisco, and anything pending in memory. Be concise — 5-8 bullet points."
+    },
+    {
+      "id": "surf0002",
+      "name": "Saturday Surf Check",
+      "enabled": true,
+      "kind": "every",
+      "interval_s": 604800,
+      "next_run": 1773453600,
+      "last_run": 0,
+      "delete_after_run": false,
+      "channel": "websocket",
+      "message": "Check surf conditions at Pacifica/Lindamar beach for tomorrow Sunday. Use web_search to get the surf forecast. Then send a Telegram message to James with a brief Sunday surf report: wave height, wind, swell period, and whether it's worth going out."
+    },
+    {
+      "id": "wire0003",
+      "name": "Monday Wirecutter Deals",
+      "enabled": true,
+      "kind": "every",
+      "interval_s": 604800,
+      "next_run": 1773684000,
+      "last_run": 0,
+      "delete_after_run": false,
+      "channel": "websocket",
+      "message": "Use the wirecutter_deals skill: search Wirecutter for current top deals on consumer electronics, computing, audio/video, and smart home. Filter for items under $500. Send James an email summary of the top 5-7 deals with links."
+    }
+  ]
+}
