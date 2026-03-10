@@ -21,6 +21,7 @@
 #include "tools/tool_device_restart.h"
 #include "tools/tool_memory_read.h"
 #include "tools/tool_session.h"
+#include "tools/tool_noaa_buoy.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -501,6 +502,26 @@ esp_err_t tool_registry_init(void)
         .execute = tool_weather_execute,
     };
     register_tool(&wt);
+
+    /* Register noaa_buoy */
+    mimi_tool_t buoy = {
+        .name        = "noaa_buoy",
+        .description = "Fetch real-time ocean buoy data from NOAA NDBC — wave height, "
+                       "dominant swell period, swell direction, wind speed/direction, and water temp. "
+                       "No API key required. Use for surf condition checks at Pacifica/Lindamar. "
+                       "Default station 46012 = Point Reyes (NW of SF). "
+                       "Other useful stations: 46026 = SF Bar, 46013 = Bodega Bay. "
+                       "Pair with surf-forecast skill for a full GO/MAYBE/SKIP verdict.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"station\":{\"type\":\"string\","
+            "\"description\":\"NOAA NDBC station ID, e.g. \\\"46012\\\". "
+            "Omit to use default (46012 = Pt. Reyes).\"}"
+            "},\"required\":[]}",
+        .execute = tool_noaa_buoy_execute,
+    };
+    register_tool(&buoy);
 
     /* Register send_notification */
     mimi_tool_t nt = {

@@ -37,6 +37,7 @@ idf_component_register(
         "tools/tool_device_restart.c"
         "tools/tool_memory_read.c"
         "tools/tool_session.c"
+        "tools/tool_noaa_buoy.c"
         "rules/rule_engine.c"
         "skills/skill_loader.c"
         "ota/ota_manager.c"

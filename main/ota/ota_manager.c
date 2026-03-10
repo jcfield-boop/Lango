@@ -21,7 +21,7 @@ static const char *TAG = "ota";
 /* Minimum free internal heap before starting OTA.
  * Checked only after agent is idle — idle SRAM free is ~42KB.
  * 28KB guards against concurrent non-agent SRAM consumers and TLS handshake peak. */
-#define OTA_MIN_FREE_HEAP    (28 * 1024)
+#define OTA_MIN_FREE_HEAP    (20 * 1024)
 
 /* HTTP receive buffer for OTA download. */
 #define OTA_HTTP_BUF_SIZE    (16 * 1024)

@@ -15,11 +15,17 @@ Get a detailed surf forecast for Lindamar (Pacifica State Beach) and deliver a c
 - **Wind matters most**: onshore W/SW = blown out regardless of size
 
 ## How to fetch the forecast
-Try sources in this order until you get usable data:
-1. web_search "Pacifica Lindamar surf forecast [date]"
-2. web_search "surfline Pacifica State Beach forecast [date]"
-3. web_search "magic seaweed Pacifica forecast [date]"
-4. web_search "windy surf forecast Pacifica [date]"
+Use both sources and combine:
+
+**Step 1 — Real buoy data (always do this first, no API cost):**
+- `noaa_buoy` tool, station omitted (defaults to 46012 = Pt. Reyes)
+- This gives: wave height (ft), dominant period (s), swell direction, wind speed/direction, water temp
+- Note: buoy is ~30mi offshore NW of Pacifica — nearshore conditions often smaller by 20-30%
+
+**Step 2 — Forecast (for tomorrow/future days):**
+- Buoy data is current conditions only (not a forecast)
+- For tomorrow's prediction, do ONE web_search:
+  `web_search "Pacifica surf forecast [date]"` or `web_search "surfline Pacifica State Beach [date]"`
 
 Extract: wave face height (ft), swell period (s), swell direction, wind direction, wind speed (mph), tide info
 
