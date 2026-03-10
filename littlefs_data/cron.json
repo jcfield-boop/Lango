@@ -35,6 +35,18 @@
       "delete_after_run": false,
       "channel": "websocket",
       "message": "Use the wirecutter_deals skill: search Wirecutter for current top deals on consumer electronics, computing, audio/video, and smart home. Filter for items under $500. Send James an email summary of the top 5-7 deals with links."
+    },
+    {
+      "id": "148f0222",
+      "name": "France Trip Prep Reminder",
+      "enabled": true,
+      "kind": "at",
+      "at_epoch": 1780930000,
+      "next_run": 1780930000,
+      "last_run": 0,
+      "delete_after_run": true,
+      "channel": "websocket",
+      "message": "Travel prep reminder: France trip is in 7 days (June 14). Tasks: cancel SF Chronicle newspapers, suspend USPS mail at usps.com/manage/hold-mail.htm, notify bank/credit card of travel to France, check passport expiry (must be valid past Dec 2026). Send James a Telegram message with the checklist."
     }
   ]
 }

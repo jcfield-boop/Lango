@@ -178,6 +178,20 @@ textarea:focus{border-color:#555}
       <span id="cfg-status"></span>
     </div>
     <p style="color:#555;font-size:0.75rem">Keys stored in NVS, survive firmware updates. Masked values (****) shown for existing keys — leave unchanged to keep the current key.</p>
+    <hr style="border:none;border-top:1px solid #333;margin:8px 0">
+    <div class="field">
+      <label>Firmware Update URL</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="ota-url" type="text" placeholder="http://192.168.x.x:8765/langoustine.bin" maxlength="256" style="flex:1">
+        <button id="ota-btn" onclick="doOTA()">&#x21AF; Flash OTA</button>
+      </div>
+    </div>
+    <div id="ota-progress" style="display:none;flex-direction:column;gap:4px">
+      <div style="background:#333;border-radius:3px;height:6px;overflow:hidden">
+        <div id="ota-bar" style="background:#7ec8e3;height:100%;width:0;transition:width 0.4s"></div>
+      </div>
+      <span id="ota-msg" style="font-size:0.78rem;color:#aaa"></span>
+    </div>
   </div>
 </div>
 <script>
@@ -472,6 +486,59 @@ function sendMsg(){
   ws.send(JSON.stringify({type:'prompt',content:text,chat_id:'ws_console'}));
   addLog('msg','[you] '+text);
   input.value='';
+}
+
+/* ── OTA Update ── */
+var otaPollTimer=null;
+function doOTA(){
+  var url=document.getElementById('ota-url').value.trim();
+  if(!url){alert('Enter a firmware binary URL first.');return;}
+  if(!confirm('Flash firmware from:\n'+url+'\n\nDevice will reboot after flashing.')) return;
+  document.getElementById('ota-btn').disabled=true;
+  document.getElementById('ota-progress').style.display='flex';
+  document.getElementById('ota-bar').style.width='0';
+  setOtaMsg('aaa','Starting OTA...');
+  fetch('/api/ota',{method:'POST',body:JSON.stringify({url:url}),headers:{'Content-Type':'application/json'}})
+  .then(function(r){return r.json()})
+  .then(function(j){
+    if(!j.ok){setOtaDone('err','OTA failed: '+(j.error||'unknown'));return;}
+    pollOtaStatus();
+  }).catch(function(e){setOtaDone('err','Request failed: '+e.message);});
+}
+function pollOtaStatus(){
+  if(otaPollTimer){clearTimeout(otaPollTimer);otaPollTimer=null;}
+  fetch('/api/ota/status')
+  .then(function(r){return r.json()})
+  .then(function(d){
+    var pct=d.progress_pct||0;
+    var labels={idle:'Idle',pending:'Waiting for agent to finish...',
+      downloading:'Downloading '+pct+'%'+(d.new_version?' \u2192 v'+d.new_version:''),
+      verifying:'Verifying image...',rebooting:'Rebooting\u2026',error:'Error'};
+    var label=labels[d.state]||d.state;
+    if(d.error_msg&&d.state==='error') label+=': '+d.error_msg;
+    document.getElementById('ota-bar').style.width=
+      d.state==='rebooting'?'100%':(d.state==='verifying'?'95%':pct+'%');
+    setOtaMsg('aaa',label);
+    if(d.state==='rebooting'){
+      addLog('err','OTA complete \u2014 device rebooting, reconnecting...');
+      setOtaDone('done','Flashed \u2713 Reconnecting...');
+    } else if(d.state==='error'){
+      setOtaDone('err','OTA error'+(d.error_msg?': '+d.error_msg:''));
+    } else if(d.state==='idle'&&document.getElementById('ota-btn').disabled){
+      setOtaDone('done','Done \u2713');
+    } else {
+      otaPollTimer=setTimeout(pollOtaStatus,1500);
+    }
+  }).catch(function(){otaPollTimer=setTimeout(pollOtaStatus,2000);});
+}
+function setOtaMsg(cls,msg){
+  var el=document.getElementById('ota-msg');
+  el.className=cls; el.textContent=msg;
+}
+function setOtaDone(cls,msg){
+  if(otaPollTimer){clearTimeout(otaPollTimer);otaPollTimer=null;}
+  setOtaMsg(cls,msg);
+  document.getElementById('ota-btn').disabled=false;
 }
 
 /* ── Heartbeat + Reboot ── */

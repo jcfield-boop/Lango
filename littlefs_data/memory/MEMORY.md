@@ -23,9 +23,14 @@
 - [2026-03-10] France holiday: June 14–21, 2026 (visiting Nikki)
 - [2026-03-10] Pre-trip reminders needed June 7: cancel newspapers, suspend mail
 
-## Tech Events 2026
-- [2026-03-10] Exact 2026 dates for GTC, Microsoft Build, Google I/O, Computex not yet confirmed — need web_search to resolve
+## Tech Events 2026 (confirmed)
+- [2026-03-10] NVIDIA GTC: Mar 16–19, San Jose
+- [2026-03-10] Google I/O: May 19–20, Shoreline Amphitheatre
+- [2026-03-10] Microsoft Build: Jun 2–3, Fort Mason SF
+- [2026-03-10] Computex: Jun 2–5, Taipei (overlaps with Build — James staying in SF)
 
 ## System
-- [2026-03-10] Daily briefing cron scheduled (websocket channel, 6:05 AM) — trigger: trigger:daily-briefing-scheduler
-- [2026-03-10] Lango is an ESP32-S3 device; all paths use /lfs/ not /spiffs/
+- [2026-03-10] Daily briefing cron: id=brfng001, 6:05 AM PST daily (websocket channel)
+- [2026-03-10] Surf check cron: id=surf0002, Saturday 6 PM, sends Telegram forecast for Sunday
+- [2026-03-10] France trip prep cron: id=148f0222, fires June 7 2026 at 6:05 AM PST (delete_after_run)
+- [2026-03-10] Lango is an ESP32-S3 device; all file paths use /lfs/ not /spiffs/

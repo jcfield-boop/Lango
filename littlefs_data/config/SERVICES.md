@@ -1,9 +1,9 @@
 ## Email
 smtp_host: smtp.gmail.com
-smpt_port: 587
-username:jcfield@gmail.com
-password:hojz bhqv mzxj hffd
-from_address:jcfield+C6PO@gmail.com
+smtp_port: 587
+username: jcfield@gmail.com
+password: hojz bhqv mzxj hffd
+from_address: Lango <jcfield@gmail.com>
 to_address: jfield@me.com
 
 ## Home Assistant
