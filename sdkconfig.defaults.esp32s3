@@ -34,8 +34,10 @@ CONFIG_HTTPD_WS_SUPPORT=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_s3_32mb.csv"
 
-# Watchdog: 30s to cover slow LLM + TTS API calls
-CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
+# Watchdog: 60s to cover slow LLM + TTS API calls + parallel tool HTTPS requests.
+# Previously 30s — tool wait timeout was 60s, causing WDT to fire before agent could recover.
+# Tool wait timeout is now 25s, so WDT at 60s gives a clean safety net.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=60
 
 # LittleFS: longer filename support
 CONFIG_LITTLEFS_OBJ_NAME_LEN=64
@@ -83,7 +85,12 @@ CONFIG_SR_WN_WN9_HIESP=y
 # at default 2304-byte stack; keep default -Os optimization instead.
 # Heap corruption detection: catches double-free at ~10% overhead; clears on fix
 CONFIG_HEAP_CORRUPTION_DETECTION_BASIC=y
+# Stack overflow: canary value written at bottom of each task stack; checked on context switch.
+# Catches overflow before it silently corrupts adjacent heap memory.
+CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
 # Allow FreeRTOS task stacks to be allocated from PSRAM (S3 has 16MB — use it)
+# NOTE: tool_par tasks MUST use SRAM stacks (xTaskCreate default) — any task that
+# calls LittleFS/NVS cannot use a PSRAM stack (cache-disable assertion in esp_flash).
 CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
 
 # Verbose logging — all ESP_LOGD() visible

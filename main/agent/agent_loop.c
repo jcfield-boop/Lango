@@ -182,7 +182,9 @@ static cJSON *build_tool_results(const llm_response_t *resp, const mimi_msg_t *m
     cJSON *content = cJSON_CreateArray();
     int n = resp->call_count;
 
-    /* Parallel path: run independent tool calls concurrently */
+    /* Parallel path: run independent tool calls concurrently.
+     * Guard: each task needs ~16KB SRAM stack + ~12KB TLS heap headroom.
+     * If free SRAM is insufficient, fall through to the sequential path. */
     if (n > 1) {
         tool_exec_ctx_t ctxs[LANG_MAX_TOOL_CALLS];
         char *patched[LANG_MAX_TOOL_CALLS];
@@ -190,14 +192,29 @@ static cJSON *build_tool_results(const llm_response_t *resp, const mimi_msg_t *m
         int tasks_spawned = 0;
         TaskHandle_t self = xTaskGetCurrentTaskHandle();
 
+        /* SRAM guard: (16KB stack + 12KB TLS) per task + 28KB safety floor */
+        uint32_t free_sram = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        uint32_t par_needed = (uint32_t)n * (16384u + 12288u) + 28672u;
+        if (free_sram < par_needed) {
+            char wmsg[96];
+            snprintf(wmsg, sizeof(wmsg),
+                     "tool par: SRAM %lu B < %lu needed — sequential fallback",
+                     (unsigned long)free_sram, (unsigned long)par_needed);
+            ESP_LOGW(TAG, "%s", wmsg);
+            ws_server_broadcast_monitor("task", wmsg);
+            all_alloc = false;  /* skip parallel, drop into sequential below */
+        }
+
         memset(ctxs,    0, n * sizeof(tool_exec_ctx_t));
         memset(patched, 0, n * sizeof(char *));
 
-        /* Allocate per-call PSRAM output buffers */
+        /* Allocate per-call PSRAM output buffers (only if SRAM guard passed) */
+        if (all_alloc) {
         for (int i = 0; i < n; i++) {
             ctxs[i].output = ps_malloc(TOOL_OUTPUT_SIZE);
             if (!ctxs[i].output) { all_alloc = false; break; }
             ctxs[i].output[0] = '\0';
+        }
         }
 
         if (all_alloc) {
@@ -227,9 +244,12 @@ static cJSON *build_tool_results(const llm_response_t *resp, const mimi_msg_t *m
                 }
             }
 
-            /* Wait for all spawned tasks */
+            /* Wait for all spawned tasks — 25s per task (below 30s WDT) */
             for (int i = 0; i < tasks_spawned; i++) {
-                ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(60000));
+                if (!ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(25000))) {
+                    ESP_LOGW(TAG, "tool_par[%d] timed out after 25s — proceeding with empty result", i);
+                    ws_server_broadcast_monitor("error", "tool_par timeout (25s) — partial results");
+                }
             }
 
             /* Collect results in call order */
@@ -337,6 +357,19 @@ static void agent_loop_task(void *arg)
         atomic_store(&s_agent_busy, true);
         memory_tool_reset_turn();
         web_search_reset_turn();
+
+        /* Log SRAM headroom at turn start; warn if critically low */
+        {
+            uint32_t sram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            ESP_LOGI(TAG, "Turn start: SRAM free=%lu B", (unsigned long)sram_free);
+            if (sram_free < 28 * 1024) {
+                char wmsg[72];
+                snprintf(wmsg, sizeof(wmsg), "SRAM low at turn start: %lu B — risk of OOM",
+                         (unsigned long)sram_free);
+                ESP_LOGW(TAG, "%s", wmsg);
+                ws_server_broadcast_monitor("system", wmsg);
+            }
+        }
 
         ESP_LOGI(TAG, "Processing message from %s:%s", msg.channel, msg.chat_id);
         {
