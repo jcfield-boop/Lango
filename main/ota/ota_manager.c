@@ -18,8 +18,9 @@
 static const char *TAG = "ota";
 
 /* Minimum free internal heap before starting OTA.
- * TLS handshake peaks at ~40 KB; 44 KB gives headroom on S3 with PSRAM. */
-#define OTA_MIN_FREE_HEAP   (44 * 1024)
+ * TLS handshake on S3 with PSRAM offloading peaks at ~28 KB; 28 KB allows
+ * OTA to proceed when the agent is active (~34 KB observed minimum). */
+#define OTA_MIN_FREE_HEAP   (28 * 1024)
 
 /* HTTP receive buffer for OTA download.
  * S3 has 16MB PSRAM — use a larger buffer for faster downloads. */
@@ -153,7 +154,7 @@ esp_err_t ota_start_async(const char *url)
     s_ota_url[sizeof(s_ota_url) - 1] = '\0';
 
     s_ota_running = true;
-    BaseType_t ret = xTaskCreate(ota_task, "ota_update", 10 * 1024, NULL, 5, NULL);
+    BaseType_t ret = xTaskCreate(ota_task, "ota_update", 14 * 1024, NULL, 5, NULL);
     if (ret != pdPASS) {
         s_ota_running = false;
         ws_server_broadcast_monitor("ota", "OTA task create failed (OOM)");

@@ -434,6 +434,15 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 
 ---
 
+## Changelog
+
+### 2026-03-10 — Stability: log_buffer PSRAM crash + OTA stack
+- **`main/diag/log_buffer.c`** — Ring buffer (`s_ring`) moved from PSRAM to SRAM (`heap_caps_malloc MALLOC_CAP_INTERNAL`). PSRAM is inaccessible while the MMU cache is disabled during OTA flash writes; the vprintf hook firing in that window caused a Data Load/Store Error panic. 8 KB from SRAM resolves this entirely.
+- **`main/diag/log_buffer.c`** — `volatile int s_busy` → `_Atomic int`; `log_buffer_get()` now snapshots `s_head`/`s_fill` under the atomic busy flag to prevent torn reads.
+- **`main/ota/ota_manager.c`** — OTA task stack increased 10 KB → 14 KB. mbedTLS TLS handshake peaks at ~10–12 KB; the previous limit was at the edge of a stack overflow.
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

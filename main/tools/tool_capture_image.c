@@ -48,7 +48,9 @@ static esp_err_t vision_http_event_cb(esp_http_client_event_t *evt)
 {
     resp_buf_t *rb = (resp_buf_t *)evt->user_data;
     if (evt->event_id == HTTP_EVENT_ON_DATA && rb) {
-        resp_append(rb, (const char *)evt->data, evt->data_len);
+        if (resp_append(rb, (const char *)evt->data, evt->data_len) != ESP_OK) {
+            ESP_LOGE(TAG, "resp_append OOM: %d bytes dropped (buf len=%u)", evt->data_len, (unsigned)rb->len);
+        }
     }
     return ESP_OK;
 }
@@ -273,7 +275,7 @@ esp_err_t tool_capture_image_execute(const char *input_json,
     }
 
     /* 8. Allocate response buffer */
-    resp_buf_t rb = { .data = ps_malloc(4096), .len = 0, .cap = 4096 };
+    resp_buf_t rb = { .data = ps_malloc(8192), .len = 0, .cap = 8192 };
     if (!rb.data) {
         free(body);
         snprintf(output, output_size, "Error: out of memory for response buffer");
@@ -286,6 +288,7 @@ esp_err_t tool_capture_image_execute(const char *input_json,
         .url               = api_url,
         .method            = HTTP_METHOD_POST,
         .timeout_ms        = 30000,
+        .buffer_size       = 4096,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .event_handler     = vision_http_event_cb,
         .user_data         = &rb,
@@ -320,7 +323,7 @@ esp_err_t tool_capture_image_execute(const char *input_json,
     free(body);
 
     if (err != ESP_OK || status != 200) {
-        ESP_LOGE(TAG, "Vision API HTTP %d: %.200s", status,
+        ESP_LOGE(TAG, "Vision API HTTP %d: %.400s", status,
                  rb.data[0] ? rb.data : "(no body)");
         /* Save error body to LittleFS so it can be fetched for debugging */
         if (rb.data[0]) {

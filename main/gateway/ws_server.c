@@ -32,6 +32,7 @@ extern const uint8_t s_server_key_end[]  asm("_binary_server_key_pem_end");
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "memory/psram_alloc.h"
+#include "diag/log_buffer.h"
 
 static const char *TAG = "ws";
 
@@ -1319,6 +1320,20 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── GET /api/logs ───────────────────────────────────────────── */
+
+static esp_err_t logs_handler(httpd_req_t *req)
+{
+    char *buf = ps_malloc(LOG_RING_SIZE + 64);
+    if (!buf) { httpd_resp_send_500(req); return ESP_OK; }
+    log_buffer_get(buf, LOG_RING_SIZE + 64);
+    httpd_resp_set_type(req, "text/plain");
+    apply_cors(req);
+    httpd_resp_sendstr(req, buf);
+    free(buf);
+    return ESP_OK;
+}
+
 /* ── Public API ──────────────────────────────────────────────── */
 
 esp_err_t ws_server_start(void)
@@ -1450,6 +1465,10 @@ esp_err_t ws_server_start(void)
     /* Sysinfo */
     httpd_uri_t sysinfo_uri = { .uri = "/api/sysinfo", .method = HTTP_GET, .handler = sysinfo_handler };
     httpd_register_uri_handler(s_server, &sysinfo_uri);
+
+    /* Log ring buffer */
+    httpd_uri_t logs_uri = { .uri = "/api/logs", .method = HTTP_GET, .handler = logs_handler };
+    httpd_register_uri_handler(s_server, &logs_uri);
 
     /* Config */
     httpd_uri_t config_get_uri = { .uri = "/api/config", .method = HTTP_GET, .handler = config_get_handler };

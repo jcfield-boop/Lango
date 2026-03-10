@@ -40,6 +40,7 @@
 #include "audio/uac_microphone.h"
 #include "camera/uvc_camera.h"
 #include "led/led_indicator.h"
+#include "diag/log_buffer.h"
 #include "mdns.h"
 #include "esp_ota_ops.h"
 
@@ -229,6 +230,9 @@ void app_main(void)
 
     /* LED: init early so it shows booting state immediately */
     led_indicator_init();
+
+    /* Log ring buffer: captures ESP_LOG output for remote retrieval via /api/logs */
+    log_buffer_init();
 
     ESP_ERROR_CHECK(init_littlefs());
     bootstrap_dirs();
