@@ -1,0 +1,15 @@
+## Email
+smtp_host: smtp.gmail.com
+smtp_port: 587
+username: you@gmail.com
+password: xxxx xxxx xxxx xxxx
+from_address: Lango <you@gmail.com>
+to_address: you@example.com
+
+## Home Assistant
+ha_url: http://192.168.x.x:8123
+ha_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+## Klipper / Moonraker
+moonraker_url: http://192.168.x.x:7125
+moonraker_apikey:

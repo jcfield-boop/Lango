@@ -6,6 +6,7 @@ sdkconfig.old
 # Secrets — NEVER commit
 main/langoustine_secrets.h
 main/langoustine_secrets.h.bak
+littlefs_data/config/SERVICES.md
 
 # Datasheets / docs dropped in project root
 *.pdf
