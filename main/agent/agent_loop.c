@@ -610,13 +610,23 @@ static void agent_loop_task(void *arg)
                 led_indicator_set(LED_SPEAKING);
                 ws_server_send_status(msg.chat_id, "tts_generating");
                 char tts_id[9] = {0};
-                /* Limit TTS to first ~80 chars to keep WAV < ~200KB on USB-powered supplies.
+                /* Limit TTS to first sentence (or ~200 chars) to keep WAV manageable.
+                 * Truncate at the last sentence boundary (. ! ?) within the limit.
                  * Full text is still sent to the browser for display. */
-                char tts_buf[81];
+                #define TTS_MAX_CHARS 200
+                char tts_buf[TTS_MAX_CHARS + 1];
                 const char *tts_text = final_text;
-                if (strlen(final_text) > 80) {
-                    strncpy(tts_buf, final_text, 80);
-                    tts_buf[80] = '\0';
+                if (strlen(final_text) > TTS_MAX_CHARS) {
+                    strncpy(tts_buf, final_text, TTS_MAX_CHARS);
+                    tts_buf[TTS_MAX_CHARS] = '\0';
+                    /* Walk back to last sentence-ending punctuation */
+                    int cut = TTS_MAX_CHARS - 1;
+                    while (cut > 40) {
+                        char c = tts_buf[cut];
+                        if (c == '.' || c == '!' || c == '?') { cut++; break; }
+                        cut--;
+                    }
+                    tts_buf[cut] = '\0';
                     tts_text = tts_buf;
                 }
                 esp_err_t tts_err = tts_generate(tts_text, tts_id);

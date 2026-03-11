@@ -18,6 +18,8 @@
 #include "langoustine_config.h"
 #include "bus/message_bus.h"
 #include "wifi/wifi_manager.h"
+#include "memory/psram_alloc.h"
+#include "cJSON.h"
 #include "llm/llm_proxy.h"
 #include "agent/agent_loop.h"
 #include "memory/memory_store.h"
@@ -197,6 +199,15 @@ static void outbound_dispatch_task(void *arg)
 
 void app_main(void)
 {
+    /* Route ALL cJSON allocations to PSRAM.
+     * cJSON creates many small nodes (title, content strings, array entries)
+     * which each fall below the 4KB SPIRAM_MALLOC_ALWAYSINTERNAL threshold and
+     * land in SRAM by default. Over a single large LLM turn (28K tokens = ~200+
+     * cJSON nodes for message history + tool results), SRAM drops 20-30KB.
+     * Redirecting to ps_malloc keeps SRAM stable regardless of context size. */
+    static const cJSON_Hooks cjson_psram = { .malloc_fn = ps_malloc, .free_fn = free };
+    cJSON_InitHooks((cJSON_Hooks *)&cjson_psram);
+
     /* Disable the hardware brownout detector.
      * CONFIG_ESP_BROWNOUT_DET=n does NOT clear RTC_CNTL_BROWN_OUT_ENA — that
      * bit's reset value is 1 (enabled at ~2.43 V), so the hardware BOD fires
@@ -296,8 +307,8 @@ void app_main(void)
             mdns_init();
             mdns_hostname_set("lango");
             mdns_instance_name_set("Langoustine AI Assistant");
-            mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
-            ESP_LOGI(TAG, "mDNS started: lango.local (also: langoustine.local via cert SAN)");
+            mdns_service_add(NULL, "_https", "_tcp", 443, NULL, 0);
+            ESP_LOGI(TAG, "mDNS started: lango.local port 443 (also: langoustine.local via cert SAN)");
 
             /* Sync system clock via SNTP.
              * Set build timestamp immediately as fallback; SNTP will silently

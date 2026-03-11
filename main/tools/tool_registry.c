@@ -206,7 +206,7 @@ esp_err_t tool_registry_init(void)
     /* Register device_temp */
     mimi_tool_t dt = {
         .name = "device_temp",
-        .description = "Read the ESP32-C6 internal chip temperature in Celsius. Useful for device health monitoring.",
+        .description = "Read the ESP32-S3 internal chip temperature in Celsius. Useful for device health monitoring.",
         .input_schema_json = "{\"type\":\"object\",\"properties\":{},\"required\":[]}",
         .execute = tool_device_temp_execute,
     };
