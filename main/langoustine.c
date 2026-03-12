@@ -64,6 +64,71 @@ static void set_time_from_build(void)
     }
 }
 
+/* Write a crash entry to /lfs/memory/crashlog.md if the last reset was abnormal.
+ * Called after LittleFS is mounted and bootstrap_dirs() has run.
+ * Uses the build timestamp as a minimum clock since NTP is not yet synced. */
+#define CRASHLOG_PATH     LANG_LFS_MEMORY_DIR "/crashlog.md"
+#define CRASHLOG_MAX_BYTES 4096
+
+static void log_crash_if_needed(void)
+{
+    esp_reset_reason_t reason = esp_reset_reason();
+    const char *reason_str;
+    switch (reason) {
+        case ESP_RST_PANIC:    reason_str = "panic";     break;
+        case ESP_RST_INT_WDT:  reason_str = "int_wdt";   break;
+        case ESP_RST_TASK_WDT: reason_str = "task_wdt";  break;
+        case ESP_RST_WDT:      reason_str = "wdt";        break;
+        case ESP_RST_BROWNOUT: reason_str = "brownout";   break;
+        default:               return;  /* Normal reset — nothing to log */
+    }
+
+    /* Set clock to build time (minimum timestamp; NTP will correct it later) */
+    set_time_from_build();
+    time_t now = time(NULL);
+    struct tm tm_info;
+    gmtime_r(&now, &tm_info);
+    char ts[32];
+    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M", &tm_info);
+
+    const esp_app_desc_t *desc = esp_app_get_description();
+
+    /* Trim file if it's grown too large */
+    struct stat st;
+    if (stat(CRASHLOG_PATH, &st) == 0 && (size_t)st.st_size > CRASHLOG_MAX_BYTES) {
+        FILE *tf = fopen(CRASHLOG_PATH, "w");
+        if (tf) {
+            fprintf(tf, "# Crash Log (trimmed at %s)\n\n", ts);
+            fprintf(tf, "| Timestamp (build-approx) | Reason | Firmware |\n");
+            fprintf(tf, "|---|---|---|\n");
+            fclose(tf);
+        }
+    }
+
+    /* Create file with header if it doesn't exist */
+    if (stat(CRASHLOG_PATH, &st) != 0) {
+        FILE *hf = fopen(CRASHLOG_PATH, "w");
+        if (hf) {
+            fprintf(hf, "# Crash Log\n\n");
+            fprintf(hf, "| Timestamp (build-approx) | Reason | Firmware |\n");
+            fprintf(hf, "|---|---|---|\n");
+            fclose(hf);
+        }
+    }
+
+    FILE *f = fopen(CRASHLOG_PATH, "a");
+    if (!f) {
+        ESP_LOGE(TAG, "crashlog: open failed");
+        return;
+    }
+    fprintf(f, "| %s | **%s** | v%s (%s %s) |\n",
+            ts, reason_str, desc->version, desc->date, desc->time);
+    fclose(f);
+
+    ESP_LOGW(TAG, "CRASH LOGGED: reason=%s firmware=v%s built=%s %s",
+             reason_str, desc->version, desc->date, desc->time);
+}
+
 static esp_err_t init_nvs(void)
 {
     esp_err_t ret = nvs_flash_init();
@@ -247,6 +312,7 @@ void app_main(void)
 
     ESP_ERROR_CHECK(init_littlefs());
     bootstrap_dirs();
+    log_crash_if_needed();  /* Must run after LittleFS mount + dirs exist */
     bootstrap_defaults();
 
     /* Audio pipeline (STT/TTS via Groq) — always required */

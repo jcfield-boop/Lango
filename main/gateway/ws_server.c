@@ -659,6 +659,7 @@ static const char *name_to_path(const char *name)
     if (name && strcmp(name, "cron")          == 0) return "/lfs/cron.json";
     if (name && strcmp(name, "console-index") == 0) return "/lfs/console/index.html";
     if (name && strcmp(name, "console-dev")   == 0) return "/lfs/console/dev.html";
+    if (name && strcmp(name, "crashlog")      == 0) return "/lfs/memory/crashlog.md";
     return NULL;
 }
 

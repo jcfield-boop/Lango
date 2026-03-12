@@ -93,6 +93,13 @@ CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
 # calls LittleFS/NVS cannot use a PSRAM stack (cache-disable assertion in esp_flash).
 CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
 
+# Coredump to flash: writes ELF coredump to the 64KB coredump partition on panic.
+# Retrieve with: python -m esp_coredump -p /dev/cu.usbserial-* info_corefile build/langoustine.elf
+# Partition: 0x820000 (64KB) — enough for task stacks + register state.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+
 # Verbose logging — all ESP_LOGD() visible
 CONFIG_LOG_DEFAULT_LEVEL_DEBUG=y
 CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
