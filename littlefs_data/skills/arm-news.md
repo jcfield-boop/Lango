@@ -21,14 +21,14 @@ Weekly scan for Arm and competitive ecosystem news relevant to James's Product M
 - **PC OEMs** — HP, Dell, Lenovo Arm laptop/Chromebook announcements
 
 ## How to use
-1. Call get_current_time for current week context
+1. Note the current date and month from your system context
 2. Arm newsroom RSS first (free, no API credits):
    - rss_fetch https://newsroom.arm.com/rss max_items=5
 3. Competitive queries (use web_search, be efficient — max 4 calls):
-   - web_search "Qualcomm Snapdragon PC Chromebook announcement [current month] 2026"
-   - web_search "MediaTek Dimensity Chromebook [current month] 2026"
+   - web_search "Qualcomm Snapdragon PC Chromebook announcement [current month] [current year]"
+   - web_search "MediaTek Dimensity Chromebook [current month] [current year]"
    - web_search "Windows on Arm Copilot+ PC news [current week]"
-   - web_search "Google Chromebook Arm announcement [current month] 2026"
+   - web_search "Google Chromebook Arm announcement [current month] [current year]"
 4. Filter ruthlessly — skip consumer mobile-only news, focus on PC/Chromebook/AI/infrastructure
 5. Compile 5–8 bullets max, prioritized by relevance to Arm's PC/Chromebook business
 6. Send via Telegram
