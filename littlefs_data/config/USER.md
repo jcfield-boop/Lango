@@ -25,7 +25,6 @@
 
 ### Tech Events to Track
 - **Conference reminders needed:** GTC, Microsoft Build, Google I/O, Computex, IFA (September), PCOEM private events (HP, Dell, Lenovo)
-- Need to search for exact dates
 
 ## Context
 - Arm segments: PC & Chromebook are strategic focus (revenue priorities)
@@ -43,8 +42,11 @@
 ## Tech Events Calendar
 
 ### 2026 Upcoming
-- *GTC, Microsoft Build, Google I/O, Computex March, April and June for 2026*
-- **IFA Berlin 2026:** Expected September (Berlin)
+- **GTC:** March 16–19 (San Jose — no travel)
+- **Google I/O:** May 19–20 (Mountain View — no travel)
+- **Microsoft Build:** June 2–3 (Seattle — travel required)
+- **Computex:** June 2–5 (Taipei — overlaps Build; travel TBD)
+- **IFA Berlin:** Expected September (Berlin — travel required)
 - **PC OEM Private Events:** HP, Dell, Lenovo (TBD—user to add as needed)
 
 ### 2025 (Past)

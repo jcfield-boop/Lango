@@ -17,10 +17,11 @@ Also useful as a heartbeat/cron task.
    - Use web_search only for topics with no suitable feed, or for weather/stock queries
 5. Compile a concise briefing covering:
    - Date and time
-   - Weather (if location known from /lfs/config/USER.md — use web_search)
-   - Top news/updates from feeds above, filtered to user interests
+   - Weather in San Francisco (use web_search "SF weather today")
+   - Market snapshot (use one web_search): ARM stock price, NASDAQ, GBP/USD rate
+   - Top news/updates from feeds above, filtered to ARM/PC/Chromebook interests
+   - Event countdown: run event-countdown skill if any tech event is within 14 days
    - Any pending tasks from memory
-   - Any scheduled cron jobs
 6. Before responding: call write_file with append=true to log to today's daily note
    at /lfs/memory/<YYYY-MM-DD>.md (use the date from step 1).
    Content: "## Daily Briefing\n- <one sentence summary of key topics covered>\n"
