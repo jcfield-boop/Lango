@@ -38,6 +38,7 @@ header h1{font-size:1rem;color:#7ec8e3;font-weight:600;white-space:nowrap}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
 .tts-play{background:#1e1e1e;border:1px solid #3a3a3a;border-radius:12px;color:#888;cursor:pointer;font-size:0.75rem;padding:2px 10px;margin-top:3px}
 .tts-play:hover{color:#b07ee3;border-color:#b07ee3}
+.bubble-ts{display:block;font-size:0.68rem;color:#444;margin-top:4px;text-align:right;user-select:none}
 .capture-img{max-width:100%;border-radius:8px;margin-top:6px;border:1px solid #333;display:block;cursor:pointer}
 .capture-img:hover{border-color:#555}
 #error-bar{background:#5a1f1f;color:#ffaaaa;font-size:0.78rem;padding:5px 14px;flex-shrink:0;display:none}
@@ -200,7 +201,7 @@ input:focus{border-color:#555}
 /* ── Globals ── */
 var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 var chatId = 'ws_' + Math.floor(Math.random() * 99999);
-var ws, reconnectTimer, wsEverConnected = false;
+var ws, reconnectTimer, wsEverConnected = false, rebootPending = false, rebootPollTimer = null;
 var dot = document.getElementById('ws-dot');
 var statusBadge = document.getElementById('status-badge');
 var transcript = document.getElementById('transcript');
@@ -226,8 +227,14 @@ function connect() {
   ws.onopen = function() { dot.className = 'on'; setStatus('idle'); wsEverConnected = true; addLog('ws', 'Connected'); };
   ws.onclose = function() {
     dot.className = 'err'; setStatus('offline');
-    addLog('err', wsEverConnected ? 'Disconnected — retry 4s' : 'Connecting — retry 4s');
-    reconnectTimer = setTimeout(connect, 4000);
+    if (rebootPending) {
+      addLog('ws', 'Rebooting \u2014 polling for restart\u2026');
+      clearTimeout(reconnectTimer);
+      rebootPollTimer = setTimeout(pollForReboot, 3000);
+    } else {
+      addLog('err', wsEverConnected ? 'Disconnected — retry 4s' : 'Connecting — retry 4s');
+      reconnectTimer = setTimeout(connect, 4000);
+    }
   };
   ws.onerror = function() {};
   ws.onmessage = function(ev) {
@@ -251,6 +258,14 @@ function connect() {
 }
 setInterval(function() { if (ws && ws.readyState === 1) try { ws.send('{"type":"ping"}'); } catch(e) {} }, 25000);
 
+/* ── Reboot auto-reconnect ── */
+function pollForReboot() {
+  fetch('/api/sysinfo').then(function(r) { return r.json(); }).then(function(d) {
+    if ((d.uptime_s || 9999) < 60) { clearTimeout(rebootPollTimer); location.reload(); }
+    else { rebootPollTimer = setTimeout(pollForReboot, 2000); }
+  }).catch(function() { rebootPollTimer = setTimeout(pollForReboot, 2000); });
+}
+
 /* ── Status ── */
 function setStatus(s) {
   var L = { idle:'idle', recording:'recording…', stt_processing:'transcribing…',
@@ -271,7 +286,7 @@ function addUserBubble(text) {
   streamBubble = null;
   var row = document.createElement('div');
   row.className = 'msg-row user';
-  row.innerHTML = '<div class="bubble">' + esc(text) + '</div>';
+  row.innerHTML = '<div class="bubble">' + esc(text) + '<span class="bubble-ts">' + bubbleTs() + '</span></div>';
   transcript.appendChild(row);
   transcript.scrollTop = transcript.scrollHeight;
 }
@@ -300,21 +315,26 @@ function handleToken(delta) {
 function handleMessage(text, ttsId, imageUrl) {
   streamingLogged = false;
   addLog('msg', '[resp] ' + text.substring(0, 120));
-  var row;
+  var row, bubble;
   if (streamBubble) {
     streamBubble.className = 'bubble';
     streamBubble.textContent = text;
+    bubble = streamBubble;
     row = streamBubble.parentNode;
     streamBubble = null;
   } else {
-    var b = document.createElement('div');
-    b.className = 'bubble';
-    b.textContent = text;
+    bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = text;
     row = document.createElement('div');
     row.className = 'msg-row asst';
-    row.appendChild(b);
+    row.appendChild(bubble);
     transcript.appendChild(row);
   }
+  var bts = document.createElement('span');
+  bts.className = 'bubble-ts';
+  bts.textContent = bubbleTs();
+  bubble.appendChild(bts);
   if (imageUrl) {
     var img = document.createElement('img');
     img.className = 'capture-img';
@@ -403,10 +423,12 @@ function stopVoice() {
 /* Spacebar shortcut — only stops if spacebar started the recording */
 var spaceStarted = false;
 document.addEventListener('keydown', function(e) {
-  if (e.code === 'Space' && !spaceStarted && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
-    e.preventDefault();
-    if (!recActive) { spaceStarted = true; startVoice(); }
-  }
+  if (e.code !== 'Space' || spaceStarted) return;
+  var ae = document.activeElement, tag = ae ? ae.tagName : '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || (ae && ae.isContentEditable)) return;
+  if (e.target && e.target !== document.body && e.target.scrollHeight > e.target.clientHeight) return;
+  e.preventDefault();
+  if (!recActive) { spaceStarted = true; startVoice(); }
 });
 document.addEventListener('keyup', function(e) {
   if (e.code === 'Space' && spaceStarted) { e.preventDefault(); spaceStarted = false; stopVoice(); }
@@ -417,6 +439,7 @@ var logPanel = document.getElementById('log-panel');
 var logEntries = [];
 var LOG_MAX = 400;
 function ts() { var n = new Date(); return [n.getHours(),n.getMinutes(),n.getSeconds()].map(function(v){return v<10?'0'+v:v}).join(':'); }
+function bubbleTs() { var n = new Date(); return (n.getHours()<10?'0':'')+n.getHours()+':'+(n.getMinutes()<10?'0':'')+n.getMinutes(); }
 
 function isNoisy(cls, text) {
   if (cls === 'stream') return true;
@@ -662,8 +685,9 @@ function doHeartbeat() {
 }
 function doReboot() {
   if (!confirm('Reboot Langoustine?')) return;
+  rebootPending = true;
   fetch('/api/reboot', { method: 'POST' }).catch(function() {});
-  addLog('err', 'Rebooting\u2026');
+  addLog('err', 'Rebooting\u2026 (auto-reconnect on resume)');
 }
 
 /* ── Init ── */

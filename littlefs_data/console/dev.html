@@ -25,7 +25,15 @@ nav{background:#222;display:flex;border-bottom:1px solid #444;flex-shrink:0;flex
 nav button{border:none;border-bottom:2px solid transparent;border-radius:0;padding:8px 14px;color:#888;background:transparent}
 nav button.active{color:#7ec8e3;border-bottom-color:#7ec8e3}
 nav button:hover{color:#ddd;background:#2d2d2d}
+#crash-banner{display:none;background:#5a3000;border-bottom:2px solid #e3b97e;padding:6px 14px;font-size:0.82rem;color:#e3b97e;flex-shrink:0;align-items:center;gap:10px}
+#crash-banner span{flex:1}
+#crash-banner button{background:none;border:none;color:#e3b97e;cursor:pointer;padding:2px 6px;font-size:1rem;line-height:1}
 #content{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+#log-filter-row{display:flex;gap:6px;padding:4px 10px;background:#1e1e1e;border-bottom:1px solid #2d2d2d;flex-shrink:0}
+#log-filter{flex:1;background:#222;color:#ddd;border:1px solid #3a3a3a;padding:3px 8px;font-family:monospace;font-size:0.78rem;border-radius:3px;outline:none}
+#log-filter:focus{border-color:#555}
+#log-filter-clear{background:none;border:none;color:#555;cursor:pointer;font-size:0.85rem;padding:0 4px}
+#log-filter-clear:hover{color:#aaa}
 #log-panel{flex:1;overflow-y:auto;padding:8px 10px;min-height:0}
 .entry{padding:1px 0;line-height:1.5;word-break:break-word;overflow-wrap:anywhere}
 .ts{color:#555;margin-right:6px;user-select:none}
@@ -72,6 +80,13 @@ textarea:focus{border-color:#555}
 .cron-table tr:hover td{background:#222}
 .ck-every{color:#c8e37e}.ck-at{color:#7ec8e3}.ck-dis{color:#555}
 #cron-status{color:#7ee38e;font-size:0.8rem}
+#crashlog-panel{flex:1;display:none;flex-direction:column;padding:10px;gap:8px;min-height:0;overflow-y:auto}
+.crash-table{width:100%;border-collapse:collapse;font-size:0.8rem}
+.crash-table th{color:#888;text-align:left;padding:4px 8px;border-bottom:1px solid #333;font-weight:normal}
+.crash-table td{padding:4px 8px;border-bottom:1px solid #2d2d2d}
+.crash-table .reason-panic,.crash-table .reason-int_wdt,.crash-table .reason-task_wdt{color:#e37e7e;font-weight:bold}
+.crash-table .reason-brownout{color:#e3b97e;font-weight:bold}
+#crashlog-status{color:#7ee38e;font-size:0.8rem}
 </style>
 </head>
 <body>
@@ -86,6 +101,7 @@ textarea:focus{border-color:#555}
   <button onclick="doHeartbeat()">&#x2665; Heartbeat</button>
   <button id="reboot-btn" onclick="doReboot()">&#x21BA; Reboot</button>
 </header>
+<div id="crash-banner"><span id="crash-banner-msg"></span><button onclick="dismissCrashBanner()" title="Dismiss">&#x2715;</button></div>
 <nav>
   <button class="active" onclick="showTab('log',this)">Live Log</button>
   <button id="clear-log-btn" onclick="clearLog()" style="border:none;border-radius:0;padding:8px 10px;color:#666;background:transparent;font-size:0.75rem" title="Clear log">&#x2715;</button>
@@ -96,9 +112,14 @@ textarea:focus{border-color:#555}
   <button onclick="showTab('services',this)">SERVICES.md</button>
   <button onclick="showTab('skills',this)">Skills</button>
   <button onclick="showTab('crons',this)">Crons</button>
+  <button onclick="showTab('crashlog',this)">Crash Log</button>
   <button onclick="showTab('settings',this)">Settings</button>
 </nav>
 <div id="content">
+  <div id="log-filter-row">
+    <input id="log-filter" type="text" placeholder="Filter logs…" oninput="filterLog(this.value)" spellcheck="false">
+    <button id="log-filter-clear" onclick="clearLogFilter()" title="Clear filter">&#x2715;</button>
+  </div>
   <div id="log-panel"></div>
   <div id="chat-bar">
     <input id="chat-input" type="text" placeholder="Send a message to Langoustine..." maxlength="512" onkeydown="if(event.key==='Enter')sendMsg()" spellcheck="false">
@@ -135,6 +156,16 @@ textarea:focus{border-color:#555}
       <tbody id="cron-body"></tbody>
     </table>
   </div>
+  <div id="crashlog-panel">
+    <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+      <button onclick="loadCrashlog()">&#x21BA; Refresh</button>
+      <span id="crashlog-status"></span>
+    </div>
+    <table class="crash-table">
+      <thead><tr><th>Timestamp (build-approx UTC)</th><th>Reason</th><th>Firmware</th></tr></thead>
+      <tbody id="crashlog-body"></tbody>
+    </table>
+  </div>
   <div id="settings-panel">
     <div class="settings-row">
       <div class="field">
@@ -148,20 +179,20 @@ textarea:focus{border-color:#555}
     </div>
     <div class="field">
       <label>LLM API Key</label>
-      <input id="cfg-apikey" type="password" placeholder="sk-ant-..." maxlength="320" autocomplete="off">
+      <input id="cfg-apikey" type="password" maxlength="320" autocomplete="off">
     </div>
     <div class="field">
       <label>Web Search API Key</label>
-      <input id="cfg-searchkey" type="password" placeholder="tvly-..." maxlength="128" autocomplete="off">
+      <input id="cfg-searchkey" type="password" maxlength="128" autocomplete="off">
     </div>
     <div class="settings-row">
       <div class="field">
         <label>STT API Key (Groq Whisper)</label>
-        <input id="cfg-sttkey" type="password" placeholder="gsk_..." maxlength="320" autocomplete="off">
+        <input id="cfg-sttkey" type="password" maxlength="320" autocomplete="off">
       </div>
       <div class="field">
         <label>TTS API Key (Groq PlayAI)</label>
-        <input id="cfg-ttskey" type="password" placeholder="gsk_..." maxlength="320" autocomplete="off">
+        <input id="cfg-ttskey" type="password" maxlength="320" autocomplete="off">
       </div>
     </div>
     <div class="field">
@@ -177,7 +208,7 @@ textarea:focus{border-color:#555}
       <button onclick="saveConfig()">&#x1F4BE; Save</button>
       <span id="cfg-status"></span>
     </div>
-    <p style="color:#555;font-size:0.75rem">Keys stored in NVS, survive firmware updates. Masked values (****) shown for existing keys — leave unchanged to keep the current key.</p>
+    <p style="color:#555;font-size:0.75rem">Keys stored in NVS, survive firmware updates. Leave a key field blank to keep the current value.</p>
     <hr style="border:none;border-top:1px solid #333;margin:8px 0">
     <div class="field">
       <label>Firmware Update URL</label>
@@ -243,6 +274,8 @@ function addLog(cls,text){
   var el=document.createElement('div');
   el.className='entry';
   el.innerHTML='<span class="ts">'+ts()+'</span><span class="'+esc(cls)+'">'+esc(text)+'</span>';
+  var fv=(document.getElementById('log-filter')||{}).value||'';
+  if(fv&&el.textContent.toLowerCase().indexOf(fv.toLowerCase())===-1) el.style.display='none';
   logEl.appendChild(el);
   if(logEl.children.length>LOG_MAX){
     var n=logEl.children.length-LOG_MAX+LOG_TRIM;
@@ -256,21 +289,38 @@ function addLog(cls,text){
 }
 function clearLog(){logEl.innerHTML='';addLog('ws','Log cleared')}
 
+/* ── Log filter ── */
+function filterLog(val){
+  var v=val.toLowerCase();
+  Array.from(logEl.children).forEach(function(el){
+    el.style.display=(!v||el.textContent.toLowerCase().indexOf(v)!==-1)?'':'none';
+  });
+}
+function clearLogFilter(){
+  document.getElementById('log-filter').value='';
+  filterLog('');
+}
+
 /* ── Tabs ── */
+var FILE_TABS=['soul','user','memory','heartbeat','services'];
 function showTab(tab,btn){
   document.querySelectorAll('nav button').forEach(function(b){b.classList.remove('active')});
   btn.classList.add('active');
   curTab=tab;
-  document.getElementById('log-panel').style.display=tab==='log'?'':'none';
-  document.getElementById('chat-bar').style.display=tab==='log'?'flex':'none';
-  document.getElementById('file-panel').style.display=(tab!=='log'&&tab!=='skills'&&tab!=='crons'&&tab!=='settings')?'flex':'none';
+  var isLog=tab==='log';
+  document.getElementById('log-filter-row').style.display=isLog?'flex':'none';
+  document.getElementById('log-panel').style.display=isLog?'':'none';
+  document.getElementById('chat-bar').style.display=isLog?'flex':'none';
+  document.getElementById('file-panel').style.display=(FILE_TABS.indexOf(tab)!==-1)?'flex':'none';
   document.getElementById('skill-panel').style.display=tab==='skills'?'flex':'none';
   document.getElementById('cron-panel').style.display=tab==='crons'?'flex':'none';
+  document.getElementById('crashlog-panel').style.display=tab==='crashlog'?'flex':'none';
   document.getElementById('settings-panel').style.display=tab==='settings'?'flex':'none';
   if(tab==='skills'){loadSkillList();return}
   if(tab==='crons'){loadCronList();return}
+  if(tab==='crashlog'){loadCrashlog();return}
   if(tab==='settings'){loadConfig();return}
-  if(tab!=='log'){
+  if(FILE_TABS.indexOf(tab)!==-1){
     curFile=tab;
     setStatus('Loading...');
     fetch('/api/file?name='+tab)
@@ -357,7 +407,41 @@ function deleteSkill(){
 }
 function setSkillStatus(msg){document.getElementById('skill-status').textContent=msg}
 
-/* ── Sysinfo ── */
+/* ── Crash Log ── */
+function loadCrashlog(){
+  document.getElementById('crashlog-status').textContent='Loading...';
+  fetch('/api/file?name=crashlog')
+  .then(function(r){return r.text()})
+  .then(function(txt){
+    document.getElementById('crashlog-status').textContent='';
+    var tbody=document.getElementById('crashlog-body');
+    tbody.innerHTML='';
+    var rows=txt.split('\n').filter(function(l){
+      return l.startsWith('|')&&l.indexOf('Timestamp')===-1&&l.indexOf('|---|')===-1&&l.trim().length>3;
+    });
+    if(!rows.length){
+      tbody.innerHTML='<tr><td colspan="3" style="color:#555;padding:16px 8px">No crashes logged — device appears stable &#x2713;</td></tr>';
+      return;
+    }
+    rows.reverse().forEach(function(row){
+      var cols=row.split('|').map(function(c){return c.trim()}).filter(function(c,i){return i>0&&i<4});
+      if(cols.length<3) return;
+      var reason=cols[1].replace(/\*\*/g,'');
+      var tr=document.createElement('tr');
+      tr.innerHTML='<td style="white-space:nowrap;color:#888">'+esc(cols[0])+'</td>'
+        +'<td class="reason-'+esc(reason)+'">'+esc(reason)+'</td>'
+        +'<td style="color:#777;font-size:0.78rem">'+esc(cols[2])+'</td>';
+      tbody.appendChild(tr);
+    });
+  })
+  .catch(function(){
+    document.getElementById('crashlog-status').textContent='';
+    document.getElementById('crashlog-body').innerHTML=
+      '<tr><td colspan="3" style="color:#555;padding:16px 8px">No crash log yet (first boot after firmware update, or no abnormal resets)</td></tr>';
+  });
+}
+
+/* ── Sysinfo + Crash Banner ── */
 var CRASH_REASONS=['panic','task_wdt','int_wdt','brownout'];
 function fmtUptime(s){
   if(s<60) return s+'s';
@@ -387,10 +471,23 @@ function fetchSysinfo(){
     var isCrash=CRASH_REASONS.indexOf(rsn)!==-1;
     uptimeEl.className=isCrash?'crash':'';
     uptimeEl.textContent=isCrash?'\u26a0 '+rsn+' \u2192 up '+fmtUptime(upS):'up '+fmtUptime(upS);
+    uptimeEl.dataset.uptime=upS;
+    /* Show crash banner once per session per uptime value */
+    if(isCrash&&!sessionStorage.getItem('crash-banner-'+upS)){
+      document.getElementById('crash-banner-msg').textContent=
+        '\u26a0\ufe0f Last reset: '+rsn+' \u2014 check Crash Log tab for details';
+      document.getElementById('crash-banner').style.display='flex';
+    }
   }).catch(function(){});
+}
+function dismissCrashBanner(){
+  var upS=document.getElementById('uptime').dataset.uptime||'0';
+  sessionStorage.setItem('crash-banner-'+upS,'1');
+  document.getElementById('crash-banner').style.display='none';
 }
 
 /* ── Settings ── */
+var KEY_FIELDS={api_key:'cfg-apikey',search_key:'cfg-searchkey',stt_key:'cfg-sttkey',tts_key:'cfg-ttskey'};
 function loadConfig(){
   document.getElementById('cfg-status').textContent='Loading...';
   fetch('/api/config')
@@ -398,10 +495,14 @@ function loadConfig(){
   .then(function(d){
     document.getElementById('cfg-provider').value=d.provider||'';
     document.getElementById('cfg-model').value=d.model||'';
-    document.getElementById('cfg-apikey').value=d.api_key||'';
-    document.getElementById('cfg-searchkey').value=d.search_key||'';
-    document.getElementById('cfg-sttkey').value=d.stt_key||'';
-    document.getElementById('cfg-ttskey').value=d.tts_key||'';
+    /* Password fields: clear value; show placeholder indicating if key is already configured */
+    for(var k in KEY_FIELDS){
+      var el=document.getElementById(KEY_FIELDS[k]);
+      var configured=d[k]==='****';
+      el.value='';
+      el.placeholder=configured?'\u25cf\u25cf\u25cf\u25cf\u25cf\u25cf\u25cf\u25cf (configured \u2014 leave blank to keep)':'(not set)';
+      el.dataset.configured=configured?'1':'0';
+    }
     document.getElementById('cfg-ttsvoice').value=d.tts_voice||'';
     document.getElementById('cfg-verbose').checked=!!d.verbose_logs;
     document.getElementById('cfg-status').textContent='';
@@ -411,13 +512,14 @@ function saveConfig(){
   var body={
     provider:document.getElementById('cfg-provider').value.trim(),
     model:document.getElementById('cfg-model').value.trim(),
-    api_key:document.getElementById('cfg-apikey').value.trim(),
-    search_key:document.getElementById('cfg-searchkey').value.trim(),
-    stt_key:document.getElementById('cfg-sttkey').value.trim(),
-    tts_key:document.getElementById('cfg-ttskey').value.trim(),
     tts_voice:document.getElementById('cfg-ttsvoice').value.trim(),
     verbose_logs:document.getElementById('cfg-verbose').checked
   };
+  /* Only include key fields if the user actually typed a new value */
+  for(var k in KEY_FIELDS){
+    var v=document.getElementById(KEY_FIELDS[k]).value.trim();
+    if(v) body[k]=v;
+  }
   document.getElementById('cfg-status').textContent='Saving...';
   fetch('/api/config',{method:'POST',body:JSON.stringify(body),headers:{'Content-Type':'application/json'}})
   .then(function(r){return r.json()})
