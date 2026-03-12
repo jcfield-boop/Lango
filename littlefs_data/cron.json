@@ -10,6 +10,7 @@
       "last_run": 0,
       "delete_after_run": false,
       "channel": "telegram",
+      "chat_id": "5538967144",
       "message": "Run the daily briefing for James using the daily-briefing skill: ARM stock price, top tech news from HN and ARM newsroom RSS feeds, weather in San Francisco, and anything pending in memory. Also run the event-countdown skill to check if any tech event (GTC, Google I/O, Build, Computex) is within 14 days — if so, include it in the briefing. Be concise — 5-8 bullet points total."
     },
     {
@@ -22,6 +23,7 @@
       "last_run": 0,
       "delete_after_run": false,
       "channel": "telegram",
+      "chat_id": "5538967144",
       "message": "Use the surf-forecast skill to check surf conditions at Pacifica/Lindamar beach for tomorrow Sunday. Use the noaa_buoy tool first for real buoy data (station 46012), then web_search for tomorrow's forecast if needed. Give a clear GO/MAYBE/SKIP verdict. Send James a Telegram message with the full surf report."
     },
     {
@@ -34,6 +36,7 @@
       "last_run": 0,
       "delete_after_run": false,
       "channel": "telegram",
+      "chat_id": "5538967144",
       "message": "Use the wirecutter_deals skill: search Wirecutter for current top deals on consumer electronics, computing, audio/video, and smart home. Filter for items under $500. Send James an email summary of the top 5-7 deals with links."
     },
     {
@@ -46,6 +49,7 @@
       "last_run": 0,
       "delete_after_run": false,
       "channel": "telegram",
+      "chat_id": "5538967144",
       "message": "Use the weekend-planner skill: compile a weekend-at-a-glance digest for James. Check surf forecast for Saturday and Sunday at Pacifica/Lindamar (go/no-go verdict for each day), SF weather for the weekend, any upcoming tech events within 14 days, and France trip countdown if within 60 days. Send via Telegram."
     },
     {
@@ -58,6 +62,7 @@
       "last_run": 0,
       "delete_after_run": false,
       "channel": "telegram",
+      "chat_id": "5538967144",
       "message": "Use the arm-news skill: run the weekly ARM ecosystem news scan. Fetch Arm newsroom RSS, then search for Qualcomm Snapdragon PC/Chromebook news, MediaTek Dimensity/Kompanio news, and Windows on Arm/Copilot+ PC updates from the past week. Filter for relevance to Arm's PC and Chromebook business. Send a concise digest to James via Telegram (5-8 bullets max, 4 web_search calls max)."
     },
     {
@@ -70,7 +75,21 @@
       "last_run": 0,
       "delete_after_run": true,
       "channel": "telegram",
+      "chat_id": "5538967144",
       "message": "Travel prep reminder: France trip is in 7 days (June 14). Tasks: cancel SF Chronicle newspapers, suspend USPS mail at usps.com/manage/hold-mail.htm, notify bank/credit card of travel to France, check passport expiry (must be valid past Dec 2026). Send James a Telegram message with the full checklist from the travel-prep skill."
+    },
+    {
+      "id": "cmpct006",
+      "name": "Weekly Memory Compaction",
+      "enabled": true,
+      "kind": "every",
+      "interval_s": 604800,
+      "next_run": 1773644400,
+      "last_run": 0,
+      "delete_after_run": false,
+      "channel": "system",
+      "chat_id": "cron",
+      "message": "Run the memory-compactor skill: read MEMORY.md, remove duplicate or superseded entries, merge related facts, keep total size under 8KB. Write the compacted result back to MEMORY.md. Log a one-line summary of what was removed."
     }
   ]
 }

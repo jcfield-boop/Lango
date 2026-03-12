@@ -1360,6 +1360,65 @@ static esp_err_t logs_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── POST /api/message ───────────────────────────────────────── */
+
+static esp_err_t message_post_handler(httpd_req_t *req)
+{
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
+    char body[1024] = {0};
+    int rcv = httpd_req_recv(req, body, sizeof(body) - 1);
+    httpd_resp_set_type(req, "application/json");
+    apply_cors(req);
+
+    if (rcv <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body");
+        return ESP_OK;
+    }
+
+    cJSON *root = cJSON_Parse(body);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_OK;
+    }
+
+    cJSON *jmsg  = cJSON_GetObjectItem(root, "message");
+    if (!cJSON_IsString(jmsg) || !jmsg->valuestring[0]) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing message");
+        return ESP_OK;
+    }
+
+    cJSON *jchan = cJSON_GetObjectItem(root, "channel");
+    cJSON *jchat = cJSON_GetObjectItem(root, "chat_id");
+    const char *channel = (cJSON_IsString(jchan) && jchan->valuestring[0])
+                          ? jchan->valuestring : LANG_CHAN_SYSTEM;
+    const char *chat_id = (cJSON_IsString(jchat) && jchat->valuestring[0])
+                          ? jchat->valuestring : "api";
+
+    mimi_msg_t msg = {0};
+    strncpy(msg.channel, channel, sizeof(msg.channel) - 1);
+    strncpy(msg.chat_id, chat_id, sizeof(msg.chat_id) - 1);
+    msg.content = strdup(jmsg->valuestring);
+    cJSON_Delete(root);
+
+    if (!msg.content) {
+        httpd_resp_send_500(req);
+        return ESP_OK;
+    }
+
+    if (message_bus_push_inbound(&msg) != ESP_OK) {
+        free(msg.content);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Bus full");
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "/api/message queued (channel=%s chat_id=%s)", channel, chat_id);
+    httpd_resp_set_status(req, "202 Accepted");
+    httpd_resp_sendstr(req, "{\"status\":\"queued\"}");
+    return ESP_OK;
+}
+
 /* ── Public API ──────────────────────────────────────────────── */
 
 esp_err_t ws_server_start(void)
@@ -1513,6 +1572,10 @@ esp_err_t ws_server_start(void)
     httpd_register_uri_handler(s_server, &ota_uri);
     httpd_uri_t ota_status_uri = { .uri = "/api/ota/status", .method = HTTP_GET, .handler = ota_status_handler };
     httpd_register_uri_handler(s_server, &ota_status_uri);
+
+    /* Inbound message injection */
+    httpd_uri_t message_uri = { .uri = "/api/message", .method = HTTP_POST, .handler = message_post_handler };
+    httpd_register_uri_handler(s_server, &message_uri);
 
     /* HTTP → HTTPS redirect server on port 80 */
     httpd_config_t redir_cfg    = HTTPD_DEFAULT_CONFIG();

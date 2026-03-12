@@ -49,7 +49,7 @@
 #define LANG_AGENT_CORE              1
 #define LANG_AGENT_MAX_HISTORY       30
 #define LANG_AGENT_MAX_TOOL_ITER     10
-#define LANG_MAX_TOOL_CALLS          2
+#define LANG_MAX_TOOL_CALLS          4
 #define LANG_AGENT_SEND_WORKING_STATUS 1
 
 /* Timezone (POSIX TZ format) */

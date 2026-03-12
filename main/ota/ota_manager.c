@@ -18,10 +18,12 @@
 
 static const char *TAG = "ota";
 
-/* Minimum free internal heap before starting OTA.
- * Checked only after agent is idle — idle SRAM free is ~42KB.
- * 28KB guards against concurrent non-agent SRAM consumers and TLS handshake peak. */
-#define OTA_MIN_FREE_HEAP    (20 * 1024)
+/* Minimum free SRAM required BEFORE creating the OTA task (checked in ota_start_async).
+ * The OTA task stack itself is 14KB (OTA_TASK_STACK), so the effective headroom after
+ * task creation is (OTA_MIN_FREE_HEAP - OTA_TASK_STACK) = 8KB for flash write buffers,
+ * OTA handle, and other small SRAM allocations. TLS and HTTP buffers go to PSRAM. */
+#define OTA_TASK_STACK       (14 * 1024)
+#define OTA_MIN_FREE_HEAP    (22 * 1024)  /* 14KB stack + 8KB headroom */
 
 /* HTTP receive buffer for OTA download. */
 #define OTA_HTTP_BUF_SIZE    (16 * 1024)
@@ -96,19 +98,6 @@ esp_err_t ota_update_from_url(const char *url)
             status_set(OTA_STATE_ERROR, 0, NULL, abort_msg);
             return ESP_ERR_TIMEOUT;
         }
-    }
-
-    /* Step 2: Heap guard (agent is idle — heap is at maximum for this path) */
-    uint32_t free_heap = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    if (free_heap < OTA_MIN_FREE_HEAP) {
-        char msg[80];
-        snprintf(msg, sizeof(msg),
-                 "OTA aborted: heap too low (%lu B, need %d B)",
-                 (unsigned long)free_heap, OTA_MIN_FREE_HEAP);
-        ESP_LOGW(TAG, "%s", msg);
-        ws_server_broadcast_monitor("ota", msg);
-        status_set(OTA_STATE_ERROR, 0, NULL, msg);
-        return ESP_ERR_NO_MEM;
     }
 
     /* Step 3: Begin download */
@@ -252,10 +241,27 @@ esp_err_t ota_start_async(const char *url)
     strncpy(s_ota_url, url, sizeof(s_ota_url) - 1);
     s_ota_url[sizeof(s_ota_url) - 1] = '\0';
 
+    /* Heap guard: checked HERE before xTaskCreate so the 14KB task stack hasn't been
+     * allocated yet. Checking inside the task body is too late — the stack consumes
+     * OTA_TASK_STACK bytes before the guard can run, giving a false "too low" reading. */
+    uint32_t free_sram = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    if (free_sram < OTA_MIN_FREE_HEAP) {
+        char msg[80];
+        snprintf(msg, sizeof(msg),
+                 "OTA aborted: SRAM too low (%lu B, need %d B)",
+                 (unsigned long)free_sram, OTA_MIN_FREE_HEAP);
+        ESP_LOGW(TAG, "%s", msg);
+        ws_server_broadcast_monitor("ota", msg);
+        status_set(OTA_STATE_ERROR, 0, NULL, msg);
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        status_set(OTA_STATE_IDLE, 0, NULL, NULL);
+        return ESP_ERR_NO_MEM;
+    }
+
     /* Clear any previous error state before launching */
     status_set(OTA_STATE_PENDING, 0, NULL, NULL);
     s_ota_running = true;
-    BaseType_t ret = xTaskCreate(ota_task, "ota_update", 14 * 1024, NULL, 5, NULL);
+    BaseType_t ret = xTaskCreate(ota_task, "ota_update", OTA_TASK_STACK, NULL, 5, NULL);
     if (ret != pdPASS) {
         s_ota_running = false;
         status_set(OTA_STATE_IDLE, 0, NULL, NULL);
