@@ -32,7 +32,7 @@ Channel: websocket (alerts sent via Telegram if thresholds exceeded)
    - Uptime (formatted)
 5. **APPEND to log:** Write formatted entry to `/lfs/memory/uptime-log.md`
 6. **Check thresholds:**
-   - Heap < 50 KB → ALERT
+   - Heap < 18 KB → ALERT
    - SPIFFS > 85% → ALERT
    - WiFi < -80 dBm → ALERT
    - Temp > 65°C → ALERT
@@ -53,8 +53,8 @@ Channel: websocket (alerts sent via Telegram if thresholds exceeded)
 - Alert with crash details
 
 ## Alert Thresholds
-- **Heap:** < 50 KB free
-- **SPIFFS:** > 85% used
+- **Heap:** < 18 KB free (ESP32-S3 normal idle SRAM is 24–35 KB; 18 KB is genuine danger)
+- **LittleFS:** > 85% used
 - **WiFi:** RSSI < -80 dBm (weak signal)
 - **Temperature:** > 65°C (overheating)
 

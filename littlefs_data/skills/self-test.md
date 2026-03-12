@@ -40,8 +40,9 @@ FAIL if write or read errors, or content does not match.
 
 ### T5 — System coherence
 Call system_info.
-PASS if: uptime value is present and non-zero, free heap > 50000 bytes, RSSI is present and non-zero.
-FAIL if heap is critical (<40000 bytes) or expected fields are missing.
+PASS if: uptime value is present and non-zero, free heap > 15000 bytes, RSSI is present and non-zero.
+FAIL if heap is critical (<10000 bytes) or expected fields are missing.
+Note: ESP32-S3 normal idle SRAM is 24–35 KB (PSRAM holds large buffers); 15 KB is the genuine danger floor.
 
 ### T6 — Temperature sanity
 Call device_temp.
