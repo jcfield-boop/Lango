@@ -656,6 +656,7 @@ static const char *name_to_path(const char *name)
     if (name && strcmp(name, "memory")        == 0) return LANG_MEMORY_FILE;
     if (name && strcmp(name, "heartbeat")     == 0) return LANG_HEARTBEAT_FILE;
     if (name && strcmp(name, "services")      == 0) return "/lfs/config/SERVICES.md";
+    if (name && strcmp(name, "cron")          == 0) return "/lfs/cron.json";
     if (name && strcmp(name, "console-index") == 0) return "/lfs/console/index.html";
     if (name && strcmp(name, "console-dev")   == 0) return "/lfs/console/dev.html";
     return NULL;
@@ -1366,17 +1367,22 @@ static esp_err_t message_post_handler(httpd_req_t *req)
 {
     if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
 
-    char body[1024] = {0};
-    int rcv = httpd_req_recv(req, body, sizeof(body) - 1);
+    #define MSG_BODY_MAX 8192
+    char *body = ps_malloc(MSG_BODY_MAX);
+    if (!body) { httpd_resp_send_500(req); return ESP_OK; }
+    memset(body, 0, MSG_BODY_MAX);
+    int rcv = httpd_req_recv(req, body, MSG_BODY_MAX - 1);
     httpd_resp_set_type(req, "application/json");
     apply_cors(req);
 
     if (rcv <= 0) {
+        free(body);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body");
         return ESP_OK;
     }
 
     cJSON *root = cJSON_Parse(body);
+    free(body);
     if (!root) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
         return ESP_OK;
