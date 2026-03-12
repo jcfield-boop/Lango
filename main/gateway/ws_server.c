@@ -517,15 +517,16 @@ static esp_err_t ws_handler(httpd_req_t *req)
 
 /* ── GET / → voice UI ─────────────────────────────────────────── */
 
+/* / now serves dev.html — the web UI is developer-only.
+ * Primary user interface is Telegram. */
 static esp_err_t voice_ui_handler(httpd_req_t *req)
 {
-    const char *path = "/lfs/console/index.html";
+    const char *path = "/lfs/console/dev.html";
     FILE *f = fopen(path, "r");
     if (!f) {
         httpd_resp_set_type(req, "text/html; charset=utf-8");
         httpd_resp_sendstr(req, "<html><body><h1>Langoustine</h1>"
-                                "<p>Voice UI not found. Upload index.html to /lfs/console/.</p>"
-                                "<a href='/console'>Developer Console</a></body></html>");
+                                "<p>dev.html not found. Upload to /lfs/console/.</p></body></html>");
         return ESP_OK;
     }
     httpd_resp_set_type(req, "text/html; charset=utf-8");

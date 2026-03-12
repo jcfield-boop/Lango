@@ -93,10 +93,12 @@ CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
 # calls LittleFS/NVS cannot use a PSRAM stack (cache-disable assertion in esp_flash).
 CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
 
-# Coredump to flash: writes ELF coredump to the 64KB coredump partition on panic.
-# Retrieve with: python -m esp_coredump -p /dev/cu.usbserial-* info_corefile build/langoustine.elf
-# Partition: 0x820000 (64KB) — enough for task stacks + register state.
-CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+# Coredump: UART only (not flash). ELF format to flash was disabled because the coredump
+# exceeded the 64KB partition and overflowed into the adjacent srmodels partition at 0x830000,
+# corrupting WakeNet9 models and causing a panic boot loop.
+# To capture a coredump: connect serial and run:
+#   python -m esp_coredump --chip esp32s3 -p /dev/cu.usbserial-* info_corefile build/langoustine.elf
+CONFIG_ESP_COREDUMP_ENABLE_TO_UART=y
 CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 
