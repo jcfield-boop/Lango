@@ -19,6 +19,8 @@ import threading
 import ssl
 import pytest
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # ── Configuration ──────────────────────────────────────────────
 
@@ -36,10 +38,14 @@ def session(base_url):
     s = requests.Session()
     s.verify = False          # self-signed cert
     s.timeout = 10
-    # Disable persistent keep-alive connections so that stale TCP connections
-    # (e.g. after the 50 s WebSocket stability test) don't cause
-    # RemoteDisconnected errors on subsequent HTTP requests.
+    # Disable persistent keep-alive connections so stale TCP connections
+    # (e.g. after the 50 s WebSocket stability test) are never reused.
     s.headers.update({"Connection": "close"})
+    # Retry up to 3 times on transient connection errors (RemoteDisconnected,
+    # ProtocolError, etc.) with a 1 s backoff.  This is the final safety net
+    # for the test that runs immediately after the 50 s WS stability hold.
+    retry = Retry(total=3, connect=3, read=3, redirect=False, backoff_factor=1)
+    s.mount("https://", HTTPAdapter(max_retries=retry))
     return s
 
 # Suppress the InsecureRequestWarning for self-signed cert
