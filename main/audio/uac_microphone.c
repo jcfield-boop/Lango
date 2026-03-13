@@ -1,4 +1,5 @@
 #include "uac_microphone.h"
+#include "audio/downsample.h"
 #include "audio/audio_pipeline.h"
 #include "led/led_indicator.h"
 #include "langoustine_config.h"
@@ -107,11 +108,13 @@ static void uac_ptt_task(void *arg)
     while (1) {
         bool pressed = s_uac_connected && (gpio_get_level(LANG_PTT_GPIO) == 0);
 
-        /* Periodic diagnostic: log UAC connection state every 5 s while idle */
+        /* Periodic diagnostic: log UAC connection state every 30 s while idle.
+         * Kept at DEBUG in normal builds; demoted from INFO to avoid flooding
+         * the 16 KB log ring buffer with noise that buries real events. */
         if (!was_pressed) {
             TickType_t now = xTaskGetTickCount();
-            if ((now - last_log_tick) > pdMS_TO_TICKS(5000)) {
-                ESP_LOGI(TAG, "UAC PTT idle: connected=%d", s_uac_connected);
+            if ((now - last_log_tick) > pdMS_TO_TICKS(30000)) {
+                ESP_LOGD(TAG, "UAC PTT idle: connected=%d", s_uac_connected);
                 last_log_tick = now;
             }
         }
@@ -177,19 +180,8 @@ static void uac_ptt_task(void *arg)
             esp_err_t ret = uac_host_device_read(s_mic_handle, chunk, sizeof(chunk),
                                                   &got, pdMS_TO_TICKS(20));
             if (ret == ESP_OK && got > 0) {
-                /* Downsample if needed: average ds_ratio 16-bit samples → 1 */
-                if (ds_ratio > 1) {
-                    int16_t *in  = (int16_t *)(void *)chunk;
-                    int16_t *out = (int16_t *)(void *)chunk;
-                    size_t in_samples  = got / 2;
-                    size_t out_samples = 0;
-                    for (size_t si = 0; si + (size_t)ds_ratio <= in_samples; si += (size_t)ds_ratio) {
-                        int32_t sum = 0;
-                        for (int di = 0; di < ds_ratio; di++) sum += in[si + di];
-                        out[out_samples++] = (int16_t)(sum / ds_ratio);
-                    }
-                    got = (uint32_t)(out_samples * 2);
-                }
+                /* Downsample if needed — see main/audio/downsample.h */
+                got = (uint32_t)pcm16_downsample(chunk, (size_t)got, ds_ratio);
                 ret = audio_ring_append(chunk, (size_t)got);
                 if (ret == ESP_ERR_NO_MEM) {
                     ESP_LOGW(TAG, "Audio ring overflow — dropping recording");
@@ -239,12 +231,10 @@ esp_err_t uac_microphone_init(void)
         return err;
     }
 
-    /* Increased delay (2 s): the USB host may not replay DEVICE_CONNECTED to class
-     * drivers that register after enumeration completes.  If the webcam finishes
-     * UVC enumeration in < 500 ms, uac_driver_event_cb never fires → s_uac_connected
-     * stays false.  2 s gives the USB stack ample time to re-announce the device
-     * to any newly-registered class driver on most hardware. */
-    vTaskDelay(pdMS_TO_TICKS(2000));
+    /* No delay here.  uvc_camera_start_host_task() is called AFTER this function
+     * returns, so the USB host event task hasn't started yet when UAC registers.
+     * Both UVC and UAC drivers are therefore registered before the USB daemon
+     * fires its first device-connected event — no replay needed. */
 
     /* Install UAC driver — USB host must already be running (uvc_camera_init done) */
     uac_host_driver_config_t uac_cfg = {

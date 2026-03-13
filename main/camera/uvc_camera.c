@@ -27,7 +27,7 @@ static void usb_lib_task(void *arg)
         /* Use a 10 s timeout to emit a heartbeat if nothing arrives */
         esp_err_t err = usb_host_lib_handle_events(pdMS_TO_TICKS(10000), &event_flags);
         if (err == ESP_ERR_TIMEOUT) {
-            ESP_LOGI(TAG, "usb_lib_task alive — no USB events in 10 s (no device connected?)");
+            ESP_LOGD(TAG, "usb_lib_task alive — no USB events in 10 s");
             continue;
         }
         ESP_LOGI(TAG, "usb_lib_task event: flags=0x%lx", (unsigned long)event_flags);
@@ -131,7 +131,10 @@ esp_err_t uvc_camera_init(void)
         return ESP_FAIL;
     }
 
-    /* USB library event task (Core 0, priority 15) */
+    /* USB library event task (Core 0, priority 15).
+     * Must be running BEFORE class drivers start doing USB transfers so that
+     * usb_host_lib_handle_events() can drain the completed-transfer queue.
+     * Without it the transfer pool fills and the USB daemon asserts. */
     if (xTaskCreatePinnedToCore(usb_lib_task, "usb_lib", 4096, NULL,
                                 15, &s_usb_lib_task, 0) != pdPASS) {
         usb_host_uninstall();
@@ -151,8 +154,10 @@ esp_err_t uvc_camera_init(void)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "uvc_host_install failed (%s) — no USB camera support",
                  esp_err_to_name(err));
-        vTaskDelete(s_usb_lib_task);
-        s_usb_lib_task = NULL;
+        if (s_usb_lib_task) {
+            vTaskDelete(s_usb_lib_task);
+            s_usb_lib_task = NULL;
+        }
         usb_host_uninstall();
         return ESP_FAIL;
     }
@@ -160,6 +165,19 @@ esp_err_t uvc_camera_init(void)
     s_initialized = true;
     ESP_LOGI(TAG, "UVC camera driver initialized (USB OTG on GPIO 19/20)");
     return ESP_OK;
+}
+
+void uvc_camera_start_host_task(void)
+{
+    if (s_usb_lib_task) return;   /* already started */
+    if (!s_initialized) return;   /* init failed — nothing to drive */
+
+    if (xTaskCreatePinnedToCore(usb_lib_task, "usb_lib", 4096, NULL,
+                                15, &s_usb_lib_task, 0) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create usb_lib_task — USB events will not be processed");
+    } else {
+        ESP_LOGI(TAG, "usb_lib_task started — USB host now processing events");
+    }
 }
 
 void uvc_camera_deinit(void)

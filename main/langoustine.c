@@ -325,11 +325,21 @@ void app_main(void)
     ESP_ERROR_CHECK(stt_client_init());
     ESP_ERROR_CHECK(tts_client_init());
 
-    /* UVC camera + UAC mic — both use the USB host, init together.
-     * uvc_camera_init() installs the USB host library and UVC driver.
-     * uac_microphone_init() then attaches the UAC driver to the same host. */
+    /* UVC camera + UAC mic — both use the USB host; register ALL class drivers
+     * BEFORE starting the USB lib task so the webcam enumerates into both drivers
+     * simultaneously.  If UAC is installed after the lib task starts it misses the
+     * device-connected callback and s_uac_connected stays false forever.
+     *
+     * Order is critical:
+     *   1. uvc_camera_init()         — usb_host_install + uvc_host_install (no task)
+     *   2. uac_microphone_init()     — uac_host_install (no delay)
+     *   3. uvc_camera_start_host_task() — usb_lib_task created; daemon fires NEW_DEV
+     *                                     to both UVC and UAC simultaneously */
     uvc_camera_init();
-    if (uac_microphone_init() == ESP_OK) {
+    esp_err_t uac_err = uac_microphone_init();
+    uvc_camera_start_host_task();   /* both drivers registered — safe to start now */
+
+    if (uac_err == ESP_OK) {
         uac_microphone_start();
         ESP_LOGI(TAG, "UAC mic: PTT ready (BOOT button) — browser voice also available");
     } else {

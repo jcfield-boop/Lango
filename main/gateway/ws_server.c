@@ -357,6 +357,13 @@ static esp_err_t ws_handler(httpd_req_t *req)
         xSemaphoreGive(s_clients_lock);
         return ret;
     }
+    /* Silently drop PONG frames — they are client responses to our 20 s ping task.
+     * handle_ws_control_frames=true routes them here; without this check they
+     * fall through to cJSON_Parse and produce a spurious "Invalid JSON" warning. */
+    if (ws_pkt.type == HTTPD_WS_TYPE_PONG || ws_pkt.type == HTTPD_WS_TYPE_PING) {
+        return ESP_OK;
+    }
+
     if (ws_pkt.len == 0) {
         if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
             xSemaphoreTake(s_clients_lock, portMAX_DELAY);

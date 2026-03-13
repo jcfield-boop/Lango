@@ -7,9 +7,20 @@
 
 /**
  * Initialize the USB host stack and UVC driver.
- * Call once at startup. Safe to call even if no camera is connected.
+ * Does NOT start the USB host event task — call uvc_camera_start_host_task()
+ * AFTER all USB class drivers (UVC, UAC, etc.) have been installed so every
+ * driver is registered before the first device-connected event fires.
+ * Safe to call even if no camera is connected.
  */
 esp_err_t uvc_camera_init(void);
+
+/**
+ * Start the USB host library event task.
+ * Must be called after uvc_camera_init() AND after any other USB class
+ * driver installs (e.g. uac_microphone_init()) to avoid a registration race
+ * where a late-registering driver misses the device-connected callback.
+ */
+void uvc_camera_start_host_task(void);
 
 /**
  * Deinitialize the UVC driver and USB host stack.
