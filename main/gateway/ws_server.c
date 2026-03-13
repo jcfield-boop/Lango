@@ -324,6 +324,15 @@ esp_err_t ws_server_send_token(const char *chat_id, const char *delta)
 
 /* ── WebSocket handler ──────────────────────────────────────── */
 
+/* Send a small JSON error frame synchronously from within the WS receive handler. */
+static void ws_send_busy(httpd_req_t *req)
+{
+    const char *err = "{\"type\":\"error\",\"message\":\"Device busy — please retry\"}";
+    httpd_ws_frame_t f = { .type = HTTPD_WS_TYPE_TEXT,
+                            .payload = (uint8_t *)err, .len = strlen(err) };
+    httpd_ws_send_frame(req, &f);
+}
+
 static esp_err_t ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
@@ -474,6 +483,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
             if (message_bus_push_inbound(&msg) != ESP_OK) {
                 ESP_LOGW(TAG, "Inbound bus full, drop WS prompt from %s", chat_id);
                 free(msg.content);
+                ws_send_busy(req);
             }
         }
 
@@ -490,6 +500,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
                 if (message_bus_push_inbound(&msg) != ESP_OK) {
                     ESP_LOGW(TAG, "Inbound bus full, drop WS prompt from %s", chat_id);
                     free(msg.content);
+                    ws_send_busy(req);
                 }
             }
         }

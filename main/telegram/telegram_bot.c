@@ -421,6 +421,7 @@ static void process_updates(const char *json_str)
 static void telegram_poll_task(void *arg)
 {
     ESP_LOGI(TAG, "Telegram polling task started");
+    int backoff_s = 1;  /* exponential backoff: 1,2,4,8,16,…,60s on consecutive failures */
 
     while (1) {
         if (s_bot_token[0] == '\0') {
@@ -436,11 +437,13 @@ static void telegram_poll_task(void *arg)
 
         char *resp = tg_api_call(params, NULL);
         if (resp) {
+            backoff_s = 1;  /* reset on success */
             process_updates(resp);
             free(resp);
         } else {
-            /* Back off on error */
-            vTaskDelay(pdMS_TO_TICKS(3000));
+            ESP_LOGW(TAG, "Telegram poll failed, backing off %ds", backoff_s);
+            vTaskDelay(pdMS_TO_TICKS(backoff_s * 1000));
+            if (backoff_s < 60) backoff_s *= 2;
         }
     }
 }

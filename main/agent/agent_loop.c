@@ -355,6 +355,7 @@ static void agent_loop_task(void *arg)
         if (err != ESP_OK) continue;
 
         atomic_store(&s_agent_busy, true);
+        int64_t turn_start_us = esp_timer_get_time();
         memory_tool_reset_turn();
         web_search_reset_turn();
 
@@ -462,6 +463,14 @@ static void agent_loop_task(void *arg)
         strncpy(stream_ctx.channel, msg.channel, sizeof(stream_ctx.channel) - 1);
 
         while (iteration < LANG_AGENT_MAX_TOOL_ITER) {
+            /* Soft per-turn timeout: 45s. Prevents WDT reboot on slow/hung tool chains. */
+            if ((esp_timer_get_time() - turn_start_us) > 45000000LL) {
+                ESP_LOGW(TAG, "Agent soft timeout at iter %d — abandoning turn", iteration);
+                ws_server_broadcast_monitor("error", "agent turn timeout");
+                final_text = strdup("[Sorry, that took too long. Please retry.]");
+                break;
+            }
+
 #if LANG_AGENT_SEND_WORKING_STATUS
             if (!sent_working_status && strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0 && !is_telegram) {
                 mimi_msg_t status = {0};
