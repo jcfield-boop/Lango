@@ -282,6 +282,11 @@ void app_main(void)
 
     esp_log_level_set("esp-x509-crt-bundle", ESP_LOG_WARN);
 
+    /* Set timezone globally so localtime_r() always returns local time,
+     * not UTC. Without this, context_builder stamps system prompt with UTC. */
+    setenv("TZ", LANG_TIMEZONE, 1);
+    tzset();
+
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  Langoustine - ESP32-S3 AI Assistant  ");
     ESP_LOGI(TAG, "========================================");
