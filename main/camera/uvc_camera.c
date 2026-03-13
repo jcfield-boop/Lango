@@ -4,6 +4,7 @@
 #include <string.h>
 #include <inttypes.h>
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -78,16 +79,13 @@ static void stream_event_cb(const uvc_host_stream_event_data_t *event, void *use
 
 /* ── Frame capture context ─────────────────────────────────────── */
 
-/* Number of frames to discard before capturing — allows AEC/AGC to settle */
-#define CAMERA_WARMUP_FRAMES  15
-
 typedef struct {
     uint8_t          *buf;
     size_t            buf_size;
     size_t            frame_len;
     SemaphoreHandle_t sem;
     bool              captured;
-    int               skip;       /* frames left to discard */
+    int64_t           warmup_done_us; /* discard frames until this timestamp */
 } capture_ctx_t;
 
 static bool frame_cb(const uvc_host_frame_t *frame, void *user_ctx)
@@ -95,9 +93,9 @@ static bool frame_cb(const uvc_host_frame_t *frame, void *user_ctx)
     capture_ctx_t *ctx = (capture_ctx_t *)user_ctx;
     if (!ctx || ctx->captured) return true;
 
-    /* Discard warmup frames so AEC/AGC can settle */
-    if (ctx->skip > 0) {
-        ctx->skip--;
+    /* Time-based warmup: discard frames until AEC/AGC has had time to settle.
+     * More reliable than frame-count: works regardless of negotiated FPS. */
+    if (esp_timer_get_time() < ctx->warmup_done_us) {
         return true;
     }
 
@@ -192,11 +190,11 @@ esp_err_t uvc_camera_capture(uint8_t *buf, size_t buf_size,
     *jpeg_len = 0;
 
     capture_ctx_t ctx = {
-        .buf       = buf,
-        .buf_size  = buf_size,
-        .frame_len = 0,
-        .captured  = false,
-        .skip      = CAMERA_WARMUP_FRAMES,
+        .buf            = buf,
+        .buf_size       = buf_size,
+        .frame_len      = 0,
+        .captured       = false,
+        .warmup_done_us = INT64_MAX, /* set after stream starts */
     };
     ctx.sem = xSemaphoreCreateBinary();
     if (!ctx.sem) return ESP_ERR_NO_MEM;
@@ -264,6 +262,10 @@ esp_err_t uvc_camera_capture(uint8_t *buf, size_t buf_size,
         vSemaphoreDelete(ctx.sem);
         return ESP_FAIL;
     }
+
+    /* Begin time-based warmup now that the stream is running */
+    ctx.warmup_done_us = esp_timer_get_time() + (int64_t)LANG_CAMERA_WARMUP_MS * 1000;
+    ESP_LOGI(TAG, "Warming up camera for %d ms (AEC/AGC settle)", LANG_CAMERA_WARMUP_MS);
 
     bool got_frame = xSemaphoreTake(ctx.sem, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
 

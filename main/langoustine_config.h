@@ -162,7 +162,8 @@
 
 /* UVC Camera (USB webcam on GPIO 19/20) */
 #define LANG_CAMERA_BUF_SIZE            (64 * 1024) /* PSRAM: max JPEG frame */
-#define LANG_CAMERA_CAPTURE_TIMEOUT_MS  8000   /* includes AEC/AGC warmup frames */
+#define LANG_CAMERA_WARMUP_MS           3000   /* time-based AEC/AGC warmup before capture */
+#define LANG_CAMERA_CAPTURE_TIMEOUT_MS  (LANG_CAMERA_WARMUP_MS + 5000) /* warmup + frame wait */
 #define LANG_CAMERA_CAPTURE_DIR         "/lfs/captures"
 #define LANG_CAMERA_CAPTURE_PATH        "/lfs/captures/latest.jpg"
 #define LANG_VISION_MAX_TOKENS          512
