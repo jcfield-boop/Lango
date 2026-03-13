@@ -15,3 +15,9 @@ void log_buffer_init(void);
  * At most `max_len - 1` bytes are written.
  */
 void log_buffer_get(char *out, size_t max_len);
+
+/**
+ * Reset the ring buffer to empty (zero fill, head=0).
+ * Thread-safe via the same busy flag used by the writer.
+ */
+void log_buffer_clear(void);

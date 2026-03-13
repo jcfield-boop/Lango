@@ -103,7 +103,8 @@ textarea:focus{border-color:#555}
 <div id="crash-banner"><span id="crash-banner-msg"></span><button onclick="dismissCrashBanner()" title="Dismiss">&#x2715;</button></div>
 <nav>
   <button class="active" onclick="showTab('log',this)">Live Log</button>
-  <button id="clear-log-btn" onclick="clearLog()" style="border:none;border-radius:0;padding:8px 10px;color:#666;background:transparent;font-size:0.75rem" title="Clear log">&#x2715;</button>
+  <button id="clear-log-btn" onclick="clearLog()" style="border:none;border-radius:0;padding:8px 10px;color:#666;background:transparent;font-size:0.75rem" title="Clear browser log">&#x2715;</button>
+  <button id="clear-device-log-btn" onclick="clearDeviceLog()" style="border:none;border-radius:0;padding:8px 10px;color:#666;background:transparent;font-size:0.75rem" title="Clear device log ring buffer">&#x1F5D1;</button>
   <button onclick="showTab('soul',this)">SOUL.md</button>
   <button onclick="showTab('user',this)">USER.md</button>
   <button onclick="showTab('memory',this)">MEMORY.md</button>
@@ -287,6 +288,14 @@ function addLog(cls,text){
   logEl.scrollTop=logEl.scrollHeight;
 }
 function clearLog(){logEl.innerHTML='';addLog('ws','Log cleared')}
+function clearDeviceLog(){
+  fetch('/api/logs/clear',{method:'POST'})
+    .then(function(r){
+      if(r.ok){clearLog();addLog('ws','Device log ring buffer cleared');}
+      else{addLog('err','Clear failed: '+r.status);}
+    })
+    .catch(function(){addLog('err','Clear device log failed');});
+}
 
 /* ── Log filter ── */
 function filterLog(val){

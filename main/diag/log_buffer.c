@@ -76,3 +76,13 @@ void log_buffer_get(char *out, size_t max_len)
     }
     out[copy] = '\0';
 }
+
+void log_buffer_clear(void)
+{
+    if (!s_ring) return;
+    while (__atomic_exchange_n(&s_busy, 1, __ATOMIC_ACQUIRE) != 0) { /* spin */ }
+    memset(s_ring, 0, LOG_RING_SIZE);
+    s_head = 0;
+    s_fill = 0;
+    __atomic_store_n(&s_busy, 0, __ATOMIC_RELEASE);
+}

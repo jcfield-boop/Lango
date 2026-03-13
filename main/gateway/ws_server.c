@@ -1395,6 +1395,18 @@ static esp_err_t logs_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── POST /api/logs/clear ────────────────────────────────────── */
+
+static esp_err_t logs_clear_handler(httpd_req_t *req)
+{
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+    log_buffer_clear();
+    httpd_resp_set_type(req, "application/json");
+    apply_cors(req);
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
 /* ── POST /api/message ───────────────────────────────────────── */
 
 static esp_err_t message_post_handler(httpd_req_t *req)
@@ -1521,7 +1533,7 @@ esp_err_t ws_server_start(void)
     ssl_cfg.httpd.ctrl_port            = LANG_WSS_PORT + 1;
     ssl_cfg.httpd.max_open_sockets     = 8;
     ssl_cfg.httpd.stack_size           = 10240;
-    ssl_cfg.httpd.max_uri_handlers     = 24;
+    ssl_cfg.httpd.max_uri_handlers     = 25;
     ssl_cfg.httpd.send_wait_timeout    = 30;
     ssl_cfg.httpd.recv_wait_timeout    = 120;  /* extended: WS ping keeps connection alive */
     ssl_cfg.httpd.uri_match_fn         = httpd_uri_match_wildcard;
@@ -1594,6 +1606,8 @@ esp_err_t ws_server_start(void)
     /* Log ring buffer */
     httpd_uri_t logs_uri = { .uri = "/api/logs", .method = HTTP_GET, .handler = logs_handler };
     httpd_register_uri_handler(s_server, &logs_uri);
+    httpd_uri_t logs_clear_uri = { .uri = "/api/logs/clear", .method = HTTP_POST, .handler = logs_clear_handler };
+    httpd_register_uri_handler(s_server, &logs_clear_uri);
 
     /* Config */
     httpd_uri_t config_get_uri = { .uri = "/api/config", .method = HTTP_GET, .handler = config_get_handler };
