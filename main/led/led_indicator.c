@@ -135,11 +135,15 @@ static void led_task(void *arg)
         }
 
         case LED_LISTENING: {
-            /* Pulsing white (R+G+B equal) — mic is active */
-            float t = (float)step / ANIM_PERIOD_TICKS;
-            float bright = (1.0f - cosf(2.0f * (float)M_PI * t)) * 0.5f;
-            uint8_t v = scale(LED_MAX_BRIGHT, (uint8_t)(bright * 255.0f));
-            r = v; g = v; b = v;
+            /* Violet flash at 15% brightness — mic active, recording.
+             * Violet = R:B ≈ 1:2 (similar to 148:255). 15% of LED_MAX_BRIGHT=60 → ~9 peak.
+             * 200 ms on / 800 ms off (1 s cycle) — clearly visible, not anxious. */
+            uint32_t phase = step % (ANIM_BLINK_ON + ANIM_BLINK_OFF);
+            if (phase < ANIM_BLINK_ON) {
+                r = 5;   /* ~55% of blue — gives violet hue */
+                g = 0;
+                b = 9;   /* 15% of LED_MAX_BRIGHT */
+            }
             break;
         }
 

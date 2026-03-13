@@ -333,17 +333,11 @@ void app_main(void)
         uac_microphone_start();
         ESP_LOGI(TAG, "UAC mic: PTT ready (BOOT button) — browser voice also available");
     } else {
-        /* No UAC mic (webcam not connected or FS-only device).
-         * Fall back to I2S PTT via INMP441 if hardware present. */
-        ESP_LOGW(TAG, "UAC mic unavailable — falling back to I2S PTT");
-        ESP_ERROR_CHECK(i2s_audio_init());
-        ESP_ERROR_CHECK(microphone_init());
-        if (wake_word_init() == ESP_OK) {
-            wake_word_start();
-        } else {
-            ESP_LOGI(TAG, "wake_word unavailable, using I2S PTT-only");
-            microphone_start();
-        }
+        /* No UAC mic available. I2S mic (INMP441 on GPIO18) not yet wired.
+         * PTT and wake-word are disabled until hardware is connected. */
+        ESP_LOGW(TAG, "UAC mic unavailable — I2S mic not wired, PTT disabled");
+        /* i2s_audio_init() / microphone_init() / wake_word_init() intentionally
+         * omitted: no INMP441 on GPIO18 yet. Re-enable when mic is installed. */
     }
 
     /* Initialize subsystems */

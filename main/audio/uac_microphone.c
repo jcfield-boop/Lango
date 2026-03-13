@@ -102,6 +102,7 @@ static void uac_ptt_task(void *arg)
     TickType_t press_start   = 0;
     TickType_t last_log_tick = 0;
     uint8_t    chunk[512];
+    int        ds_ratio      = 1;  /* downsampling ratio: 1=none, 3=48kHz→16kHz */
 
     while (1) {
         bool pressed = s_uac_connected && (gpio_get_level(LANG_PTT_GPIO) == 0);
@@ -142,7 +143,15 @@ static void uac_ptt_task(void *arg)
                 continue;
             }
 
-            esp_err_t rret = audio_ring_open_wav(PTT_CHAT_ID, rate, 1, 16);
+            /* Downsample to 16 kHz if camera negotiated a higher rate.
+             * 48 kHz → 16 kHz is exact 3:1; fits 8 s in the 256 KB ring.
+             * Without downsampling, 48 kHz overflows the ring after ~2.7 s. */
+            ds_ratio = (rate % 16000 == 0) ? (int)(rate / 16000) : 1;
+            uint32_t wav_rate = rate / (uint32_t)ds_ratio;
+            ESP_LOGI(TAG, "UAC PTT: raw %"PRIu32" Hz, ds_ratio=%d, WAV rate %"PRIu32" Hz",
+                     rate, ds_ratio, wav_rate);
+
+            esp_err_t rret = audio_ring_open_wav(PTT_CHAT_ID, wav_rate, 1, 16);
             if (rret != ESP_OK) {
                 ESP_LOGW(TAG, "audio_ring_open_wav failed: %s", esp_err_to_name(rret));
                 uac_host_device_stop(s_mic_handle);
@@ -168,6 +177,19 @@ static void uac_ptt_task(void *arg)
             esp_err_t ret = uac_host_device_read(s_mic_handle, chunk, sizeof(chunk),
                                                   &got, pdMS_TO_TICKS(20));
             if (ret == ESP_OK && got > 0) {
+                /* Downsample if needed: average ds_ratio 16-bit samples → 1 */
+                if (ds_ratio > 1) {
+                    int16_t *in  = (int16_t *)(void *)chunk;
+                    int16_t *out = (int16_t *)(void *)chunk;
+                    size_t in_samples  = got / 2;
+                    size_t out_samples = 0;
+                    for (size_t si = 0; si + (size_t)ds_ratio <= in_samples; si += (size_t)ds_ratio) {
+                        int32_t sum = 0;
+                        for (int di = 0; di < ds_ratio; di++) sum += in[si + di];
+                        out[out_samples++] = (int16_t)(sum / ds_ratio);
+                    }
+                    got = (uint32_t)(out_samples * 2);
+                }
                 ret = audio_ring_append(chunk, (size_t)got);
                 if (ret == ESP_ERR_NO_MEM) {
                     ESP_LOGW(TAG, "Audio ring overflow — dropping recording");
