@@ -357,10 +357,24 @@ static esp_err_t ws_handler(httpd_req_t *req)
         xSemaphoreGive(s_clients_lock);
         return ret;
     }
-    /* Silently drop PONG frames — they are client responses to our 20 s ping task.
-     * handle_ws_control_frames=true routes them here; without this check they
-     * fall through to cJSON_Parse and produce a spurious "Invalid JSON" warning. */
+    /* Silently drop PONG frames (client responses to our 20 s ping) and any
+     * incoming PING frames.  handle_ws_control_frames=true routes them here.
+     * CRITICAL: httpd_ws_recv_frame(max_len=0) only reads the WS frame header —
+     * the payload bytes remain in the TCP socket buffer.  We MUST drain them
+     * before returning or they corrupt the next frame's header parse, causing
+     * a recv error and connection drop after 1-2 ping cycles (~40-60 s).
+     * Use heap allocation (not stack) to avoid any stack-overflow risk in the
+     * HTTPS server's httpd task. */
     if (ws_pkt.type == HTTPD_WS_TYPE_PONG || ws_pkt.type == HTTPD_WS_TYPE_PING) {
+        if (ws_pkt.len > 0 && ws_pkt.len <= 125) {  /* RFC 6455 §5.5 guard */
+            uint8_t *drain = malloc(ws_pkt.len);
+            if (drain) {
+                ws_pkt.payload = drain;
+                httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+                ws_pkt.payload = NULL;
+                free(drain);
+            }
+        }
         return ESP_OK;
     }
 

@@ -36,6 +36,10 @@ def session(base_url):
     s = requests.Session()
     s.verify = False          # self-signed cert
     s.timeout = 10
+    # Disable persistent keep-alive connections so that stale TCP connections
+    # (e.g. after the 50 s WebSocket stability test) don't cause
+    # RemoteDisconnected errors on subsequent HTTP requests.
+    s.headers.update({"Connection": "close"})
     return s
 
 # Suppress the InsecureRequestWarning for self-signed cert
@@ -138,9 +142,9 @@ class TestLogsApi:
             f"usb_lib_task alive still at INFO level: {uvc_alive_count} occurrences"
 
     def test_no_invalid_json_warnings(self, session, base_url):
-        """After the PONG-frame fix, 'Invalid JSON' should not appear."""
-        # Wait a full ping cycle (20s) to let PONG arrive and be processed
-        time.sleep(2)
+        """After the PONG-frame fix, 'Invalid JSON' should not appear.
+        Wait a full ping interval (20s) so the PONG exchange has time to occur."""
+        time.sleep(22)
         r = session.get(f"{base_url}/api/logs")
         assert "Invalid JSON" not in r.text, \
             "Spurious 'Invalid JSON' warning still appearing (PONG frame fix may not be active)"
@@ -224,6 +228,75 @@ class TestWebSocket:
         # Response must be valid JSON
         msg = json.loads(received[0])
         assert "type" in msg, f"Response missing 'type': {received[0][:200]}"
+
+
+# ── WebSocket ping stability (regression: PONG payload drain) ─
+
+class TestWebSocketStability:
+    """Verify the WebSocket connection survives multiple server→client ping
+    cycles.  The PONG-payload-drain bug caused a disconnect after ~40-60 s
+    (1-2 ping cycles × 20 s each) because unread payload bytes in the TCP
+    receive buffer corrupted the next frame header parse."""
+
+    def test_ws_survives_two_ping_cycles(self, base_url):
+        """Keep an idle WS connection open for 50 s (≥ 2 × 20 s server-ping interval)
+        and verify the connection is still alive.  Regression for the PONG-payload-drain
+        bug where unread payload bytes corrupted the next frame header causing a
+        disconnect after ~40-60 s."""
+        try:
+            import websocket
+        except ImportError:
+            pytest.skip("websocket-client not installed: pip install websocket-client")
+
+        ip = base_url.replace("https://", "")
+        url = f"wss://{ip}/ws"
+        premature_close = threading.Event()
+        connected = threading.Event()
+
+        def on_open(ws):
+            connected.set()
+            # Do NOT send a prompt — we just hold the connection idle so only
+            # PING→PONG control-frame traffic occurs. Sending agent prompts
+            # adds noise and can trigger reboots under test load.
+
+        def on_close(ws, code, reason):
+            # on_close fires when connection drops unexpectedly OR when we call
+            # ws.close() at the end of the test.  We distinguish by whether
+            # the 50 s wait has completed yet (signalled via connected being set
+            # with the thread still running).
+            if not done_waiting.is_set():
+                premature_close.set()
+
+        ws = websocket.WebSocketApp(
+            url,
+            on_open=on_open,
+            on_close=on_close,
+        )
+        done_waiting = threading.Event()
+        t = threading.Thread(
+            target=ws.run_forever,
+            kwargs={"sslopt": {"cert_reqs": ssl.CERT_NONE},
+                    "ping_interval": 0,   # disable client-side ping; let server lead
+                    "ping_timeout": None},
+            daemon=True,
+        )
+        t.start()
+
+        assert connected.wait(timeout=5), "WebSocket did not connect within 5 s"
+
+        # Hold the connection idle across two full server-ping cycles (2 × 20 s).
+        # The server sends PING every 20 s; the browser responds with PONG.
+        # Before the payload-drain fix, the unread PONG payload corrupted the
+        # next frame parse, closing the connection after ~40-60 s.
+        time.sleep(50)
+        done_waiting.set()
+
+        assert not premature_close.is_set(), \
+            "WebSocket closed prematurely during 50 s stability wait (PONG-drain bug?)"
+        assert t.is_alive(), \
+            "WebSocket thread died during 50 s stability wait (connection dropped)"
+
+        ws.close()
 
 
 # ── Health summary ────────────────────────────────────────────
