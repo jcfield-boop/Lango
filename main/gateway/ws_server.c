@@ -378,12 +378,30 @@ static esp_err_t ws_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    if (ws_pkt.len == 0) {
-        if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
-            xSemaphoreTake(s_clients_lock, portMAX_DELAY);
-            remove_client(httpd_req_to_sockfd(req));
-            xSemaphoreGive(s_clients_lock);
+    /* CLOSE frame: browsers always include a 2-byte status code (RFC 6455 §5.5.1),
+     * so ws_pkt.len is typically 2 (or more with a reason string), NOT 0.
+     * The previous check only handled the len==0 case, causing CLOSE frames with
+     * a status code to fall through to the text handler, get logged as "Invalid
+     * JSON", and leave the client slot active for up to 20 s (until next ping).
+     * That made rapid refresh fill all 4 slots with stale entries → new connections
+     * rejected. Fix: check type first, drain payload, always call remove_client. */
+    if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
+        if (ws_pkt.len > 0 && ws_pkt.len <= 125) {
+            uint8_t *drain = malloc(ws_pkt.len);
+            if (drain) {
+                ws_pkt.payload = drain;
+                httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+                ws_pkt.payload = NULL;
+                free(drain);
+            }
         }
+        xSemaphoreTake(s_clients_lock, portMAX_DELAY);
+        remove_client(httpd_req_to_sockfd(req));
+        xSemaphoreGive(s_clients_lock);
+        return ESP_OK;
+    }
+
+    if (ws_pkt.len == 0) {
         return ESP_OK;
     }
 

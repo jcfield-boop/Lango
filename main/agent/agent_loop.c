@@ -359,11 +359,23 @@ static void agent_loop_task(void *arg)
         memory_tool_reset_turn();
         web_search_reset_turn();
 
-        /* Log SRAM headroom at turn start; warn if critically low */
+        /* SRAM guard: if heap is critically low, restart cleanly rather than
+         * letting the LLM call hit malloc(NULL) and cause a hard panic.
+         * Threshold: mbedTLS (~15KB) + HTTP bufs (~8KB) + safety margin = 26KB.
+         * A hard restart shows as ESP_RST_SW (intentional), not ESP_RST_PANIC. */
         {
             uint32_t sram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
             ESP_LOGI(TAG, "Turn start: SRAM free=%lu B", (unsigned long)sram_free);
-            if (sram_free < 28 * 1024) {
+            if (sram_free < 22 * 1024) {
+                char wmsg[80];
+                snprintf(wmsg, sizeof(wmsg),
+                         "SRAM critically low (%lu B) — restarting to recover heap",
+                         (unsigned long)sram_free);
+                ESP_LOGW(TAG, "%s", wmsg);
+                ws_server_broadcast_monitor("system", wmsg);
+                vTaskDelay(pdMS_TO_TICKS(1000));  /* brief pause for log flush */
+                esp_restart();
+            } else if (sram_free < 28 * 1024) {
                 char wmsg[72];
                 snprintf(wmsg, sizeof(wmsg), "SRAM low at turn start: %lu B — risk of OOM",
                          (unsigned long)sram_free);
