@@ -8,6 +8,7 @@
 #include "cron/cron_service.h"
 #include "audio/audio_pipeline.h"
 #include "audio/tts_client.h"
+#include "audio/uac_microphone.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -1043,19 +1044,22 @@ static esp_err_t sysinfo_handler(httpd_req_t *req)
 
     uint32_t uptime_s = (uint32_t)(esp_timer_get_time() / 1000000ULL);
     const char *reset_str = reset_reason_str(esp_reset_reason());
+    bool uac_connected = uac_microphone_available();
 
-    char buf[512];
+    char buf[640];
     snprintf(buf, sizeof(buf),
              "{\"heap_free\":%u,\"heap_min\":%u,\"psram_free\":%u"
              ",\"lfs_total\":%u,\"lfs_used\":%u"
              ",\"tokens_in\":%u,\"tokens_out\":%u,\"cost_millicents\":%u"
              ",\"search_calls\":%u,\"search_cost_millicents\":%u"
-             ",\"uptime_s\":%lu,\"reset_reason\":\"%s\"}",
+             ",\"uptime_s\":%lu,\"reset_reason\":\"%s\""
+             ",\"uac_mic_connected\":%s}",
              (unsigned)heap_free, (unsigned)heap_min, (unsigned)psram_free,
              (unsigned)lfs_total, (unsigned)lfs_used,
              (unsigned)tok_in, (unsigned)tok_out, (unsigned)llm_cost_mc,
              (unsigned)search_calls, (unsigned)search_cost_mc,
-             uptime_s, reset_str);
+             uptime_s, reset_str,
+             uac_connected ? "true" : "false");
     httpd_resp_set_type(req, "application/json");
     apply_cors(req);
     httpd_resp_sendstr(req, buf);
@@ -1791,6 +1795,20 @@ esp_err_t ws_server_broadcast_monitor(const char *event, const char *msg_text)
     xSemaphoreGive(s_clients_lock);
 
     for (int i = 0; i < snap_count; i++) {
+        /* Guard against FD reuse: if a WS client disconnected and the kernel
+         * recycled the FD for a new HTTP connection, sending a WS frame to it
+         * would corrupt the HTTP response.  httpd_ws_get_fd_info() consults
+         * the httpd's internal FD table — HTTPD_WS_CLIENT_WEBSOCKET confirms
+         * the FD is still an active, upgraded WebSocket connection. */
+        httpd_ws_client_info_t fd_type = httpd_ws_get_fd_info(s_server, snap_fds[i]);
+        if (fd_type != HTTPD_WS_CLIENT_WEBSOCKET) {
+            ESP_LOGD(TAG, "Monitor: fd=%d is not WS (type=%d), removing stale slot",
+                     snap_fds[i], (int)fd_type);
+            xSemaphoreTake(s_clients_lock, portMAX_DELAY);
+            remove_client(snap_fds[i]);
+            xSemaphoreGive(s_clients_lock);
+            continue;
+        }
         esp_err_t ret = httpd_ws_send_frame_async(s_server, snap_fds[i], &pkt);
         if (ret != ESP_OK) {
             ESP_LOGD(TAG, "Monitor send to fd=%d failed, removing", snap_fds[i]);
