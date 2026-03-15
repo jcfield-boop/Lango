@@ -37,6 +37,7 @@
 #include "audio/stt_client.h"
 #include "audio/tts_client.h"
 #include "audio/i2s_audio.h"
+#include "tools/tool_say.h"
 #include "audio/microphone.h"
 #include "audio/wake_word.h"
 #include "audio/uac_microphone.h"
@@ -263,6 +264,23 @@ static void outbound_dispatch_task(void *arg)
     }
 }
 
+/* ── Boot greeting (runs in its own task after boot settles) ── */
+
+static void boot_greeting_task(void *arg)
+{
+    (void)arg;
+    /* Wait for boot activity to settle — WiFi, httpd, agent loop, etc.
+     * This avoids brownout-ing the USB 5V rail with simultaneous I2S
+     * speaker current + WiFi TX during boot. */
+    vTaskDelay(pdMS_TO_TICKS(5000));
+
+    esp_err_t err = say_speak("Hello James, your wish is my command.");
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Boot greeting failed: %s", esp_err_to_name(err));
+    }
+    vTaskDelete(NULL);
+}
+
 void app_main(void)
 {
     /* Route ALL cJSON allocations to PSRAM.
@@ -444,23 +462,12 @@ void app_main(void)
             ESP_LOGI(TAG, "SRAM free:  %u bytes",
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
-            /* Boot greeting via TTS → speaker */
-#if LANG_I2S_AUDIO_ENABLED
-            {
-                char tts_id[9] = {0};
-                esp_err_t tts_err = tts_generate("Hello James, your wish is my command.", tts_id);
-                if (tts_err == ESP_OK) {
-                    const uint8_t *wav = NULL;
-                    size_t wav_len = 0;
-                    if (tts_cache_get(tts_id, &wav, &wav_len) == ESP_OK) {
-                        ESP_LOGI(TAG, "Playing boot greeting (%u bytes)", (unsigned)wav_len);
-                        i2s_audio_play_wav_async(wav, wav_len);
-                    }
-                } else {
-                    ESP_LOGW(TAG, "Boot greeting TTS failed: %s", esp_err_to_name(tts_err));
-                }
-            }
-#endif
+            /* Boot greeting via TTS → speaker.
+             * Runs in a separate task with a delay so app_main finishes
+             * first, all services settle, and I2S playback doesn't
+             * brownout the USB UART bridge during boot. */
+            xTaskCreatePinnedToCore(boot_greeting_task, "greeting",
+                                    16 * 1024, NULL, 3, NULL, 0);
         } else {
             led_indicator_set(LED_ERROR);
             ESP_LOGW(TAG, "WiFi connection timeout. Check LANG_SECRET_WIFI_SSID.");

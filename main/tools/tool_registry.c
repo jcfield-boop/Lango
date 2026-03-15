@@ -22,6 +22,7 @@
 #include "tools/tool_memory_read.h"
 #include "tools/tool_session.h"
 #include "tools/tool_noaa_buoy.h"
+#include "tools/tool_say.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -586,6 +587,23 @@ esp_err_t tool_registry_init(void)
         .execute = tool_session_clear_execute,
     };
     register_tool(&sc);
+
+    /* Register say */
+    mimi_tool_t say = {
+        .name = "say",
+        .description = "Speak text aloud through the device speaker via TTS. "
+                       "Bypasses the LLM — goes directly to Groq TTS and plays the audio. "
+                       "Use for announcements, alerts, greetings, or any time you want the "
+                       "device to speak without generating a full LLM response.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{"
+            "\"text\":{\"type\":\"string\","
+            "\"description\":\"The text to speak aloud\"}"
+            "},\"required\":[\"text\"]}",
+        .execute = tool_say_execute,
+    };
+    register_tool(&say);
 
     build_tools_json();
 
