@@ -2,6 +2,7 @@
 #include "langoustine_config.h"
 #include "memory/psram_alloc.h"
 #include "llm/http_session.h"
+#include "gateway/ws_server.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -211,6 +212,7 @@ esp_err_t tts_generate(const char *text, char *id_out)
     if (!body) return ESP_ERR_NO_MEM;
 
     ESP_LOGI(TAG, "TTS generate: %u text chars", (unsigned)strlen(text));
+    ws_server_broadcast_monitor_verbose("tts", "Groq PlayAI");
 
     /* Binary response buffer, starting at 64KB in PSRAM */
     bin_buf_t bb = {0};

@@ -100,7 +100,7 @@ static void detect_task(void *arg)
         if (ptt && !ptt_active && !recording) {
             /* PTT just pressed — start recording immediately */
             if (audio_ring_open_wav(WW_CHAT_ID, LANG_MIC_SAMPLE_RATE, 1,
-                                     LANG_MIC_BITS) == ESP_OK) {
+                                     LANG_MIC_BITS, LANG_CHAN_WEBSOCKET) == ESP_OK) {
                 led_indicator_set(LED_LISTENING);
                 recording      = true;
                 ptt_active     = true;
@@ -132,7 +132,7 @@ static void detect_task(void *arg)
             res->wakeup_state == WAKENET_DETECTED) {
             ESP_LOGI(TAG, "Wake word 'Hi ESP' detected");
             if (audio_ring_open_wav(WW_CHAT_ID, LANG_MIC_SAMPLE_RATE, 1,
-                                     LANG_MIC_BITS) == ESP_OK) {
+                                     LANG_MIC_BITS, LANG_CHAN_WEBSOCKET) == ESP_OK) {
                 led_indicator_set(LED_LISTENING);
                 recording      = true;
                 speech_started = false;

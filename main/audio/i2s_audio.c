@@ -16,6 +16,14 @@ static const char *TAG = "i2s_audio";
 /* Runtime volume: 0=mute, 128=50% (-6dB), 255=100%. Persisted to NVS. */
 static volatile uint8_t s_volume = LANG_AUDIO_VOLUME;
 
+/* Async playback cancel flag — checked in the write loop */
+static volatile bool s_play_cancel = false;
+
+/* Async playback task state */
+static TaskHandle_t     s_play_task    = NULL;
+static const uint8_t   *s_play_wav     = NULL;
+static size_t           s_play_wav_len = 0;
+
 
 void i2s_audio_set_volume(uint8_t vol)
 {
@@ -351,6 +359,10 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
     ESP_LOGI(TAG, "Playing WAV: %u bytes PCM (vol=%u/255)", (unsigned)remain, vol);
 
     while (remain > 0) {
+        if (s_play_cancel) {
+            ESP_LOGI(TAG, "Playback cancelled (%u bytes remaining)", (unsigned)remain);
+            break;
+        }
         size_t chunk = remain < 4096 ? remain : 4096;
         if (vol < 255) {
             /* Scale 16-bit samples; safe for both mono and stereo */
@@ -365,7 +377,7 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
         }
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "i2s_channel_write error: %s", esp_err_to_name(ret));
-            return ret;
+            break;
         }
         pcm    += written;
         remain -= written;
@@ -378,6 +390,54 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
 
     ESP_LOGI(TAG, "Playback complete");
     return ESP_OK;
+}
+
+/* ── Async playback ────────────────────────────────────────────── */
+
+static void i2s_play_task(void *arg)
+{
+    (void)arg;
+    while (1) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        const uint8_t *wav = s_play_wav;
+        size_t len = s_play_wav_len;
+        s_play_cancel = false;
+
+        if (wav && len > 0) {
+            i2s_audio_play_wav(wav, len);
+        }
+    }
+}
+
+esp_err_t i2s_audio_play_wav_async(const uint8_t *wav_data, size_t len)
+{
+    if (!s_tx_handle) return ESP_ERR_INVALID_STATE;
+
+    /* Create playback task on first call (Core 0, keeps Core 1 for agent) */
+    if (!s_play_task) {
+        BaseType_t ret = xTaskCreatePinnedToCore(
+            i2s_play_task, "i2s_play", 8192, NULL, 4, &s_play_task, 0);
+        if (ret != pdPASS) {
+            ESP_LOGE(TAG, "Failed to create I2S play task");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    /* Cancel current playback if any */
+    s_play_cancel = true;
+    vTaskDelay(pdMS_TO_TICKS(50));  /* let current write loop see the flag */
+
+    s_play_wav     = wav_data;
+    s_play_wav_len = len;
+    xTaskNotifyGive(s_play_task);
+
+    return ESP_OK;
+}
+
+void i2s_audio_stop(void)
+{
+    s_play_cancel = true;
 }
 
 esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint32_t timeout_ms)

@@ -42,6 +42,7 @@
 #include "audio/uac_microphone.h"
 #include "camera/uvc_camera.h"
 #include "led/led_indicator.h"
+#include "config/services_config.h"
 #include "diag/log_buffer.h"
 #include "mdns.h"
 #include "esp_ota_ops.h"
@@ -325,6 +326,22 @@ void app_main(void)
     ESP_ERROR_CHECK(stt_client_init());
     ESP_ERROR_CHECK(tts_client_init());
 
+#if LANG_I2S_AUDIO_ENABLED
+    /* I2S speaker output via MAX98357A (GPIO 15/16/17, amp SD on GPIO42).
+     * Safe to init even without INMP441 on GPIO18 — RX failure is non-fatal.
+     * Brownout mitigations in place: VIN→5V USB rail, WIFI_PS_NONE, BOD disabled. */
+    {
+        esp_err_t i2s_err = i2s_audio_init();
+        if (i2s_err == ESP_OK) {
+            ESP_LOGI(TAG, "I2S speaker ready (MAX98357A on GPIO%d/%d/%d, amp SD GPIO%d)",
+                     LANG_I2S_BCLK, LANG_I2S_LRCLK, LANG_I2S_DOUT, LANG_AMP_SD_GPIO);
+        } else {
+            ESP_LOGW(TAG, "I2S speaker init failed: %s — TTS will be browser-only",
+                     esp_err_to_name(i2s_err));
+        }
+    }
+#endif
+
     /* UVC camera + UAC mic — both use the USB host; register ALL class drivers
      * BEFORE starting the USB lib task so the webcam enumerates into both drivers
      * simultaneously.  If UAC is installed after the lib task starts it misses the
@@ -359,6 +376,7 @@ void app_main(void)
     ESP_ERROR_CHECK(http_proxy_init());
     ESP_ERROR_CHECK(llm_proxy_init());
     ESP_ERROR_CHECK(tool_registry_init());
+    services_config_load();  /* Fill in API keys from SERVICES.md (NVS takes priority) */
     ESP_ERROR_CHECK(cron_service_init());
     ESP_ERROR_CHECK(heartbeat_init());
     ESP_ERROR_CHECK(rule_engine_init());

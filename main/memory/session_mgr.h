@@ -55,6 +55,13 @@ esp_err_t session_trim(const char *chat_id, int max_msgs);
 esp_err_t session_clear(const char *chat_id);
 
 /**
+ * Invalidate the PSRAM hot cache for a session.
+ * Call this when a session file is modified externally (e.g., web UI file editor).
+ * If chat_id is NULL or empty, invalidates any cached session.
+ */
+void session_cache_invalidate(const char *chat_id);
+
+/**
  * List all session files (prints to log).
  */
 void session_list(void);

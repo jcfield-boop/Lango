@@ -53,6 +53,7 @@ idf_component_register(
         "camera/uvc_camera.c"
         "tools/tool_capture_image.c"
         "led/led_indicator.c"
+        "config/services_config.c"
         "diag/log_buffer.c"
     EMBED_TXTFILES
         "certs/server_cert.pem"

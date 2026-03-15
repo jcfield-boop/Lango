@@ -49,6 +49,24 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len);
 esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint32_t timeout_ms);
 
 /**
+ * @brief Play a WAV file asynchronously through the I2S speaker.
+ *
+ * Starts playback in a background task and returns immediately.
+ * If already playing, the current playback is cancelled and the new WAV starts.
+ * The WAV data must remain valid (in PSRAM cache) for the duration of playback.
+ *
+ * @param wav_data  Pointer to WAV file data (RIFF header + PCM payload).
+ * @param len       Total byte length of the WAV buffer.
+ * @return ESP_OK on success.
+ */
+esp_err_t i2s_audio_play_wav_async(const uint8_t *wav_data, size_t len);
+
+/**
+ * @brief Stop any in-progress async playback.
+ */
+void i2s_audio_stop(void);
+
+/**
  * @brief Set playback volume (0=mute, 128=50%, 255=full). Persisted to NVS.
  */
 void i2s_audio_set_volume(uint8_t vol);

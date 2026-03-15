@@ -37,7 +37,8 @@ static void ptt_task(void *arg)
             ESP_LOGI(TAG, "PTT pressed — opening WAV ring");
             esp_err_t ret = audio_ring_open_wav(PTT_CHAT_ID,
                                                 LANG_MIC_SAMPLE_RATE, 1,
-                                                LANG_MIC_BITS);
+                                                LANG_MIC_BITS,
+                                                LANG_CHAN_WEBSOCKET);
             if (ret != ESP_OK) {
                 ESP_LOGW(TAG, "Cannot open audio ring: %s — ignoring press",
                          esp_err_to_name(ret));

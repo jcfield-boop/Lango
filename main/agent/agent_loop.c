@@ -10,6 +10,7 @@
 #include "tools/tool_memory.h"
 #include "tools/tool_web_search.h"
 #include "audio/tts_client.h"
+#include "audio/i2s_audio.h"
 #include "telegram/telegram_bot.h"
 #include "led/led_indicator.h"
 
@@ -631,10 +632,10 @@ static void agent_loop_task(void *arg)
                 led_indicator_set(LED_SPEAKING);
                 ws_server_send_status(msg.chat_id, "tts_generating");
                 char tts_id[9] = {0};
-                /* Limit TTS to first sentence (or ~200 chars) to keep WAV manageable.
+                /* Limit TTS input to keep WAV download manageable for browsers.
                  * Truncate at the last sentence boundary (. ! ?) within the limit.
                  * Full text is still sent to the browser for display. */
-                #define TTS_MAX_CHARS 200
+                #define TTS_MAX_CHARS 500
                 char tts_buf[TTS_MAX_CHARS + 1];
                 const char *tts_text = final_text;
                 if (strlen(final_text) > TTS_MAX_CHARS) {
@@ -663,6 +664,18 @@ static void agent_loop_task(void *arg)
                 if (tts_err == ESP_OK && tts_id[0]) {
                     /* Send message with tts_id so browser auto-plays */
                     ws_server_send_with_tts(msg.chat_id, final_text, tts_id, img_url);
+
+#if LANG_I2S_AUDIO_ENABLED
+                    /* Play TTS audio through local MAX98357A speaker */
+                    {
+                        const uint8_t *wav_buf = NULL;
+                        size_t wav_len = 0;
+                        if (tts_cache_get(tts_id, &wav_buf, &wav_len) == ESP_OK) {
+                            ESP_LOGI(TAG, "Playing TTS via I2S speaker (%u bytes, async)", (unsigned)wav_len);
+                            i2s_audio_play_wav_async(wav_buf, wav_len);
+                        }
+                    }
+#endif
                 } else if (img_url && strcmp(msg.channel, "websocket") == 0) {
                     /* No TTS but have an image — send directly so image_url is included */
                     ws_server_send_with_tts(msg.chat_id, final_text, NULL, img_url);

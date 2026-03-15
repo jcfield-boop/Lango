@@ -12,23 +12,118 @@
 
 static const char *TAG = "session";
 
-/* Matches LANG_SESSION_HISTORY_MAX_BYTES */
+/* Line buffer for reading JSONL — sized to match content budget */
 #define SESS_LINE_BUF  (LANG_SESSION_HISTORY_MAX_BYTES)
+
+/* ─── PSRAM hot cache for the active session ─── */
+static char   s_cache_chat_id[32] = {0};
+static cJSON *s_cache_arr         = NULL;  /* owned cJSON array in PSRAM */
+
+static void cache_invalidate(void)
+{
+    if (s_cache_arr) {
+        cJSON_Delete(s_cache_arr);
+        s_cache_arr = NULL;
+    }
+    s_cache_chat_id[0] = '\0';
+}
+
+/* ─── Helpers ─── */
 
 static void session_path(const char *chat_id, char *buf, size_t size)
 {
-    /* LittleFS supports real directories; sessions use ws_ prefix */
     snprintf(buf, size, "%s/ws_%s.jsonl", LANG_LFS_SESSION_DIR, chat_id);
 }
 
+/* Load entire session from file into a cJSON array (all messages). */
+static cJSON *load_session_from_file(const char *chat_id)
+{
+    char path[96];
+    session_path(chat_id, path, sizeof(path));
+
+    FILE *f = fopen(path, "r");
+    if (!f) return cJSON_CreateArray();
+
+    cJSON *arr = cJSON_CreateArray();
+    char *line = ps_malloc(SESS_LINE_BUF);
+    if (!line) { fclose(f); return arr; }
+
+    while (fgets(line, SESS_LINE_BUF, f)) {
+        size_t len = strlen(line);
+        if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+        if (line[0] == '\0') continue;
+
+        cJSON *obj = cJSON_Parse(line);
+        if (!obj) continue;
+
+        /* Keep only role + content (strip ts etc.) */
+        cJSON *role    = cJSON_GetObjectItem(obj, "role");
+        cJSON *content = cJSON_GetObjectItem(obj, "content");
+        if (role && content) {
+            cJSON *entry = cJSON_CreateObject();
+            cJSON_AddStringToObject(entry, "role", role->valuestring);
+            cJSON_AddStringToObject(entry, "content", content->valuestring);
+            cJSON_AddItemToArray(arr, entry);
+        }
+        cJSON_Delete(obj);
+    }
+
+    free(line);
+    fclose(f);
+    return arr;
+}
+
+/* Ensure the cache is populated for the given chat_id. */
+static void cache_ensure(const char *chat_id)
+{
+    if (s_cache_arr && strcmp(s_cache_chat_id, chat_id) == 0) {
+        return;  /* already cached */
+    }
+
+    cache_invalidate();
+
+    s_cache_arr = load_session_from_file(chat_id);
+    strncpy(s_cache_chat_id, chat_id, sizeof(s_cache_chat_id) - 1);
+    s_cache_chat_id[sizeof(s_cache_chat_id) - 1] = '\0';
+
+    ESP_LOGI(TAG, "Session cache loaded for %s (%d messages)",
+             chat_id, cJSON_GetArraySize(s_cache_arr));
+}
+
+/* Extract the last max_msgs entries from a cJSON array as a new deep-copied array. */
+static cJSON *extract_tail(const cJSON *src_arr, int max_msgs)
+{
+    int total = cJSON_GetArraySize(src_arr);
+    int start = (total > max_msgs) ? (total - max_msgs) : 0;
+
+    cJSON *result = cJSON_CreateArray();
+    for (int i = start; i < total; i++) {
+        const cJSON *src = cJSON_GetArrayItem(src_arr, i);
+        const cJSON *role    = cJSON_GetObjectItemCaseSensitive(src, "role");
+        const cJSON *content = cJSON_GetObjectItemCaseSensitive(src, "content");
+        if (role && content) {
+            cJSON *entry = cJSON_CreateObject();
+            cJSON_AddStringToObject(entry, "role", role->valuestring);
+            cJSON_AddStringToObject(entry, "content", content->valuestring);
+            cJSON_AddItemToArray(result, entry);
+        }
+    }
+    return result;
+}
+
+/* ─── Public API ─── */
+
 esp_err_t session_mgr_init(void)
 {
-    ESP_LOGI(TAG, "Session manager initialized at %s", LANG_LFS_SESSION_DIR);
+    ESP_LOGI(TAG, "Session manager initialized at %s (max %d msgs, %dKB budget)",
+             LANG_LFS_SESSION_DIR, LANG_SESSION_MAX_MSGS,
+             LANG_SESSION_HISTORY_MAX_BYTES / 1024);
     return ESP_OK;
 }
 
 esp_err_t session_append(const char *chat_id, const char *role, const char *content)
 {
+    /* 1. Write to JSONL file */
     char path[96];
     session_path(chat_id, path, sizeof(path));
 
@@ -50,68 +145,24 @@ esp_err_t session_append(const char *chat_id, const char *role, const char *cont
         fprintf(f, "%s\n", line);
         free(line);
     }
-
     fclose(f);
+
+    /* 2. Update hot cache if it's for the active session */
+    if (s_cache_arr && strcmp(s_cache_chat_id, chat_id) == 0) {
+        cJSON *entry = cJSON_CreateObject();
+        cJSON_AddStringToObject(entry, "role", role);
+        cJSON_AddStringToObject(entry, "content", content);
+        cJSON_AddItemToArray(s_cache_arr, entry);
+    }
+
     return ESP_OK;
 }
 
 esp_err_t session_get_history_json(const char *chat_id, char *buf, size_t size, int max_msgs)
 {
-    char path[96];
-    session_path(chat_id, path, sizeof(path));
+    cache_ensure(chat_id);
 
-    FILE *f = fopen(path, "r");
-    if (!f) {
-        snprintf(buf, size, "[]");
-        return ESP_OK;
-    }
-
-    cJSON *messages[LANG_SESSION_MAX_MSGS];
-    int count = 0;
-    int write_idx = 0;
-
-    char *line = ps_malloc(SESS_LINE_BUF);
-    if (!line) { fclose(f); snprintf(buf, size, "[]"); return ESP_OK; }
-
-    while (fgets(line, SESS_LINE_BUF, f)) {
-        size_t len = strlen(line);
-        if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
-        if (line[0] == '\0') continue;
-
-        cJSON *obj = cJSON_Parse(line);
-        if (!obj) continue;
-
-        if (count >= max_msgs) {
-            cJSON_Delete(messages[write_idx]);
-        }
-        messages[write_idx] = obj;
-        write_idx = (write_idx + 1) % max_msgs;
-        if (count < max_msgs) count++;
-    }
-    free(line);
-    fclose(f);
-
-    cJSON *arr = cJSON_CreateArray();
-    int start = (count < max_msgs) ? 0 : write_idx;
-    for (int i = 0; i < count; i++) {
-        int idx = (start + i) % max_msgs;
-        cJSON *src = messages[idx];
-
-        cJSON *entry = cJSON_CreateObject();
-        cJSON *role = cJSON_GetObjectItem(src, "role");
-        cJSON *content = cJSON_GetObjectItem(src, "content");
-        if (role && content) {
-            cJSON_AddStringToObject(entry, "role", role->valuestring);
-            cJSON_AddStringToObject(entry, "content", content->valuestring);
-        }
-        cJSON_AddItemToArray(arr, entry);
-    }
-
-    int cleanup_start = (count < max_msgs) ? 0 : write_idx;
-    for (int i = 0; i < count; i++) {
-        int idx = (cleanup_start + i) % max_msgs;
-        cJSON_Delete(messages[idx]);
-    }
+    cJSON *arr = extract_tail(s_cache_arr, max_msgs);
 
     char *json_str = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
@@ -129,60 +180,8 @@ esp_err_t session_get_history_json(const char *chat_id, char *buf, size_t size, 
 
 cJSON *session_get_history_cjson(const char *chat_id, int max_msgs)
 {
-    char path[96];
-    session_path(chat_id, path, sizeof(path));
-
-    FILE *f = fopen(path, "r");
-    if (!f) {
-        return cJSON_CreateArray();
-    }
-
-    cJSON *ring[LANG_SESSION_MAX_MSGS];
-    int count = 0;
-    int write_idx = 0;
-
-    char *line = ps_malloc(SESS_LINE_BUF);
-    if (!line) { fclose(f); return cJSON_CreateArray(); }
-
-    while (fgets(line, SESS_LINE_BUF, f)) {
-        size_t len = strlen(line);
-        if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
-        if (line[0] == '\0') continue;
-
-        cJSON *obj = cJSON_Parse(line);
-        if (!obj) continue;
-
-        if (count >= max_msgs) {
-            cJSON_Delete(ring[write_idx]);
-        }
-        ring[write_idx] = obj;
-        write_idx = (write_idx + 1) % max_msgs;
-        if (count < max_msgs) count++;
-    }
-    free(line);
-    fclose(f);
-
-    cJSON *arr = cJSON_CreateArray();
-    int start = (count < max_msgs) ? 0 : write_idx;
-    for (int i = 0; i < count; i++) {
-        int idx = (start + i) % max_msgs;
-        cJSON *src = ring[idx];
-        cJSON *role = cJSON_GetObjectItem(src, "role");
-        cJSON *content = cJSON_GetObjectItem(src, "content");
-        if (role && content) {
-            cJSON *entry = cJSON_CreateObject();
-            cJSON_AddStringToObject(entry, "role", role->valuestring);
-            cJSON_AddStringToObject(entry, "content", content->valuestring);
-            cJSON_AddItemToArray(arr, entry);
-        }
-    }
-
-    int cleanup_start = (count < max_msgs) ? 0 : write_idx;
-    for (int i = 0; i < count; i++) {
-        cJSON_Delete(ring[(cleanup_start + i) % max_msgs]);
-    }
-
-    return arr;
+    cache_ensure(chat_id);
+    return extract_tail(s_cache_arr, max_msgs);
 }
 
 esp_err_t session_trim(const char *chat_id, int max_msgs)
@@ -195,8 +194,14 @@ esp_err_t session_trim(const char *chat_id, int max_msgs)
     FILE *f = fopen(path, "r");
     if (!f) return ESP_OK;
 
-    long ring[LANG_SESSION_MAX_MSGS + 1];
-    memset(ring, 0, sizeof(ring));
+    /* Count lines and track byte offsets of last max_msgs lines */
+    long *ring = ps_calloc(max_msgs + 1, sizeof(long));
+    if (!ring) {
+        fclose(f);
+        ESP_LOGW(TAG, "session_trim: OOM for offset ring");
+        return ESP_ERR_NO_MEM;
+    }
+
     int  ridx     = 0;
     int  count    = 0;
     long pos      = 0;
@@ -221,13 +226,18 @@ esp_err_t session_trim(const char *chat_id, int max_msgs)
     long file_size = pos;
     fclose(f);
 
-    if (count <= max_msgs) return ESP_OK;
+    if (count <= max_msgs) {
+        free(ring);
+        return ESP_OK;
+    }
 
     long keep_from = ring[(ridx + 1) % (max_msgs + 1)];
     long keep_size = file_size - keep_from;
+    free(ring);
+
     if (keep_size <= 0) return ESP_OK;
 
-    char *buf = malloc((size_t)keep_size + 1);
+    char *buf = ps_malloc((size_t)keep_size + 1);
     if (!buf) {
         ESP_LOGW(TAG, "session_trim: OOM (need %ld bytes)", keep_size);
         return ESP_ERR_NO_MEM;
@@ -246,13 +256,28 @@ esp_err_t session_trim(const char *chat_id, int max_msgs)
     fclose(f);
     free(buf);
 
-    ESP_LOGI(TAG, "Session %s trimmed: %d → %d lines (%ld bytes kept)",
+    ESP_LOGI(TAG, "Session %s trimmed: %d -> %d lines (%ld bytes kept)",
              chat_id, count, max_msgs, (long)rd);
+
+    /* Also trim the hot cache to stay in sync */
+    if (s_cache_arr && strcmp(s_cache_chat_id, chat_id) == 0) {
+        int cached = cJSON_GetArraySize(s_cache_arr);
+        while (cached > max_msgs) {
+            cJSON_DeleteItemFromArray(s_cache_arr, 0);
+            cached--;
+        }
+    }
+
     return ESP_OK;
 }
 
 esp_err_t session_clear(const char *chat_id)
 {
+    /* Invalidate cache if it matches */
+    if (s_cache_arr && strcmp(s_cache_chat_id, chat_id) == 0) {
+        cache_invalidate();
+    }
+
     char path[96];
     session_path(chat_id, path, sizeof(path));
 
@@ -263,9 +288,20 @@ esp_err_t session_clear(const char *chat_id)
     return ESP_ERR_NOT_FOUND;
 }
 
+void session_cache_invalidate(const char *chat_id)
+{
+    if (!chat_id || !chat_id[0]) {
+        cache_invalidate();
+        return;
+    }
+    if (s_cache_arr && strcmp(s_cache_chat_id, chat_id) == 0) {
+        cache_invalidate();
+        ESP_LOGI(TAG, "Session cache invalidated for %s", chat_id);
+    }
+}
+
 void session_list(void)
 {
-    /* LittleFS has real directories — use opendir on the sessions dir */
     DIR *dir = opendir(LANG_LFS_SESSION_DIR);
     if (!dir) {
         ESP_LOGW(TAG, "Cannot open sessions directory: %s", LANG_LFS_SESSION_DIR);

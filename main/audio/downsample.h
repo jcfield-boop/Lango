@@ -35,3 +35,25 @@ static inline size_t pcm16_downsample(void *buf, size_t in_bytes, int ratio)
     }
     return out_samples * 2;
 }
+
+/**
+ * pcm16_stereo_to_mono — convert interleaved stereo to mono in-place.
+ *
+ * Averages each (L, R) pair into a single mono sample.  Returns the number
+ * of output bytes (= in_bytes / 2).  If in_bytes < 4 the buffer is unchanged.
+ */
+static inline size_t pcm16_stereo_to_mono(void *buf, size_t in_bytes)
+{
+    if (in_bytes < 4) return in_bytes;
+
+    int16_t *s = (int16_t *)buf;
+    size_t   frames     = in_bytes / 4;   /* 4 bytes per stereo frame */
+    size_t   out_samples = 0;
+
+    for (size_t i = 0; i < frames; i++) {
+        int32_t l = s[i * 2];
+        int32_t r = s[i * 2 + 1];
+        s[out_samples++] = (int16_t)((l + r) / 2);
+    }
+    return out_samples * 2;
+}
