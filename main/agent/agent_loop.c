@@ -651,6 +651,34 @@ static void agent_loop_task(void *arg)
                     tts_buf[cut] = '\0';
                     tts_text = tts_buf;
                 }
+                /* Strip emoji / non-ASCII symbols that TTS engines can't pronounce.
+                 * UTF-8 4-byte sequences (0xF0...) cover U+10000+ (emoji, symbols).
+                 * Also strip common 3-byte dingbats (U+2600-U+27BF, U+2B50, etc). */
+                {
+                    char *cleaned = tts_buf;
+                    if (tts_text != tts_buf) {
+                        strncpy(tts_buf, tts_text, TTS_MAX_CHARS);
+                        tts_buf[TTS_MAX_CHARS] = '\0';
+                    }
+                    char *dst = cleaned;
+                    const char *src = cleaned;
+                    while (*src) {
+                        unsigned char c = (unsigned char)*src;
+                        if (c >= 0xF0) {
+                            /* Skip 4-byte UTF-8 sequence (emoji) */
+                            int skip = 4;
+                            while (skip > 1 && src[1] && ((unsigned char)src[1] & 0xC0) == 0x80) { src++; skip--; }
+                            src++;
+                        } else if (c == 0xE2 && src[1] && src[2] && (unsigned char)src[1] >= 0x98) {
+                            /* Skip 3-byte dingbats/symbols (U+2600+) */
+                            src += 3;
+                        } else {
+                            *dst++ = *src++;
+                        }
+                    }
+                    *dst = '\0';
+                    tts_text = cleaned;
+                }
                 esp_err_t tts_err = tts_generate(tts_text, tts_id);
 
                 /* Only include image URL if a capture actually succeeded (file exists) */

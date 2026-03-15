@@ -328,44 +328,44 @@ void app_main(void)
 
 #if LANG_I2S_AUDIO_ENABLED
     /* I2S speaker output via MAX98357A (GPIO 15/16/17, amp SD on GPIO42).
-     * Safe to init even without INMP441 on GPIO18 — RX failure is non-fatal.
+     * Also opens I2S RX for INMP441 mic on GPIO18.
      * Brownout mitigations in place: VIN→5V USB rail, WIFI_PS_NONE, BOD disabled. */
     {
         esp_err_t i2s_err = i2s_audio_init();
         if (i2s_err == ESP_OK) {
             ESP_LOGI(TAG, "I2S speaker ready (MAX98357A on GPIO%d/%d/%d, amp SD GPIO%d)",
                      LANG_I2S_BCLK, LANG_I2S_LRCLK, LANG_I2S_DOUT, LANG_AMP_SD_GPIO);
+
+            /* INMP441 mic: wake word ("Hi ESP") + PTT (BOOT button).
+             * Disabled until working INMP441 is installed — current board outputs
+             * railed signal (peak=32767) regardless of L/R setting.
+             * TODO: re-enable when replacement INMP441 arrives. */
+#if 0  /* INMP441 damaged — re-enable when replaced */
+            microphone_init();
+            esp_err_t ww_err = wake_word_init();
+            if (ww_err == ESP_OK) ww_err = wake_word_start();
+            if (ww_err == ESP_OK) {
+                ESP_LOGI(TAG, "INMP441 wake word + PTT ready (say \"Hi ESP\" or press BOOT)");
+            } else {
+                ESP_LOGW(TAG, "Wake word unavailable (%s) — INMP441 PTT-only",
+                         esp_err_to_name(ww_err));
+                microphone_start();
+            }
+#endif
+            ESP_LOGW(TAG, "INMP441 mic disabled (awaiting replacement board)");
         } else {
-            ESP_LOGW(TAG, "I2S speaker init failed: %s — TTS will be browser-only",
+            ESP_LOGW(TAG, "I2S init failed: %s — speaker + mic disabled",
                      esp_err_to_name(i2s_err));
         }
     }
 #endif
 
-    /* UVC camera + UAC mic — both use the USB host; register ALL class drivers
-     * BEFORE starting the USB lib task so the webcam enumerates into both drivers
-     * simultaneously.  If UAC is installed after the lib task starts it misses the
-     * device-connected callback and s_uac_connected stays false forever.
-     *
-     * Order is critical:
-     *   1. uvc_camera_init()         — usb_host_install + uvc_host_install (no task)
-     *   2. uac_microphone_init()     — uac_host_install (no delay)
-     *   3. uvc_camera_start_host_task() — usb_lib_task created; daemon fires NEW_DEV
-     *                                     to both UVC and UAC simultaneously */
+    /* UVC camera + UAC mic — both use the USB host stack.
+     * UAC provides an alternative mic input if a USB audio device is connected.
+     * INMP441 wake word (above) remains active regardless. */
     uvc_camera_init();
-    esp_err_t uac_err = uac_microphone_init();
-    uvc_camera_start_host_task();   /* both drivers registered — safe to start now */
-
-    if (uac_err == ESP_OK) {
-        uac_microphone_start();
-        ESP_LOGI(TAG, "UAC mic: PTT ready (BOOT button) — browser voice also available");
-    } else {
-        /* No UAC mic available. I2S mic (INMP441 on GPIO18) not yet wired.
-         * PTT and wake-word are disabled until hardware is connected. */
-        ESP_LOGW(TAG, "UAC mic unavailable — I2S mic not wired, PTT disabled");
-        /* i2s_audio_init() / microphone_init() / wake_word_init() intentionally
-         * omitted: no INMP441 on GPIO18 yet. Re-enable when mic is installed. */
-    }
+    uac_microphone_init();
+    uvc_camera_start_host_task();
 
     /* Initialize subsystems */
     ESP_ERROR_CHECK(message_bus_init());

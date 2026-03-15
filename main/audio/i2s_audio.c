@@ -342,9 +342,11 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
     }
 
 #if LANG_AMP_SD_GPIO >= 0
-    /* Enable amp; 10 ms for output capacitor and supply to stabilise */
+    /* Enable amp; 20 ms for output capacitor and supply to stabilise.
+     * The SD pin gates the class-D output stage — pulling low eliminates
+     * idle current draw and hiss between utterances. */
     gpio_set_level(LANG_AMP_SD_GPIO, 1);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(20));
 #endif
 
     /* Stream PCM data in 4KB chunks with software volume scaling.
@@ -384,8 +386,11 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
     }
 
 #if LANG_AMP_SD_GPIO >= 0
-    /* Disable amp: pull SD low — zero idle current, no hiss between utterances */
+    /* Drain: flush the I2S DMA FIFO so the last samples reach the DAC,
+     * then disable amp. Small delay avoids a click/pop from abrupt shutdown. */
+    vTaskDelay(pdMS_TO_TICKS(30));
     gpio_set_level(LANG_AMP_SD_GPIO, 0);
+    ESP_LOGD(TAG, "Amp shutdown (GPIO%d low)", LANG_AMP_SD_GPIO);
 #endif
 
     ESP_LOGI(TAG, "Playback complete");
@@ -424,9 +429,10 @@ esp_err_t i2s_audio_play_wav_async(const uint8_t *wav_data, size_t len)
         }
     }
 
-    /* Cancel current playback if any */
+    /* Cancel current playback if any.
+     * 100ms allows: cancel flag seen (1 write cycle ~50ms) + amp shutdown (30ms) */
     s_play_cancel = true;
-    vTaskDelay(pdMS_TO_TICKS(50));  /* let current write loop see the flag */
+    vTaskDelay(pdMS_TO_TICKS(100));
 
     s_play_wav     = wav_data;
     s_play_wav_len = len;

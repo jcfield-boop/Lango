@@ -244,12 +244,20 @@ static void cron_process_due_jobs(void)
     time_t now = time(NULL);
 
     bool changed = false;
+    int fired = 0;
 
     for (int i = 0; i < s_job_count; i++) {
         cron_job_t *job = &s_jobs[i];
         if (!job->enabled) continue;
         if (job->next_run <= 0) continue;
         if (job->next_run > now) continue;
+
+        /* Limit to 1 job per check interval to prevent burst-firing
+         * all overdue jobs at once (causes network/power stress on boot) */
+        if (fired >= 1) {
+            ESP_LOGI(TAG, "Cron job %s (%s) deferred to next interval", job->name, job->id);
+            continue;
+        }
 
         /* Job is due — fire it */
         ESP_LOGI(TAG, "Cron job firing: %s (%s)", job->name, job->id);
@@ -296,6 +304,7 @@ static void cron_process_due_jobs(void)
         }
 
         changed = true;
+        fired++;
     }
 
     if (changed) {

@@ -14,6 +14,7 @@
 #include "audio/i2s_audio.h"
 #include "audio/audio_pipeline.h"
 #include "led/led_indicator.h"
+#include "gateway/ws_server.h"
 #include "langoustine_config.h"
 #include "memory/psram_alloc.h"
 
@@ -21,6 +22,7 @@
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include <inttypes.h>
 
 static const char *TAG = "wake_word";
 
@@ -69,6 +71,11 @@ static void feed_task(void *arg)
         return;
     }
 
+    uint32_t feed_count = 0;
+    uint32_t fail_count = 0;
+    int16_t  peak_val   = 0;
+    TickType_t last_diag = xTaskGetTickCount();
+
     while (1) {
         size_t got = 0;
         esp_err_t ret = i2s_audio_read((uint8_t *)buf,
@@ -76,6 +83,29 @@ static void feed_task(void *arg)
                                        &got, 200);
         if (ret == ESP_OK && got == (size_t)(s_feed_chunk * sizeof(int16_t))) {
             s_afe_iface->feed(s_afe_data, buf);
+            feed_count++;
+            /* Track peak amplitude for mic level diagnostic */
+            for (int i = 0; i < s_feed_chunk; i++) {
+                int16_t v = buf[i] < 0 ? -buf[i] : buf[i];
+                if (v > peak_val) peak_val = v;
+            }
+        } else {
+            fail_count++;
+        }
+
+        /* Periodic diagnostic every 10 s */
+        TickType_t now = xTaskGetTickCount();
+        if ((now - last_diag) > pdMS_TO_TICKS(10000)) {
+            ESP_LOGI(TAG, "Feed diag: %"PRIu32" feeds, %"PRIu32" fails, peak=%d",
+                     feed_count, fail_count, (int)peak_val);
+            char diag[80];
+            snprintf(diag, sizeof(diag), "feeds=%"PRIu32" fails=%"PRIu32" peak=%d",
+                     feed_count, fail_count, (int)peak_val);
+            ws_server_broadcast_monitor("ww_feed", diag);
+            feed_count = 0;
+            fail_count = 0;
+            peak_val   = 0;
+            last_diag  = now;
         }
     }
 }
@@ -92,6 +122,9 @@ static void detect_task(void *arg)
     bool speech_started = false;
     TickType_t activate_tick    = 0;   /* when recording started (wake word) */
     TickType_t silence_start    = 0;   /* when VAD silence began */
+    uint32_t   detect_count     = 0;
+    uint32_t   speech_frames    = 0;
+    TickType_t last_detect_diag = xTaskGetTickCount();
 
     while (1) {
         /* ── Check PTT button ────────────────────────────────── */
@@ -108,6 +141,7 @@ static void detect_task(void *arg)
                 activate_tick  = xTaskGetTickCount();
                 silence_start  = 0;
                 ESP_LOGI(TAG, "PTT pressed — recording");
+                ws_server_broadcast_monitor("wake_word", "PTT pressed — recording");
             }
         } else if (!ptt && ptt_active) {
             /* PTT released — commit */
@@ -127,10 +161,34 @@ static void detect_task(void *arg)
         afe_fetch_result_t *res = s_afe_iface->fetch(s_afe_data);
         if (!res) continue;
 
+        detect_count++;
+        if (res->vad_state == VAD_SPEECH) speech_frames++;
+
+        /* Periodic detect diagnostic every 10 s */
+        {
+            TickType_t now_d = xTaskGetTickCount();
+            if ((now_d - last_detect_diag) > pdMS_TO_TICKS(10000)) {
+                ESP_LOGI(TAG, "Detect diag: %"PRIu32" fetches, %"PRIu32" speech frames, "
+                         "wakeup=%d, recording=%d",
+                         detect_count, speech_frames,
+                         (int)res->wakeup_state, (int)recording);
+                char diag[120];
+                snprintf(diag, sizeof(diag),
+                         "fetches=%"PRIu32" speech=%"PRIu32" wakeup=%d rec=%d",
+                         detect_count, speech_frames,
+                         (int)res->wakeup_state, (int)recording);
+                ws_server_broadcast_monitor("ww_detect", diag);
+                detect_count     = 0;
+                speech_frames    = 0;
+                last_detect_diag = now_d;
+            }
+        }
+
         /* ── Wake word detection ─────────────────────────────── */
         if (!recording && !ptt_active &&
             res->wakeup_state == WAKENET_DETECTED) {
-            ESP_LOGI(TAG, "Wake word 'Hi ESP' detected");
+            ESP_LOGW(TAG, "*** WAKE WORD 'Hi ESP' DETECTED ***");
+            ws_server_broadcast_monitor("wake_word", "Hi ESP detected");
             if (audio_ring_open_wav(WW_CHAT_ID, LANG_MIC_SAMPLE_RATE, 1,
                                      LANG_MIC_BITS, LANG_CHAN_WEBSOCKET) == ESP_OK) {
                 led_indicator_set(LED_LISTENING);
@@ -138,6 +196,7 @@ static void detect_task(void *arg)
                 speech_started = false;
                 activate_tick  = xTaskGetTickCount();
                 silence_start  = 0;
+                ESP_LOGI(TAG, "Recording started after wake word");
             }
         }
 
@@ -161,7 +220,8 @@ static void detect_task(void *arg)
                         if (silence_start == 0) silence_start = now;
                         if (now - silence_start >
                                 pdMS_TO_TICKS(WW_VAD_SILENCE_MS)) {
-                            ESP_LOGI(TAG, "VAD silence — committing");
+                            ESP_LOGI(TAG, "VAD silence — committing recording");
+                            ws_server_broadcast_monitor("wake_word", "VAD silence — committing");
                             audio_ring_patch_wav_sizes();
                             audio_ring_commit(WW_CHAT_ID);
                             led_indicator_set(LED_THINKING);
