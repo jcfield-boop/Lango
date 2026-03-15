@@ -53,6 +53,7 @@ idf_component_register(
         "camera/uvc_camera.c"
         "tools/tool_capture_image.c"
         "led/led_indicator.c"
+        "config/services_config.c"
         "diag/log_buffer.c"
     EMBED_TXTFILES
         "certs/server_cert.pem"
@@ -63,5 +64,5 @@ idf_component_register(
         nvs_flash esp_wifi esp_netif esp_http_client esp_http_server
         esp_https_ota esp_https_server esp_event json console vfs app_update esp-tls
         driver esp_timer esp_driver_tsens espressif__mdns joltwallet__littlefs
-        mbedtls usb espressif__usb_host_uvc espressif__usb_host_uac espressif__esp-sr
+        mbedtls usb espressif__usb_host_uvc usb_host_uac espressif__esp-sr
 )

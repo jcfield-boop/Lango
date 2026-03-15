@@ -22,16 +22,19 @@
 
 esp_err_t audio_pipeline_init(void);
 
-/** Open a new recording session (resets ring buffer). */
-esp_err_t audio_ring_open(const char *chat_id, const char *mime);
+/** Open a new recording session (resets ring buffer).
+ *  @param channel  Message bus channel for STT result ("websocket", "telegram", etc.) */
+esp_err_t audio_ring_open(const char *chat_id, const char *mime, const char *channel);
 
 /**
  * Open a new recording session and write a standard 44-byte WAV header.
  * Sizes in the header are set to 0 and must be patched by audio_ring_patch_wav_sizes()
  * before calling audio_ring_commit().
+ * @param channel  Message bus channel for STT result ("websocket", "telegram", etc.)
  */
 esp_err_t audio_ring_open_wav(const char *chat_id, uint32_t sample_rate,
-                               uint16_t channels, uint16_t bits);
+                               uint16_t channels, uint16_t bits,
+                               const char *channel);
 
 /** Append raw audio bytes to the ring buffer. Call from Core 0 (httpd) or mic task. */
 esp_err_t audio_ring_append(const uint8_t *data, size_t len);

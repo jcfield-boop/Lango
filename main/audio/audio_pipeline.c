@@ -23,6 +23,7 @@ typedef struct {
     bool      committed;   /* handed to STT task, buffer must not be touched */
     char      chat_id[32];
     char      mime[64];
+    char      channel[16]; /* message bus channel for STT result */
     SemaphoreHandle_t lock;  /* SRAM mutex */
 } audio_ring_t;
 
@@ -58,8 +59,10 @@ static void audio_stt_task(void *arg)
         size_t audio_len = s_ring.write_pos;
         char   chat_id[32];
         char   mime[64];
+        char   channel[16];
         strncpy(chat_id, s_ring.chat_id, sizeof(chat_id) - 1);
         strncpy(mime, s_ring.mime, sizeof(mime) - 1);
+        strncpy(channel, s_ring.channel, sizeof(channel) - 1);
         xSemaphoreGive(s_ring.lock);
 
         if (audio_len == 0) {
@@ -82,10 +85,12 @@ static void audio_stt_task(void *arg)
 
         if (ret == ESP_OK && result.text[0] != '\0') {
             ESP_LOGI(TAG, "STT result: %s", result.text);
+            ws_server_broadcast_monitor("stt_result", result.text);
 
-            /* Push transcribed text to message bus as inbound WS prompt */
+            /* Push transcribed text to message bus using originating channel */
             mimi_msg_t msg = {0};
-            strncpy(msg.channel, LANG_CHAN_WEBSOCKET, sizeof(msg.channel) - 1);
+            strncpy(msg.channel, channel[0] ? channel : LANG_CHAN_WEBSOCKET,
+                    sizeof(msg.channel) - 1);
             strncpy(msg.chat_id, chat_id, sizeof(msg.chat_id) - 1);
             msg.content = strdup(result.text);
             if (msg.content) {
@@ -151,7 +156,7 @@ esp_err_t audio_pipeline_init(void)
     return ESP_OK;
 }
 
-esp_err_t audio_ring_open(const char *chat_id, const char *mime)
+esp_err_t audio_ring_open(const char *chat_id, const char *mime, const char *channel)
 {
     if (!s_ring.buf) return ESP_ERR_INVALID_STATE;
 
@@ -172,9 +177,11 @@ esp_err_t audio_ring_open(const char *chat_id, const char *mime)
     s_ring.committed = false;
     strncpy(s_ring.chat_id, chat_id ? chat_id : "", sizeof(s_ring.chat_id) - 1);
     strncpy(s_ring.mime, mime ? mime : "audio/webm;codecs=opus", sizeof(s_ring.mime) - 1);
+    strncpy(s_ring.channel, channel ? channel : LANG_CHAN_WEBSOCKET, sizeof(s_ring.channel) - 1);
 
     xSemaphoreGive(s_ring.lock);
-    ESP_LOGI(TAG, "Audio ring opened: chat_id=%s mime=%s", s_ring.chat_id, s_ring.mime);
+    ESP_LOGI(TAG, "Audio ring opened: chat_id=%s mime=%s channel=%s",
+             s_ring.chat_id, s_ring.mime, s_ring.channel);
     return ESP_OK;
 }
 
@@ -268,10 +275,11 @@ esp_err_t audio_ring_reset_for_client(const char *chat_id)
 }
 
 esp_err_t audio_ring_open_wav(const char *chat_id, uint32_t sample_rate,
-                               uint16_t channels, uint16_t bits)
+                               uint16_t channels, uint16_t bits,
+                               const char *channel)
 {
     /* Open the ring, then write a 44-byte WAV header with placeholder sizes */
-    esp_err_t ret = audio_ring_open(chat_id, "audio/wav");
+    esp_err_t ret = audio_ring_open(chat_id, "audio/wav", channel);
     if (ret != ESP_OK) return ret;
 
     /* Standard 44-byte PCM WAV header; data chunk size is 0 (patched at commit) */

@@ -117,6 +117,13 @@ done
 echo ""
 
 if [ "$REBOOTING" = "0" ]; then
+    # Fallback: check if device already rebooted (uptime < pre-OTA uptime)
+    POST_UPTIME=$(curl -sk --connect-timeout 5 "https://$DEVICE_HOST/api/sysinfo" \
+        | python3 -c "import sys,json; print(json.load(sys.stdin)['uptime_s'])" 2>/dev/null || echo "-1")
+    if [ "$POST_UPTIME" -ge 0 ] && [ "$POST_UPTIME" -lt "$PRE_UPTIME" ] 2>/dev/null; then
+        echo "==> Device already rebooted (uptime ${POST_UPTIME}s < pre-OTA ${PRE_UPTIME}s). OTA complete."
+        exit 0
+    fi
     echo "WARNING: OTA did not reach rebooting state within ${MAX_WAIT}s — check serial console" >&2
     exit 1
 fi

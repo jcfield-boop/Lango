@@ -7,7 +7,11 @@
 #include "ota/ota_manager.h"
 #include "cron/cron_service.h"
 #include "audio/audio_pipeline.h"
+#include "audio/stt_client.h"
 #include "audio/tts_client.h"
+#include "audio/uac_microphone.h"
+#include "audio/i2s_audio.h"
+#include "config/services_config.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -74,10 +78,13 @@ typedef struct {
     char chat_id[32];
     bool active;
     int64_t last_req_us;   /* for rate limiting */
+    uint8_t ping_fail_count; /* consecutive WS ping failures */
 } ws_client_t;
 
 static ws_client_t s_clients[LANG_WS_MAX_CLIENTS];
 static SemaphoreHandle_t s_clients_lock;  /* SRAM mutex — protects s_clients[] */
+static SemaphoreHandle_t s_send_lock;     /* SRAM mutex — serializes httpd_ws_send_frame_async calls */
+static esp_err_t send_frame_locked(int fd, httpd_ws_frame_t *frame); /* forward decl */
 
 static ws_client_t *find_client_by_fd(int fd)
 {
@@ -113,6 +120,7 @@ static ws_client_t *add_client(int fd)
             snprintf(s_clients[i].chat_id, sizeof(s_clients[i].chat_id), "ws_%d", fd);
             s_clients[i].active = true;
             s_clients[i].last_req_us = 0;
+            s_clients[i].ping_fail_count = 0;
             ESP_LOGI(TAG, "Client connected: %s (fd=%d)", s_clients[i].chat_id, fd);
             return &s_clients[i];
         }
@@ -158,15 +166,38 @@ static void ws_ping_task(void *arg)
         xSemaphoreGive(s_clients_lock);
 
         for (int i = 0; i < count; i++) {
-            esp_err_t err = httpd_ws_send_frame_async(s_server, fds[i], &ping_pkt);
-            if (err != ESP_OK) {
-                ESP_LOGD(TAG, "ping fd=%d failed (%s), removing", fds[i], esp_err_to_name(err));
-                xSemaphoreTake(s_clients_lock, portMAX_DELAY);
-                remove_client(fds[i]);
-                xSemaphoreGive(s_clients_lock);
+            esp_err_t err = send_frame_locked(fds[i], &ping_pkt);
+            xSemaphoreTake(s_clients_lock, portMAX_DELAY);
+            ws_client_t *c = find_client_by_fd(fds[i]);
+            if (c) {
+                if (err == ESP_OK) {
+                    c->ping_fail_count = 0;
+                } else {
+                    c->ping_fail_count++;
+                    if (c->ping_fail_count >= 3) {
+                        ESP_LOGW(TAG, "ping fd=%d failed %d times, removing",
+                                 fds[i], c->ping_fail_count);
+                        remove_client(fds[i]);
+                    } else {
+                        ESP_LOGD(TAG, "ping fd=%d failed (%s), attempt %d/3",
+                                 fds[i], esp_err_to_name(err), c->ping_fail_count);
+                    }
+                }
             }
+            xSemaphoreGive(s_clients_lock);
         }
     }
+}
+
+/* Serialized WebSocket send — takes s_send_lock to prevent concurrent
+ * SSL writes from ping task + outbound dispatch → double-free crash. */
+static esp_err_t send_frame_locked(int fd, httpd_ws_frame_t *frame)
+{
+    if (!s_send_lock) return httpd_ws_send_frame_async(s_server, fd, frame);
+    xSemaphoreTake(s_send_lock, portMAX_DELAY);
+    esp_err_t ret = httpd_ws_send_frame_async(s_server, fd, frame);
+    xSemaphoreGive(s_send_lock);
+    return ret;
 }
 
 /* Send a JSON status frame to a specific client */
@@ -178,7 +209,7 @@ static esp_err_t send_json_to_fd(int fd, const char *json_str)
         .payload = (uint8_t *)json_str,
         .len     = strlen(json_str),
     };
-    return httpd_ws_send_frame_async(s_server, fd, &pkt);
+    return send_frame_locked(fd, &pkt);
 }
 
 /* ── CHANGE 5: auth helper ──────────────────────────────────── */
@@ -378,12 +409,30 @@ static esp_err_t ws_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    if (ws_pkt.len == 0) {
-        if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
-            xSemaphoreTake(s_clients_lock, portMAX_DELAY);
-            remove_client(httpd_req_to_sockfd(req));
-            xSemaphoreGive(s_clients_lock);
+    /* CLOSE frame: browsers always include a 2-byte status code (RFC 6455 §5.5.1),
+     * so ws_pkt.len is typically 2 (or more with a reason string), NOT 0.
+     * The previous check only handled the len==0 case, causing CLOSE frames with
+     * a status code to fall through to the text handler, get logged as "Invalid
+     * JSON", and leave the client slot active for up to 20 s (until next ping).
+     * That made rapid refresh fill all 4 slots with stale entries → new connections
+     * rejected. Fix: check type first, drain payload, always call remove_client. */
+    if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
+        if (ws_pkt.len > 0 && ws_pkt.len <= 125) {
+            uint8_t *drain = malloc(ws_pkt.len);
+            if (drain) {
+                ws_pkt.payload = drain;
+                httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+                ws_pkt.payload = NULL;
+                free(drain);
+            }
         }
+        xSemaphoreTake(s_clients_lock, portMAX_DELAY);
+        remove_client(httpd_req_to_sockfd(req));
+        xSemaphoreGive(s_clients_lock);
+        return ESP_OK;
+    }
+
+    if (ws_pkt.len == 0) {
         return ESP_OK;
     }
 
@@ -531,7 +580,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
                             strnlen(mime_item->valuestring, 64) <= 63)
                            ? mime_item->valuestring
                            : "audio/webm;codecs=opus";
-        esp_err_t err = audio_ring_open(chat_id, mime);
+        esp_err_t err = audio_ring_open(chat_id, mime, LANG_CHAN_WEBSOCKET);
         if (err != ESP_OK) {
             ws_server_send_error(chat_id, "audio_overflow", "Audio ring busy");
         }
@@ -541,6 +590,11 @@ static esp_err_t ws_handler(httpd_req_t *req)
 
     } else if (strcmp(msg_type, "audio_abort") == 0) {
         audio_ring_reset_for_client(chat_id);
+
+    } else if (strcmp(msg_type, "ping") == 0) {
+        /* Application-layer pong — keeps client reconnect logic happy */
+        const char *pong = "{\"type\":\"pong\"}";
+        send_json_to_fd(fd, pong);
     }
 
     cJSON_Delete(root);
@@ -801,6 +855,12 @@ static esp_err_t file_post_handler(httpd_req_t *req)
     free(body);
 
     ESP_LOGI(TAG, "Saved %s (%d bytes)", path, received);
+
+    /* If SERVICES.md was saved, hot-reload all API keys immediately */
+    if (strcmp(name, "services") == 0) {
+        services_config_reload();
+    }
+
     httpd_resp_set_type(req, "application/json");
     apply_cors(req);
     httpd_resp_sendstr(req, "{\"ok\":true}");
@@ -1025,19 +1085,22 @@ static esp_err_t sysinfo_handler(httpd_req_t *req)
 
     uint32_t uptime_s = (uint32_t)(esp_timer_get_time() / 1000000ULL);
     const char *reset_str = reset_reason_str(esp_reset_reason());
+    bool uac_connected = uac_microphone_available();
 
-    char buf[512];
+    char buf[640];
     snprintf(buf, sizeof(buf),
              "{\"heap_free\":%u,\"heap_min\":%u,\"psram_free\":%u"
              ",\"lfs_total\":%u,\"lfs_used\":%u"
              ",\"tokens_in\":%u,\"tokens_out\":%u,\"cost_millicents\":%u"
              ",\"search_calls\":%u,\"search_cost_millicents\":%u"
-             ",\"uptime_s\":%lu,\"reset_reason\":\"%s\"}",
+             ",\"uptime_s\":%lu,\"reset_reason\":\"%s\""
+             ",\"uac_mic_connected\":%s}",
              (unsigned)heap_free, (unsigned)heap_min, (unsigned)psram_free,
              (unsigned)lfs_total, (unsigned)lfs_used,
              (unsigned)tok_in, (unsigned)tok_out, (unsigned)llm_cost_mc,
              (unsigned)search_calls, (unsigned)search_cost_mc,
-             uptime_s, reset_str);
+             uptime_s, reset_str,
+             uac_connected ? "true" : "false");
     httpd_resp_set_type(req, "application/json");
     apply_cors(req);
     httpd_resp_sendstr(req, buf);
@@ -1114,6 +1177,7 @@ static esp_err_t config_get_handler(httpd_req_t *req)
     cJSON_AddStringToObject(j, "tts_voice",    tts_voice);
     cJSON_AddStringToObject(j, "notify_topic", notify_topic);
     cJSON_AddBoolToObject(j, "verbose_logs", s_verbose_logs);
+    cJSON_AddNumberToObject(j, "volume", (double)i2s_audio_get_volume());
 
     char *json_str = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
@@ -1196,19 +1260,19 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     if (stt_key && cJSON_IsString(stt_key) && stt_key->valuestring[0]
         && strncmp(stt_key->valuestring, "****", 4) != 0
         && strnlen(stt_key->valuestring, CONFIG_FIELD_MAX + 1) <= CONFIG_FIELD_MAX) {
-        nvs_set_str_safe(LANG_NVS_STT, LANG_NVS_KEY_API_KEY, stt_key->valuestring);
-        ESP_LOGI(TAG, "STT API key updated");
+        stt_set_api_key(stt_key->valuestring);  /* updates in-memory + NVS */
+        ESP_LOGI(TAG, "STT API key updated (hot-reload)");
     }
     if (tts_key && cJSON_IsString(tts_key) && tts_key->valuestring[0]
         && strncmp(tts_key->valuestring, "****", 4) != 0
         && strnlen(tts_key->valuestring, CONFIG_FIELD_MAX + 1) <= CONFIG_FIELD_MAX) {
-        nvs_set_str_safe(LANG_NVS_TTS, LANG_NVS_KEY_API_KEY, tts_key->valuestring);
-        ESP_LOGI(TAG, "TTS API key updated");
+        tts_set_api_key(tts_key->valuestring);  /* updates in-memory + NVS */
+        ESP_LOGI(TAG, "TTS API key updated (hot-reload)");
     }
     if (tts_voice && cJSON_IsString(tts_voice) && tts_voice->valuestring[0]
         && strnlen(tts_voice->valuestring, 64) <= 63) {
-        nvs_set_str_safe(LANG_NVS_TTS, LANG_NVS_KEY_VOICE, tts_voice->valuestring);
-        ESP_LOGI(TAG, "TTS voice set to: %s", tts_voice->valuestring);
+        tts_set_voice(tts_voice->valuestring);  /* updates in-memory + NVS */
+        ESP_LOGI(TAG, "TTS voice set to: %s (hot-reload)", tts_voice->valuestring);
     }
 
     cJSON *notify_topic  = cJSON_GetObjectItem(root, "notify_topic");
@@ -1224,6 +1288,14 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         ESP_LOGI(TAG, "Notify server set to: %s", notify_server->valuestring);
     }
 #undef CONFIG_FIELD_MAX
+
+    cJSON *volume = cJSON_GetObjectItem(root, "volume");
+    if (volume && cJSON_IsNumber(volume)) {
+        int v = (int)volume->valuedouble;
+        if (v < 0) v = 0;
+        if (v > 255) v = 255;
+        i2s_audio_set_volume((uint8_t)v);
+    }
 
     cJSON *verbose = cJSON_GetObjectItem(root, "verbose_logs");
     if (verbose != NULL) {
@@ -1480,6 +1552,11 @@ esp_err_t ws_server_start(void)
         ESP_LOGE(TAG, "Failed to create clients mutex");
         return ESP_ERR_NO_MEM;
     }
+    s_send_lock = xSemaphoreCreateMutex();
+    if (!s_send_lock) {
+        ESP_LOGE(TAG, "Failed to create send mutex");
+        return ESP_ERR_NO_MEM;
+    }
     memset(s_clients, 0, sizeof(s_clients));
 
     {
@@ -1663,10 +1740,22 @@ esp_err_t ws_server_send(const char *chat_id, const char *text)
     xSemaphoreTake(s_clients_lock, portMAX_DELAY);
     ws_client_t *client = find_client_by_chat_id(chat_id);
     int fd = client ? client->fd : -1;
+    /* Broadcast fallback: if no client matches the specific chat_id (e.g. PTT
+     * uses chat_id="ptt"), send to the first active WS client instead. */
+    if (fd < 0) {
+        for (int i = 0; i < LANG_WS_MAX_CLIENTS; i++) {
+            if (s_clients[i].active) {
+                fd = s_clients[i].fd;
+                ESP_LOGI(TAG, "No WS client '%s', broadcasting to %s (fd=%d)",
+                         chat_id, s_clients[i].chat_id, fd);
+                break;
+            }
+        }
+    }
     xSemaphoreGive(s_clients_lock);
 
     if (fd < 0) {
-        ESP_LOGW(TAG, "No WS client with chat_id=%s", chat_id);
+        ESP_LOGW(TAG, "No WS clients connected (chat_id=%s)", chat_id);
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -1685,7 +1774,7 @@ esp_err_t ws_server_send(const char *chat_id, const char *text)
         .len     = strlen(json_str),
     };
 
-    esp_err_t ret = httpd_ws_send_frame_async(s_server, fd, &ws_pkt);
+    esp_err_t ret = send_frame_locked(fd, &ws_pkt);
     free(json_str);
 
     if (ret != ESP_OK) {
@@ -1706,6 +1795,15 @@ esp_err_t ws_server_send_with_tts(const char *chat_id, const char *text,
     xSemaphoreTake(s_clients_lock, portMAX_DELAY);
     ws_client_t *client = find_client_by_chat_id(chat_id);
     int fd = client ? client->fd : -1;
+    /* Broadcast fallback for PTT (chat_id="ptt") or other non-matching IDs */
+    if (fd < 0) {
+        for (int i = 0; i < LANG_WS_MAX_CLIENTS; i++) {
+            if (s_clients[i].active) {
+                fd = s_clients[i].fd;
+                break;
+            }
+        }
+    }
     xSemaphoreGive(s_clients_lock);
 
     if (fd < 0) return ESP_ERR_NOT_FOUND;
@@ -1731,7 +1829,7 @@ esp_err_t ws_server_send_with_tts(const char *chat_id, const char *text,
         .len     = strlen(json_str),
     };
 
-    esp_err_t ret = httpd_ws_send_frame_async(s_server, fd, &ws_pkt);
+    esp_err_t ret = send_frame_locked(fd, &ws_pkt);
     free(json_str);
 
     if (ret != ESP_OK) {
@@ -1773,7 +1871,21 @@ esp_err_t ws_server_broadcast_monitor(const char *event, const char *msg_text)
     xSemaphoreGive(s_clients_lock);
 
     for (int i = 0; i < snap_count; i++) {
-        esp_err_t ret = httpd_ws_send_frame_async(s_server, snap_fds[i], &pkt);
+        /* Guard against FD reuse: if a WS client disconnected and the kernel
+         * recycled the FD for a new HTTP connection, sending a WS frame to it
+         * would corrupt the HTTP response.  httpd_ws_get_fd_info() consults
+         * the httpd's internal FD table — HTTPD_WS_CLIENT_WEBSOCKET confirms
+         * the FD is still an active, upgraded WebSocket connection. */
+        httpd_ws_client_info_t fd_type = httpd_ws_get_fd_info(s_server, snap_fds[i]);
+        if (fd_type != HTTPD_WS_CLIENT_WEBSOCKET) {
+            ESP_LOGD(TAG, "Monitor: fd=%d is not WS (type=%d), removing stale slot",
+                     snap_fds[i], (int)fd_type);
+            xSemaphoreTake(s_clients_lock, portMAX_DELAY);
+            remove_client(snap_fds[i]);
+            xSemaphoreGive(s_clients_lock);
+            continue;
+        }
+        esp_err_t ret = send_frame_locked(snap_fds[i], &pkt);
         if (ret != ESP_OK) {
             ESP_LOGD(TAG, "Monitor send to fd=%d failed, removing", snap_fds[i]);
             xSemaphoreTake(s_clients_lock, portMAX_DELAY);

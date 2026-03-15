@@ -10,6 +10,7 @@
 #include "tools/tool_memory.h"
 #include "tools/tool_web_search.h"
 #include "audio/tts_client.h"
+#include "audio/i2s_audio.h"
 #include "telegram/telegram_bot.h"
 #include "led/led_indicator.h"
 
@@ -359,11 +360,23 @@ static void agent_loop_task(void *arg)
         memory_tool_reset_turn();
         web_search_reset_turn();
 
-        /* Log SRAM headroom at turn start; warn if critically low */
+        /* SRAM guard: if heap is critically low, restart cleanly rather than
+         * letting the LLM call hit malloc(NULL) and cause a hard panic.
+         * Threshold: mbedTLS (~15KB) + HTTP bufs (~8KB) + safety margin = 26KB.
+         * A hard restart shows as ESP_RST_SW (intentional), not ESP_RST_PANIC. */
         {
             uint32_t sram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
             ESP_LOGI(TAG, "Turn start: SRAM free=%lu B", (unsigned long)sram_free);
-            if (sram_free < 28 * 1024) {
+            if (sram_free < 22 * 1024) {
+                char wmsg[80];
+                snprintf(wmsg, sizeof(wmsg),
+                         "SRAM critically low (%lu B) — restarting to recover heap",
+                         (unsigned long)sram_free);
+                ESP_LOGW(TAG, "%s", wmsg);
+                ws_server_broadcast_monitor("system", wmsg);
+                vTaskDelay(pdMS_TO_TICKS(1000));  /* brief pause for log flush */
+                esp_restart();
+            } else if (sram_free < 28 * 1024) {
                 char wmsg[72];
                 snprintf(wmsg, sizeof(wmsg), "SRAM low at turn start: %lu B — risk of OOM",
                          (unsigned long)sram_free);
@@ -619,10 +632,10 @@ static void agent_loop_task(void *arg)
                 led_indicator_set(LED_SPEAKING);
                 ws_server_send_status(msg.chat_id, "tts_generating");
                 char tts_id[9] = {0};
-                /* Limit TTS to first sentence (or ~200 chars) to keep WAV manageable.
+                /* Limit TTS input to keep WAV download manageable for browsers.
                  * Truncate at the last sentence boundary (. ! ?) within the limit.
                  * Full text is still sent to the browser for display. */
-                #define TTS_MAX_CHARS 200
+                #define TTS_MAX_CHARS 500
                 char tts_buf[TTS_MAX_CHARS + 1];
                 const char *tts_text = final_text;
                 if (strlen(final_text) > TTS_MAX_CHARS) {
@@ -651,6 +664,18 @@ static void agent_loop_task(void *arg)
                 if (tts_err == ESP_OK && tts_id[0]) {
                     /* Send message with tts_id so browser auto-plays */
                     ws_server_send_with_tts(msg.chat_id, final_text, tts_id, img_url);
+
+#if LANG_I2S_AUDIO_ENABLED
+                    /* Play TTS audio through local MAX98357A speaker */
+                    {
+                        const uint8_t *wav_buf = NULL;
+                        size_t wav_len = 0;
+                        if (tts_cache_get(tts_id, &wav_buf, &wav_len) == ESP_OK) {
+                            ESP_LOGI(TAG, "Playing TTS via I2S speaker (%u bytes, async)", (unsigned)wav_len);
+                            i2s_audio_play_wav_async(wav_buf, wav_len);
+                        }
+                    }
+#endif
                 } else if (img_url && strcmp(msg.channel, "websocket") == 0) {
                     /* No TTS but have an image — send directly so image_url is included */
                     ws_server_send_with_tts(msg.chat_id, final_text, NULL, img_url);

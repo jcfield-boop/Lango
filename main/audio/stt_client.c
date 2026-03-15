@@ -2,6 +2,7 @@
 #include "langoustine_config.h"
 #include "memory/psram_alloc.h"
 #include "llm/http_session.h"
+#include "gateway/ws_server.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -201,6 +202,7 @@ esp_err_t stt_transcribe(const uint8_t *audio, size_t audio_len,
     }
 
     ESP_LOGI(TAG, "STT POST: %u audio bytes → %u multipart body", (unsigned)audio_len, (unsigned)body_len);
+    ws_server_broadcast_monitor_verbose("stt", "Groq Whisper");
 
     /* Response buffer — small initial alloc (JSON response is tiny) */
     resp_buf_t rb = { .data = ps_malloc(2048), .len = 0, .cap = 2048, .oom = false };

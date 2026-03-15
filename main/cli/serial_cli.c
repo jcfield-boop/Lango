@@ -13,6 +13,7 @@
 #include "ota/ota_manager.h"
 #include "audio/stt_client.h"
 #include "audio/tts_client.h"
+#include "audio/i2s_audio.h"
 #include "telegram/telegram_bot.h"
 #include "camera/uvc_camera.h"
 #include "memory/psram_alloc.h"
@@ -244,6 +245,24 @@ static int cmd_say(int argc, char **argv)
         printf("TTS failed: %s\n", esp_err_to_name(ret));
     }
     return (ret == ESP_OK) ? 0 : 1;
+}
+
+/* --- volume command --- */
+static int cmd_volume(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("Volume: %u/255 (%u%%)\n", i2s_audio_get_volume(),
+               (unsigned)(i2s_audio_get_volume() * 100u / 255u));
+        return 0;
+    }
+    int val = atoi(argv[1]);
+    if (val < 0 || val > 255) {
+        printf("Usage: volume [0-255]  (0=mute, 64=25%%, 128=50%%, 255=100%%)\n");
+        return 1;
+    }
+    i2s_audio_set_volume((uint8_t)val);
+    printf("Volume set to %d/255 (%d%%)\n", val, val * 100 / 255);
+    return 0;
 }
 
 /* --- memory_read command --- */
@@ -1221,6 +1240,14 @@ esp_err_t serial_cli_init(void)
         .func    = &cmd_say,
     };
     esp_console_cmd_register(&say_cmd);
+
+    /* volume */
+    esp_console_cmd_t volume_cmd = {
+        .command = "volume",
+        .help    = "Get/set speaker volume: volume [0-255] (0=mute, 64=25%, 128=50%, 255=100%)",
+        .func    = &cmd_volume,
+    };
+    esp_console_cmd_register(&volume_cmd);
 
     /* log_level */
     log_level_args.tag   = arg_str1(NULL, NULL, "<tag>",   "Log tag (e.g. tts, stt, agent, llm, ws, audio_pipeline, or * for all)");

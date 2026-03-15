@@ -9,7 +9,7 @@
  *   LED_READY      — breathing green   (idle, waiting for input)
  *   LED_THINKING   — pulsing blue      (LLM call in progress)
  *   LED_SPEAKING   — pulsing cyan      (TTS/I2S playback)
- *   LED_LISTENING  — pulsing white     (mic active: PTT held or wake word)
+ *   LED_LISTENING  — violet blink      (mic active: PTT held, recording for STT)
  *   LED_ERROR      — fast red flash    (auto-reverts to READY after ~5s)
  *   LED_OTA        — rapid magenta flash (OTA download in progress)
  *   LED_CAPTURING  — solid maximum white (webcam illumination; holds until agent sets LED_FLASH_FADE)

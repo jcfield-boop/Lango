@@ -47,7 +47,7 @@
 #define LANG_AGENT_STACK             (40 * 1024)
 #define LANG_AGENT_PRIO              6
 #define LANG_AGENT_CORE              1
-#define LANG_AGENT_MAX_HISTORY       30
+#define LANG_AGENT_MAX_HISTORY       60
 #define LANG_AGENT_MAX_TOOL_ITER     10
 #define LANG_MAX_TOOL_CALLS          4
 #define LANG_AGENT_SEND_WORKING_STATUS 1
@@ -56,8 +56,8 @@
 #define LANG_TIMEZONE                "PST8PDT,M3.2.0,M11.1.0"
 
 /* LLM */
-#define LANG_LLM_DEFAULT_MODEL       "claude-opus-4-5"
-#define LANG_LLM_PROVIDER_DEFAULT    "anthropic"
+#define LANG_LLM_DEFAULT_MODEL       "openrouter/auto"
+#define LANG_LLM_PROVIDER_DEFAULT    "openrouter"
 #define LANG_LLM_MAX_TOKENS          4096
 #define LANG_LLM_API_URL             "https://api.anthropic.com/v1/messages"
 #define LANG_OPENAI_API_URL          "https://api.openai.com/v1/chat/completions"
@@ -90,7 +90,7 @@
 /* TTS defaults (Groq Orpheus) */
 #define LANG_DEFAULT_TTS_ENDPOINT    "https://api.groq.com/openai/v1/audio/speech"
 #define LANG_DEFAULT_TTS_MODEL       "canopylabs/orpheus-v1-english"
-#define LANG_DEFAULT_TTS_VOICE       "tara"
+#define LANG_DEFAULT_TTS_VOICE       "autumn"  /* valid Groq Orpheus voices: autumn diana hannah austin daniel troy */
 
 /* RGB Status LED — WS2812/NeoPixel on dev board via RMT */
 #define LANG_LED_GPIO    38   /* GPIO38 = onboard NeoPixel on ESP32-S3-DevKitC-1 */
@@ -104,7 +104,7 @@
 /* Software volume scale: 0–256, where 256 = 100% (0 dB), 128 = 50% (−6 dB).
  * Lower values reduce peak amp current and prevent brownouts on weak PSUs. */
 #ifndef LANG_AUDIO_VOLUME
-#define LANG_AUDIO_VOLUME  128
+#define LANG_AUDIO_VOLUME  64
 #endif
 
 /* MAX98357A SD (shutdown) pin — optional amp power gating.
@@ -123,7 +123,7 @@
 #define LANG_MIC_SAMPLE_RATE    16000
 #define LANG_MIC_BITS              16
 #define LANG_MIC_READ_CHUNK_BYTES 512   /* ~16 ms of audio per I2S read */
-#define LANG_MIC_STACK_SIZE      8192
+#define LANG_MIC_STACK_SIZE      12288  /* 12KB: UAC ctrl xfers need headroom, 8KB caused StoreProhibited */
 #define LANG_MIC_TASK_PRIO          5
 
 /* I2C bus (camera SCCB + future PCA9685 servos) */
@@ -131,7 +131,7 @@
 #define LANG_I2C_SCL     10
 
 /* Enable local speaker playback via MAX98357A after TTS generation */
-#define LANG_I2S_AUDIO_ENABLED  0
+#define LANG_I2S_AUDIO_ENABLED  1
 
 /* Message Bus */
 #define LANG_BUS_QUEUE_LEN           48
@@ -150,8 +150,8 @@
 #define LANG_MEMORY_MAX_BYTES        (16 * 1024)
 #define LANG_SOUL_FILE               "/lfs/config/SOUL.md"
 #define LANG_USER_FILE               "/lfs/config/USER.md"
-#define LANG_SESSION_MAX_MSGS        50
-#define LANG_SESSION_HISTORY_MAX_BYTES (24 * 1024)
+#define LANG_SESSION_MAX_MSGS        200
+#define LANG_SESSION_HISTORY_MAX_BYTES (64 * 1024)
 
 /* Cron / Heartbeat */
 #define LANG_CRON_FILE               "/lfs/cron.json"

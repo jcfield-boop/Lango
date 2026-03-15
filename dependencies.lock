@@ -1,14 +1,4 @@
 dependencies:
-  espressif/cmake_utilities:
-    component_hash: 351350613ceafba240b761b4ea991e0f231ac7a9f59a9ee901f751bddc0bb18f
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=4.1'
-    source:
-      registry_url: https://components.espressif.com
-      type: service
-    version: 0.5.3
   espressif/dl_fft:
     component_hash: 7dadbd644c0d7ba4733cc3726ec4cff6edf27b043725e1115861dec1609a3d28
     dependencies:
@@ -73,33 +63,6 @@ dependencies:
     - esp32h4
     - linux
     version: 1.1.0
-  espressif/usb_host_uac:
-    component_hash: 61be58265c2adf3b9f4429f68f82a548c40659ef561a1ee6841bf21425c50a1c
-    dependencies:
-    - name: espressif/cmake_utilities
-      registry_url: https://components.espressif.com
-      require: private
-      version: 0.5.*
-    - name: idf
-      require: private
-      version: '>=5.0'
-    - name: espressif/usb
-      registry_url: https://components.espressif.com
-      require: public
-      rules:
-      - if: idf_version >=6.0
-      - if: target not in ["linux"]
-      version: ^1.0.0
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    targets:
-    - esp32s2
-    - esp32s3
-    - esp32p4
-    - esp32h4
-    - linux
-    version: 1.3.3
   espressif/usb_host_uvc:
     component_hash: f20c4e4dea50536e2e29daaf589b5f5984402284c155867daef27d6b64869f78
     dependencies:
@@ -141,10 +104,9 @@ direct_dependencies:
 - espressif/esp-sr
 - espressif/mdns
 - espressif/usb
-- espressif/usb_host_uac
 - espressif/usb_host_uvc
 - idf
 - joltwallet/littlefs
-manifest_hash: c215686ac7347d5c10f7afe91ac220bb8a52e108755baafd6385eccb92ab6c5f
+manifest_hash: b9944ae8ad8a0a0be7ae0adbd0dc045702293b8a76fea430253a156c078e4854
 target: esp32s3
 version: 2.0.0
