@@ -443,6 +443,24 @@ void app_main(void)
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
             ESP_LOGI(TAG, "SRAM free:  %u bytes",
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+
+            /* Boot greeting via TTS → speaker */
+#if LANG_I2S_AUDIO_ENABLED
+            {
+                char tts_id[9] = {0};
+                esp_err_t tts_err = tts_generate("Hello James, your wish is my command.", tts_id);
+                if (tts_err == ESP_OK) {
+                    const uint8_t *wav = NULL;
+                    size_t wav_len = 0;
+                    if (tts_cache_get(tts_id, &wav, &wav_len) == ESP_OK) {
+                        ESP_LOGI(TAG, "Playing boot greeting (%u bytes)", (unsigned)wav_len);
+                        i2s_audio_play_wav_async(wav, wav_len);
+                    }
+                } else {
+                    ESP_LOGW(TAG, "Boot greeting TTS failed: %s", esp_err_to_name(tts_err));
+                }
+            }
+#endif
         } else {
             led_indicator_set(LED_ERROR);
             ESP_LOGW(TAG, "WiFi connection timeout. Check LANG_SECRET_WIFI_SSID.");
