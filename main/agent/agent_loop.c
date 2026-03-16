@@ -476,8 +476,11 @@ static void agent_loop_task(void *arg)
         strncpy(stream_ctx.channel, msg.channel, sizeof(stream_ctx.channel) - 1);
 
         while (iteration < LANG_AGENT_MAX_TOOL_ITER) {
-            /* Soft per-turn timeout: 45s. Prevents WDT reboot on slow/hung tool chains. */
-            if ((esp_timer_get_time() - turn_start_us) > 45000000LL) {
+            /* Soft per-turn timeout: 90s. Complex tasks (daily briefing, multi-tool
+             * chains) need 3+ LLM iterations with sequential tool calls.
+             * WDT is 60s but only fires if a single task blocks — the agent feeds
+             * the WDT between iterations via tool execution delays. */
+            if ((esp_timer_get_time() - turn_start_us) > 90000000LL) {
                 ESP_LOGW(TAG, "Agent soft timeout at iter %d — abandoning turn", iteration);
                 ws_server_broadcast_monitor("error", "agent turn timeout");
                 final_text = strdup("[Sorry, that took too long. Please retry.]");
