@@ -632,6 +632,19 @@ static void agent_loop_task(void *arg)
                         final_text = NULL;
                     }
                 }
+            } else if (strcmp(msg.channel, LANG_CHAN_SYSTEM) == 0) {
+                /* System/heartbeat: skip TTS entirely — just deliver text.
+                 * TTS + I2S playback causes brownout resets from amp current. */
+                ESP_LOGI(TAG, "System channel — skipping TTS, sending text only");
+                mimi_msg_t out = {0};
+                strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
+                strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
+                out.content = final_text;
+                if (message_bus_push_outbound(&out) != ESP_OK) {
+                    free(final_text);
+                } else {
+                    final_text = NULL;
+                }
             } else {
                 /* WebSocket: generate TTS and send */
                 led_indicator_set(LED_SPEAKING);
@@ -699,14 +712,17 @@ static void agent_loop_task(void *arg)
                     ws_server_send_with_tts(msg.chat_id, final_text, tts_id, img_url);
 
 #if LANG_I2S_AUDIO_ENABLED
-                    /* Play TTS audio through local MAX98357A speaker */
-                    {
+                    /* Play TTS audio through local MAX98357A speaker.
+                     * Skip for system/heartbeat — amp current causes brownout resets. */
+                    if (strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0) {
                         const uint8_t *wav_buf = NULL;
                         size_t wav_len = 0;
                         if (tts_cache_get(tts_id, &wav_buf, &wav_len) == ESP_OK) {
                             ESP_LOGI(TAG, "Playing TTS via I2S speaker (%u bytes, async)", (unsigned)wav_len);
                             i2s_audio_play_wav_async(wav_buf, wav_len);
                         }
+                    } else {
+                        ESP_LOGI(TAG, "Skipping I2S playback for system channel");
                     }
 #endif
                 } else if (img_url && strcmp(msg.channel, "websocket") == 0) {
