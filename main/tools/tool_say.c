@@ -38,7 +38,10 @@ esp_err_t say_speak(const char *text)
              (int)(strlen(text) > 40 ? 40 : strlen(text)), text,
              strlen(text) > 40 ? "..." : "",
              (unsigned)wav_len);
-    err = i2s_audio_play_wav_async(wav, wav_len);
+    /* Synchronous playback — blocks until audio finishes.
+     * This is reliable (no race with other async callers) and
+     * safe because say_speak() always runs in its own task. */
+    err = i2s_audio_play_wav(wav, wav_len);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "I2S play failed: %s", esp_err_to_name(err));
         return err;
