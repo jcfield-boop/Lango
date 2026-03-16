@@ -1824,7 +1824,7 @@ esp_err_t ws_server_start(void)
 
     /* WebSocket keepalive ping task (Core 0, low priority) */
     if (!s_ws_ping_task) {
-        xTaskCreatePinnedToCore(ws_ping_task, "ws_ping", 2048, NULL, 2, &s_ws_ping_task, 0);
+        xTaskCreatePinnedToCore(ws_ping_task, "ws_ping", 4096, NULL, 2, &s_ws_ping_task, 0);
     }
 
     ESP_LOGI(TAG, "HTTPS server started on port %d (WSS: /ws, Voice: /, Dev: /console)", LANG_WSS_PORT);

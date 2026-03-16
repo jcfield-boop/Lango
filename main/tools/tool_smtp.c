@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_tls.h"
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "cJSON.h"
 
 static const char *TAG = "tool_smtp";
@@ -209,6 +210,9 @@ esp_err_t tool_smtp_execute(const char *input_json, char *output, size_t output_
     }
 
     ESP_LOGI(TAG, "Sending email to %s via %s:%d", creds.to_addr, creds.smtp_host, creds.port);
+    ESP_LOGI(TAG, "SRAM before TLS: free=%lu min=%lu",
+             (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned long)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
     ws_server_broadcast_monitor_verbose("email", "Connecting to SMTP...");
 
     /* TLS connect */
@@ -307,5 +311,8 @@ smtp_done:
     memset(&creds, 0, sizeof(creds));
 
     esp_tls_conn_destroy(tls);
+    ESP_LOGI(TAG, "SRAM after TLS: free=%lu min=%lu",
+             (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned long)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
     return err;
 }

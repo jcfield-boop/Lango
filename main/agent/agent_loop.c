@@ -476,11 +476,10 @@ static void agent_loop_task(void *arg)
         strncpy(stream_ctx.channel, msg.channel, sizeof(stream_ctx.channel) - 1);
 
         while (iteration < LANG_AGENT_MAX_TOOL_ITER) {
-            /* Soft per-turn timeout: 90s. Complex tasks (daily briefing, multi-tool
-             * chains) need 3+ LLM iterations with sequential tool calls.
-             * WDT is 60s but only fires if a single task blocks — the agent feeds
-             * the WDT between iterations via tool execution delays. */
-            if ((esp_timer_get_time() - turn_start_us) > 90000000LL) {
+            /* Soft per-turn timeout: 180s. Daily briefing heartbeats need 4-6 LLM
+             * iterations with web_search + RSS + send_email — each round-trip to
+             * OpenRouter takes 5-15s, easily totaling 2-3 minutes. */
+            if ((esp_timer_get_time() - turn_start_us) > 180000000LL) {
                 ESP_LOGW(TAG, "Agent soft timeout at iter %d — abandoning turn", iteration);
                 ws_server_broadcast_monitor("error", "agent turn timeout");
                 final_text = strdup("[Sorry, that took too long. Please retry.]");
@@ -504,8 +503,11 @@ static void agent_loop_task(void *arg)
 #endif
 
             {
-                char itermsg[48];
-                snprintf(itermsg, sizeof(itermsg), "calling LLM streaming (iter %d)...", iteration + 1);
+                uint32_t sram_iter = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+                char itermsg[80];
+                snprintf(itermsg, sizeof(itermsg), "LLM iter %d — SRAM %luKB free",
+                         iteration + 1, (unsigned long)(sram_iter / 1024));
+                ESP_LOGI(TAG, "%s", itermsg);
                 ws_server_broadcast_monitor("llm", itermsg);
             }
             led_indicator_set(LED_THINKING);
