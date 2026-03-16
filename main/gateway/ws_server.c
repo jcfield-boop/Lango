@@ -12,6 +12,7 @@
 #include "audio/uac_microphone.h"
 #include "audio/i2s_audio.h"
 #include "config/services_config.h"
+#include "tools/tool_say.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -1481,6 +1482,71 @@ static esp_err_t logs_clear_handler(httpd_req_t *req)
 
 /* ── POST /api/message ───────────────────────────────────────── */
 
+/* ── /api/say — direct TTS playback, no LLM round-trip ────────── */
+
+/* Async say task: TTS needs ~16KB stack for TLS — httpd worker only has 10KB */
+static void say_async_task(void *arg)
+{
+    char *text = (char *)arg;
+    esp_err_t err = say_speak(text);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "/api/say async failed: %s", esp_err_to_name(err));
+    }
+    free(text);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t say_post_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    apply_cors(req);
+
+    char body[1024] = {0};
+    int rcv = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (rcv <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body");
+        return ESP_OK;
+    }
+
+    cJSON *root = cJSON_Parse(body);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_OK;
+    }
+
+    cJSON *jtext = cJSON_GetObjectItem(root, "text");
+    if (!cJSON_IsString(jtext) || !jtext->valuestring[0]) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing 'text'");
+        return ESP_OK;
+    }
+
+    /* Heap-copy text for the async task */
+    char *text = strdup(jtext->valuestring);
+    cJSON_Delete(root);
+
+    if (!text) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "/api/say: \"%.*s%s\"",
+             (int)(strlen(text) > 60 ? 60 : strlen(text)), text,
+             strlen(text) > 60 ? "..." : "");
+
+    /* Spawn task with 16KB SRAM stack (enough for TLS handshake) */
+    BaseType_t ok = xTaskCreatePinnedToCore(
+        say_async_task, "say", 16 * 1024, text, 5, NULL, 0);
+    if (ok != pdPASS) {
+        free(text);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Task create failed");
+        return ESP_OK;
+    }
+
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
 static esp_err_t message_post_handler(httpd_req_t *req)
 {
     if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
@@ -1703,6 +1769,10 @@ esp_err_t ws_server_start(void)
     httpd_register_uri_handler(s_server, &ota_uri);
     httpd_uri_t ota_status_uri = { .uri = "/api/ota/status", .method = HTTP_GET, .handler = ota_status_handler };
     httpd_register_uri_handler(s_server, &ota_status_uri);
+
+    /* Direct TTS playback — no LLM */
+    httpd_uri_t say_uri = { .uri = "/api/say", .method = HTTP_POST, .handler = say_post_handler };
+    httpd_register_uri_handler(s_server, &say_uri);
 
     /* Inbound message injection */
     httpd_uri_t message_uri = { .uri = "/api/message", .method = HTTP_POST, .handler = message_post_handler };
