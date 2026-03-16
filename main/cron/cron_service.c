@@ -2,6 +2,7 @@
 #include "mimi_config.h"
 #include "bus/message_bus.h"
 #include "gateway/ws_server.h"
+#include "memory/session_mgr.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -265,6 +266,10 @@ static void cron_process_due_jobs(void)
         char mon_msg[64];
         snprintf(mon_msg, sizeof(mon_msg), "[cron] %s: %.40s", job->id, job->message);
         ws_server_broadcast_monitor("task", mon_msg);
+
+        /* Clear stale session so cron jobs start with clean context
+         * (same pattern as heartbeat — prevents LLM referencing old errors) */
+        session_clear(job->chat_id);
 
         /* Push message to inbound queue */
         mimi_msg_t msg;

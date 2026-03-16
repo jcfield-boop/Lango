@@ -32,6 +32,9 @@ extern const uint8_t s_server_key_end[]  asm("_binary_server_key_pem_end");
 #include "esp_system.h"
 #include "esp_heap_caps.h"
 #include "esp_littlefs.h"
+#include "esp_wifi.h"
+#include "esp_ota_ops.h"
+#include "esp_app_desc.h"
 #include "nvs.h"
 #include "cJSON.h"
 #include "freertos/semphr.h"
@@ -1084,23 +1087,45 @@ static esp_err_t sysinfo_handler(httpd_req_t *req)
     uint32_t search_calls = 0, search_cost_mc = 0;
     tool_web_search_get_stats(&search_calls, &search_cost_mc);
 
+    size_t psram_min  = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM);
+
     uint32_t uptime_s = (uint32_t)(esp_timer_get_time() / 1000000ULL);
     const char *reset_str = reset_reason_str(esp_reset_reason());
     bool uac_connected = uac_microphone_available();
 
-    char buf[640];
+    /* WiFi RSSI */
+    int8_t rssi = 0;
+    wifi_ap_record_t ap_info;
+    if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+        rssi = ap_info.rssi;
+    }
+
+    /* FreeRTOS task count */
+    UBaseType_t task_count = uxTaskGetNumberOfTasks();
+
+    /* Running OTA partition */
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    const esp_app_desc_t *app = esp_app_get_description();
+
+    char buf[768];
     snprintf(buf, sizeof(buf),
-             "{\"heap_free\":%u,\"heap_min\":%u,\"psram_free\":%u"
+             "{\"heap_free\":%u,\"heap_min\":%u,\"psram_free\":%u,\"psram_min\":%u"
              ",\"lfs_total\":%u,\"lfs_used\":%u"
              ",\"tokens_in\":%u,\"tokens_out\":%u,\"cost_millicents\":%u"
              ",\"search_calls\":%u,\"search_cost_millicents\":%u"
              ",\"uptime_s\":%lu,\"reset_reason\":\"%s\""
+             ",\"wifi_rssi\":%d,\"task_count\":%u"
+             ",\"ota_partition\":\"%s\",\"firmware_version\":\"%s\""
              ",\"uac_mic_connected\":%s}",
-             (unsigned)heap_free, (unsigned)heap_min, (unsigned)psram_free,
+             (unsigned)heap_free, (unsigned)heap_min,
+             (unsigned)psram_free, (unsigned)psram_min,
              (unsigned)lfs_total, (unsigned)lfs_used,
              (unsigned)tok_in, (unsigned)tok_out, (unsigned)llm_cost_mc,
              (unsigned)search_calls, (unsigned)search_cost_mc,
              uptime_s, reset_str,
+             (int)rssi, (unsigned)task_count,
+             running ? running->label : "unknown",
+             app ? app->version : "unknown",
              uac_connected ? "true" : "false");
     httpd_resp_set_type(req, "application/json");
     apply_cors(req);

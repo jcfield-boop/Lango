@@ -368,14 +368,29 @@ static void agent_loop_task(void *arg)
             uint32_t sram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
             ESP_LOGI(TAG, "Turn start: SRAM free=%lu B", (unsigned long)sram_free);
             if (sram_free < 22 * 1024) {
-                char wmsg[80];
-                snprintf(wmsg, sizeof(wmsg),
-                         "SRAM critically low (%lu B) — restarting to recover heap",
-                         (unsigned long)sram_free);
-                ESP_LOGW(TAG, "%s", wmsg);
-                ws_server_broadcast_monitor("system", wmsg);
-                vTaskDelay(pdMS_TO_TICKS(1000));  /* brief pause for log flush */
-                esp_restart();
+                /* Try lighter recovery first: trim session to free cJSON memory.
+                 * cJSON trees are in PSRAM, but traversal metadata and the parse
+                 * path use SRAM. Trimming to 10 msgs often frees enough. */
+                ESP_LOGW(TAG, "SRAM critically low (%lu B) — trimming session %s",
+                         (unsigned long)sram_free, msg.chat_id);
+                session_trim(msg.chat_id, 10);
+                session_cache_invalidate(msg.chat_id);
+
+                uint32_t sram_after = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+                ESP_LOGI(TAG, "SRAM after session trim: %lu B (was %lu B)",
+                         (unsigned long)sram_after, (unsigned long)sram_free);
+
+                if (sram_after < 22 * 1024) {
+                    char wmsg[80];
+                    snprintf(wmsg, sizeof(wmsg),
+                             "SRAM still critically low (%lu B) after trim — restarting",
+                             (unsigned long)sram_after);
+                    ESP_LOGW(TAG, "%s", wmsg);
+                    ws_server_broadcast_monitor("system", wmsg);
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+                    esp_restart();
+                }
+                ws_server_broadcast_monitor("system", "SRAM recovered via session trim");
             } else if (sram_free < 28 * 1024) {
                 char wmsg[72];
                 snprintf(wmsg, sizeof(wmsg), "SRAM low at turn start: %lu B — risk of OOM",

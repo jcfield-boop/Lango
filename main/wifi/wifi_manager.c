@@ -38,8 +38,10 @@ static const char *wifi_reason_to_str(wifi_err_reason_t reason)
 
 static void wifi_reconnect_cb(void *arg)
 {
-    ESP_LOGI(TAG, "WiFi: retry budget exhausted, attempting reconnect");
+    ESP_LOGI(TAG, "WiFi: reconnect timer fired, resetting retry budget");
     s_retry_count = 0;
+    /* Clear FAIL_BIT so wait_connected() doesn't return stale failure */
+    xEventGroupClearBits(s_wifi_event_group, WIFI_FAIL_BIT);
     esp_wifi_connect();
 }
 
