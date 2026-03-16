@@ -13,6 +13,7 @@
  */
 #include "heartbeat/heartbeat.h"
 #include "langoustine_config.h"
+#include "memory/session_mgr.h"
 #include "bus/message_bus.h"
 #include "gateway/ws_server.h"
 #include "memory/psram_alloc.h"
@@ -238,6 +239,10 @@ static bool heartbeat_send(void)
 
     off += snprintf(prompt + off, HB_PROMPT_SIZE - off,
                     "\nKeep responses concise. Just do the tasks, no meta-commentary.");
+
+    /* Clear stale session history so the agent doesn't reference old errors.
+     * Each heartbeat cycle should start with a clean context. */
+    session_clear("heartbeat");
 
     /* Push to agent */
     mimi_msg_t msg;
