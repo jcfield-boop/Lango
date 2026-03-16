@@ -446,6 +446,65 @@ void i2s_audio_stop(void)
     s_play_cancel = true;
 }
 
+/* ── Speaker test tone (440 Hz, ~2 seconds) ───────────────────── */
+
+#include <math.h>
+
+esp_err_t i2s_audio_test_tone(void)
+{
+    if (!s_tx_handle) {
+        ESP_LOGE(TAG, "I2S not initialised");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const uint32_t sample_rate = 16000;
+    const float freq = 440.0f;
+    const float duration = 2.0f;
+    const uint32_t total_samples = (uint32_t)(sample_rate * duration);
+
+    /* Reconfigure to 16kHz if needed */
+    if (s_current_sample_rate != sample_rate ||
+        s_current_bits != (uint32_t)I2S_DATA_BIT_WIDTH_16BIT) {
+        esp_err_t ret = i2s_configure(sample_rate, I2S_DATA_BIT_WIDTH_16BIT);
+        if (ret != ESP_OK) return ret;
+    }
+
+#if LANG_AMP_SD_GPIO >= 0
+    gpio_set_level(LANG_AMP_SD_GPIO, 1);
+    vTaskDelay(pdMS_TO_TICKS(50));  /* longer settle for cold-start test */
+#endif
+
+    uint8_t vol = s_volume;
+    ESP_LOGI(TAG, "Test tone: 440 Hz, %g s, %u Hz, vol=%u/255", duration, sample_rate, vol);
+
+    int16_t buf[512];
+    uint32_t sample = 0;
+    while (sample < total_samples) {
+        uint32_t chunk = total_samples - sample;
+        if (chunk > 512) chunk = 512;
+        for (uint32_t i = 0; i < chunk; i++) {
+            float t = (float)(sample + i) / (float)sample_rate;
+            int16_t s = (int16_t)(sinf(2.0f * M_PI * freq * t) * 16000.0f);
+            buf[i] = (int16_t)(((int32_t)s * vol) >> 8);
+        }
+        size_t written;
+        esp_err_t ret = i2s_channel_write(s_tx_handle, buf, chunk * 2, &written, pdMS_TO_TICKS(1000));
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "i2s_channel_write error: %s", esp_err_to_name(ret));
+            break;
+        }
+        sample += chunk;
+    }
+
+#if LANG_AMP_SD_GPIO >= 0
+    vTaskDelay(pdMS_TO_TICKS(30));
+    gpio_set_level(LANG_AMP_SD_GPIO, 0);
+#endif
+
+    ESP_LOGI(TAG, "Test tone complete");
+    return ESP_OK;
+}
+
 esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint32_t timeout_ms)
 {
     if (!s_rx_handle || !s_rx_enabled) {

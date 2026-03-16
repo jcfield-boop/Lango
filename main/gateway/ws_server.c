@@ -1547,6 +1547,30 @@ static esp_err_t say_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── /api/speaker-test — 440 Hz tone, no TTS needed ───────────── */
+
+static void speaker_test_task(void *arg)
+{
+    (void)arg;
+    i2s_audio_test_tone();
+    vTaskDelete(NULL);
+}
+
+static esp_err_t speaker_test_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    apply_cors(req);
+
+    BaseType_t ok = xTaskCreatePinnedToCore(
+        speaker_test_task, "spk_test", 8192, NULL, 5, NULL, 0);
+    if (ok != pdPASS) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Task create failed");
+        return ESP_OK;
+    }
+    httpd_resp_sendstr(req, "{\"ok\":true,\"tone\":\"440Hz 2s\"}");
+    return ESP_OK;
+}
+
 static esp_err_t message_post_handler(httpd_req_t *req)
 {
     if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
@@ -1701,6 +1725,10 @@ esp_err_t ws_server_start(void)
     /* Voice UI (root) */
     httpd_uri_t voice_uri = { .uri = "/", .method = HTTP_GET, .handler = voice_ui_handler };
     httpd_register_uri_handler(s_server, &voice_uri);
+
+    /* Speaker test (440 Hz tone — no TTS needed) */
+    httpd_uri_t spktest_uri = { .uri = "/api/speaker-test", .method = HTTP_POST, .handler = speaker_test_handler };
+    httpd_register_uri_handler(s_server, &spktest_uri);
 
     /* Developer console */
     httpd_uri_t console_uri = { .uri = "/console", .method = HTTP_GET, .handler = dev_console_handler };

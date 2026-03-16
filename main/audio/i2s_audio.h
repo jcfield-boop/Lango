@@ -75,3 +75,13 @@ void i2s_audio_set_volume(uint8_t vol);
  * @brief Get current playback volume (0–255).
  */
 uint8_t i2s_audio_get_volume(void);
+
+/**
+ * @brief Play a test tone (440 Hz sine wave, ~2 seconds) through the speaker.
+ *
+ * Generates PCM samples in-memory — no TTS API call needed.
+ * Useful for verifying the I2S → amp → speaker hardware path.
+ *
+ * @return ESP_OK on success.
+ */
+esp_err_t i2s_audio_test_tone(void);
