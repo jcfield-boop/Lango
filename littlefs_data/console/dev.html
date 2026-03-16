@@ -548,7 +548,28 @@ function setCronStatus(msg){document.getElementById('cron-status').textContent=m
 function sendMsg(){
   var input=document.getElementById('chat-input');
   var text=input.value.trim();
-  if(!text||!ws||ws.readyState!==1) return;
+  if(!text) return;
+
+  /* /say command — direct TTS to speaker, no LLM */
+  if(text.toLowerCase().startsWith('/say ')){
+    var sayText=text.substring(5).trim();
+    if(!sayText) return;
+    addLog('msg','[you] '+text);
+    input.value='';
+    addLog('info','[say] sending to speaker...');
+    fetch('/api/say',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text:sayText})
+    }).then(function(r){return r.json();}).then(function(d){
+      addLog(d.ok?'info':'err','[say] '+(d.ok?'speaking: "'+sayText+'"':'failed: '+(d.error||'unknown')));
+    }).catch(function(e){
+      addLog('err','[say] error: '+e.message);
+    });
+    return;
+  }
+
+  if(!ws||ws.readyState!==1) return;
   ws.send(JSON.stringify({type:'prompt',content:text,chat_id:'ws_console'}));
   addLog('msg','[you] '+text);
   input.value='';
