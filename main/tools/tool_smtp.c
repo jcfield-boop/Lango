@@ -182,8 +182,31 @@ esp_err_t tool_smtp_execute(const char *input_json, char *output, size_t output_
     /* Default from_address to username if not set */
     if (!creds.from_addr[0]) strncpy(creds.from_addr, creds.username, sizeof(creds.from_addr) - 1);
 
+    /* Extract bare email for SMTP envelope (MAIL FROM needs just the email,
+     * not "Display Name <email>" format which goes in the From: header). */
+    char envelope_from[128];
+    const char *lt = strchr(creds.from_addr, '<');
+    const char *gt = lt ? strchr(lt, '>') : NULL;
+    if (lt && gt && gt > lt + 1) {
+        size_t elen = (size_t)(gt - lt - 1);
+        if (elen >= sizeof(envelope_from)) elen = sizeof(envelope_from) - 1;
+        memcpy(envelope_from, lt + 1, elen);
+        envelope_from[elen] = '\0';
+    } else {
+        strncpy(envelope_from, creds.from_addr, sizeof(envelope_from) - 1);
+        envelope_from[sizeof(envelope_from) - 1] = '\0';
+    }
+
     /* NOTE: cJSON_Delete(input) deferred to smtp_done — subject/body pointers
      * alias into the cJSON tree and must stay valid until after smtp_write. */
+
+    /* Port 587 uses STARTTLS (plain TCP → upgrade), which esp_tls doesn't
+     * support.  Port 465 uses implicit TLS and works with esp_tls_conn_new_sync.
+     * Gmail supports both, so auto-correct if the user configured 587. */
+    if (creds.port == 587) {
+        ESP_LOGW(TAG, "Port 587 (STARTTLS) not supported — using 465 (SMTPS)");
+        creds.port = 465;
+    }
 
     ESP_LOGI(TAG, "Sending email to %s via %s:%d", creds.to_addr, creds.smtp_host, creds.port);
     ws_server_broadcast_monitor_verbose("email", "Connecting to SMTP...");
@@ -244,7 +267,7 @@ esp_err_t tool_smtp_execute(const char *input_json, char *output, size_t output_
     SMTP_CHECK(334, "username");
     SMTP_SEND("%s", b64p);
     SMTP_CHECK(235, "password");
-    SMTP_SEND("MAIL FROM:<%s>", creds.from_addr);
+    SMTP_SEND("MAIL FROM:<%s>", envelope_from);
     SMTP_CHECK(250, "MAIL FROM");
     SMTP_SEND("RCPT TO:<%s>", creds.to_addr);
     SMTP_CHECK(250, "RCPT TO");
