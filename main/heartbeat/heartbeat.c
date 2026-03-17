@@ -245,9 +245,9 @@ static bool heartbeat_send(void)
     session_clear("heartbeat");
 
     /* Push to agent */
-    mimi_msg_t msg;
+    lang_msg_t msg;
     memset(&msg, 0, sizeof(msg));
-    strncpy(msg.channel, MIMI_CHAN_SYSTEM, sizeof(msg.channel) - 1);
+    strncpy(msg.channel, LANG_CHAN_SYSTEM, sizeof(msg.channel) - 1);
     strncpy(msg.chat_id, "heartbeat", sizeof(msg.chat_id) - 1);
     msg.content = prompt;  /* bus takes ownership */
 

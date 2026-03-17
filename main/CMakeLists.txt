@@ -55,6 +55,7 @@ idf_component_register(
         "tools/tool_capture_image.c"
         "led/led_indicator.c"
         "config/services_config.c"
+        "config/services_parser.c"
         "diag/log_buffer.c"
     EMBED_TXTFILES
         "certs/server_cert.pem"

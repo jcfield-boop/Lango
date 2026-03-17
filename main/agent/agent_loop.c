@@ -107,7 +107,7 @@ static void json_set_string(cJSON *obj, const char *key, const char *value)
     cJSON_AddStringToObject(obj, key, value);
 }
 
-static void append_turn_context_prompt(char *prompt, size_t size, const mimi_msg_t *msg)
+static void append_turn_context_prompt(char *prompt, size_t size, const lang_msg_t *msg)
 {
     if (!prompt || size == 0 || !msg) return;
 
@@ -127,7 +127,7 @@ static void append_turn_context_prompt(char *prompt, size_t size, const mimi_msg
     }
 }
 
-static char *patch_tool_input_with_context(const llm_tool_call_t *call, const mimi_msg_t *msg)
+static char *patch_tool_input_with_context(const llm_tool_call_t *call, const lang_msg_t *msg)
 {
     if (!call || !msg || strcmp(call->name, "cron_add") != 0) return NULL;
 
@@ -177,7 +177,7 @@ static void tool_exec_task(void *arg)
     vTaskDelete(NULL);
 }
 
-static cJSON *build_tool_results(const llm_response_t *resp, const mimi_msg_t *msg,
+static cJSON *build_tool_results(const llm_response_t *resp, const lang_msg_t *msg,
                                  char *tool_output, size_t tool_output_size)
 {
     cJSON *content = cJSON_CreateArray();
@@ -351,7 +351,7 @@ static void agent_loop_task(void *arg)
     const char *tools_json = tool_registry_get_tools_json();
 
     while (1) {
-        mimi_msg_t msg;
+        lang_msg_t msg;
         esp_err_t err = message_bus_pop_inbound(&msg, UINT32_MAX);
         if (err != ESP_OK) continue;
 
@@ -458,7 +458,7 @@ static void agent_loop_task(void *arg)
         bool retry_done = false;
         bool oom_restart = false;
         bool capture_image_called = false;
-        bool is_telegram = (strcmp(msg.channel, MIMI_CHAN_TELEGRAM) == 0);
+        bool is_telegram = (strcmp(msg.channel, LANG_CHAN_TELEGRAM) == 0);
         int32_t tg_placeholder_id = -1;
 
         /* Telegram: send placeholder before LLM call */
@@ -503,7 +503,7 @@ static void agent_loop_task(void *arg)
 
 #if LANG_AGENT_SEND_WORKING_STATUS
             if (!sent_working_status && strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0 && !is_telegram) {
-                mimi_msg_t status = {0};
+                lang_msg_t status = {0};
                 strncpy(status.channel, msg.channel, sizeof(status.channel) - 1);
                 strncpy(status.chat_id, msg.chat_id, sizeof(status.chat_id) - 1);
                 status.content = strdup("Langoustine is thinking...");
@@ -636,7 +636,7 @@ static void agent_loop_task(void *arg)
                 if (tg_placeholder_id > 0) {
                     telegram_edit_message(msg.chat_id, tg_placeholder_id, final_text);
                 } else {
-                    mimi_msg_t out = {0};
+                    lang_msg_t out = {0};
                     strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
                     strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
                     out.content = final_text;
@@ -651,7 +651,7 @@ static void agent_loop_task(void *arg)
                 /* System/heartbeat: skip TTS entirely — just deliver text.
                  * TTS + I2S playback causes brownout resets from amp current. */
                 ESP_LOGI(TAG, "System channel — skipping TTS, sending text only");
-                mimi_msg_t out = {0};
+                lang_msg_t out = {0};
                 strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
                 strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
                 out.content = final_text;
@@ -745,7 +745,7 @@ static void agent_loop_task(void *arg)
                     ws_server_send_with_tts(msg.chat_id, final_text, NULL, img_url);
                 } else {
                     /* No TTS, no image — send via outbound queue (handles Telegram etc.) */
-                    mimi_msg_t out = {0};
+                    lang_msg_t out = {0};
                     strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
                     strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
                     out.content = final_text;
@@ -773,7 +773,7 @@ static void agent_loop_task(void *arg)
             if (is_telegram && tg_placeholder_id > 0) {
                 telegram_edit_message(msg.chat_id, tg_placeholder_id, err_text);
             } else {
-                mimi_msg_t out = {0};
+                lang_msg_t out = {0};
                 strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
                 strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
                 out.content = strdup(err_text);

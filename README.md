@@ -436,6 +436,13 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 
 ## Changelog
 
+### 2026-03-16 — Hardening: naming cleanup, auth guards, shared SERVICES.md parser
+- **`main/bus/message_bus.h`** — Renamed `mimi_msg_t` → `lang_msg_t` and `MIMI_CHAN_*` → `LANG_CHAN_*` across the entire codebase (compat aliases retained in `langoustine_config.h`).
+- **`main/config/services_parser.c/.h`** — New shared `services_parse_section()` utility extracted from duplicated SERVICES.md parsing logic in tool\_ha, tool\_klipper, and tool\_smtp.
+- **`main/gateway/ws_server.c`** — Added `request_is_authed()` guards to 8 previously unprotected endpoints: `/api/file`, `/api/heartbeat`, `/api/sysinfo`, `/api/config` (GET), `/api/crons`, `/api/logs`, `/api/say`, `/api/speaker-test`. Expanded CORS headers (Methods, Headers, Max-Age).
+- **`main/proxy/http_proxy.c`**, **`main/telegram/telegram_bot.c`**, **`main/tools/tool_web_search.c`** — Replaced `ESP_ERROR_CHECK()` in NVS write paths with graceful error handling and logging (prevents panic on NVS corruption).
+- **`main/tools/tool_web_search.c`** — Eliminated intermediate PSRAM allocation in `search_tavily()`: results now write directly into the caller's output buffer. Added null-check on `esp_http_client_init()`.
+
 ### 2026-03-10 — Stability: log_buffer PSRAM crash + OTA stack
 - **`main/diag/log_buffer.c`** — Ring buffer (`s_ring`) moved from PSRAM to SRAM (`heap_caps_malloc MALLOC_CAP_INTERNAL`). PSRAM is inaccessible while the MMU cache is disabled during OTA flash writes; the vprintf hook firing in that window caused a Data Load/Store Error panic. 8 KB from SRAM resolves this entirely.
 - **`main/diag/log_buffer.c`** — `volatile int s_busy` → `_Atomic int`; `log_buffer_get()` now snapshots `s_head`/`s_fill` under the atomic busy flag to prevent torn reads.

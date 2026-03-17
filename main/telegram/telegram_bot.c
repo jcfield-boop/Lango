@@ -407,8 +407,8 @@ static void process_updates(const char *json_str)
         ws_server_broadcast_monitor_verbose("telegram", vpreview);
 
         /* Push to inbound bus */
-        mimi_msg_t msg = {0};
-        strncpy(msg.channel, MIMI_CHAN_TELEGRAM, sizeof(msg.channel) - 1);
+        lang_msg_t msg = {0};
+        strncpy(msg.channel, LANG_CHAN_TELEGRAM, sizeof(msg.channel) - 1);
         strncpy(msg.chat_id, chat_id_str, sizeof(msg.chat_id) - 1);
         msg.content = strdup(text->valuestring);
         if (msg.content) {
@@ -771,9 +771,18 @@ esp_err_t telegram_edit_message(const char *chat_id, int32_t message_id, const c
 esp_err_t telegram_set_token(const char *token)
 {
     nvs_handle_t nvs;
-    ESP_ERROR_CHECK(nvs_open(MIMI_NVS_TG, NVS_READWRITE, &nvs));
-    ESP_ERROR_CHECK(nvs_set_str(nvs, MIMI_NVS_KEY_TG_TOKEN, token));
-    ESP_ERROR_CHECK(nvs_commit(nvs));
+    esp_err_t err = nvs_open(MIMI_NVS_TG, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS open failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = nvs_set_str(nvs, MIMI_NVS_KEY_TG_TOKEN, token);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS write failed: %s", esp_err_to_name(err));
+        nvs_close(nvs);
+        return err;
+    }
+    nvs_commit(nvs);
     nvs_close(nvs);
 
     strncpy(s_bot_token, token, sizeof(s_bot_token) - 1);

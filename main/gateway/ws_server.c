@@ -241,7 +241,10 @@ static bool request_is_authed(httpd_req_t *req)
 
 static void apply_cors(httpd_req_t *req)
 {
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", s_cors_origin);
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin",  s_cors_origin);
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Authorization, Content-Type");
+    httpd_resp_set_hdr(req, "Access-Control-Max-Age",       "86400");
 }
 
 /* ── CHANGE 5: set_auth_token public function ───────────────── */
@@ -549,7 +552,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
 
         ESP_LOGI(TAG, "WS prompt from %s: %.40s...", chat_id, content_item->valuestring);
 
-        mimi_msg_t msg = {0};
+        lang_msg_t msg = {0};
         strncpy(msg.channel, LANG_CHAN_WEBSOCKET, sizeof(msg.channel) - 1);
         strncpy(msg.chat_id, chat_id, sizeof(msg.chat_id) - 1);
         msg.content = strdup(content_item->valuestring);
@@ -566,7 +569,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
         /* Legacy "message" type — map to "prompt" for compatibility */
         size_t content_len = strnlen(content_item->valuestring, 4097);
         if (content_len <= 4096) {
-            mimi_msg_t msg = {0};
+            lang_msg_t msg = {0};
             strncpy(msg.channel, LANG_CHAN_WEBSOCKET, sizeof(msg.channel) - 1);
             strncpy(msg.chat_id, chat_id, sizeof(msg.chat_id) - 1);
             msg.content = strdup(content_item->valuestring);
@@ -758,6 +761,8 @@ static const char *name_to_path(const char *name)
 
 static esp_err_t file_get_handler(httpd_req_t *req)
 {
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
     char query[32] = {0};
     char name[16]  = {0};
 
@@ -894,6 +899,8 @@ static esp_err_t reboot_handler(httpd_req_t *req)
 
 static esp_err_t heartbeat_handler(httpd_req_t *req)
 {
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
     httpd_resp_set_type(req, "application/json");
     bool triggered = heartbeat_trigger();
     httpd_resp_sendstr(req, triggered ? "{\"ok\":true,\"triggered\":true}"
@@ -1075,6 +1082,8 @@ static const char *reset_reason_str(esp_reset_reason_t r)
 
 static esp_err_t sysinfo_handler(httpd_req_t *req)
 {
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
     size_t heap_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     size_t heap_min  = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
     size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
@@ -1161,6 +1170,8 @@ static void nvs_get_masked(const char *ns, const char *key, char *out, size_t ou
 
 static esp_err_t config_get_handler(httpd_req_t *req)
 {
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
     char masked_api[16], masked_search[16], masked_stt[16], masked_tts[16];
     const char *ak = llm_get_api_key();
     mask_key(ak ? ak : "", masked_api, sizeof(masked_api));
@@ -1348,6 +1359,8 @@ static esp_err_t config_post_handler(httpd_req_t *req)
 
 static esp_err_t crons_get_handler(httpd_req_t *req)
 {
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
     const cron_job_t *jobs;
     int count;
     cron_list_jobs(&jobs, &count);
@@ -1483,6 +1496,8 @@ static esp_err_t ota_status_handler(httpd_req_t *req)
 
 static esp_err_t logs_handler(httpd_req_t *req)
 {
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
     char *buf = ps_malloc(LOG_RING_SIZE + 64);
     if (!buf) { httpd_resp_send_500(req); return ESP_OK; }
     log_buffer_get(buf, LOG_RING_SIZE + 64);
@@ -1523,6 +1538,8 @@ static void say_async_task(void *arg)
 
 static esp_err_t say_post_handler(httpd_req_t *req)
 {
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
     httpd_resp_set_type(req, "application/json");
     apply_cors(req);
 
@@ -1583,6 +1600,8 @@ static void speaker_test_task(void *arg)
 
 static esp_err_t speaker_test_handler(httpd_req_t *req)
 {
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
     httpd_resp_set_type(req, "application/json");
     apply_cors(req);
 
@@ -1635,7 +1654,7 @@ static esp_err_t message_post_handler(httpd_req_t *req)
     const char *chat_id = (cJSON_IsString(jchat) && jchat->valuestring[0])
                           ? jchat->valuestring : "api";
 
-    mimi_msg_t msg = {0};
+    lang_msg_t msg = {0};
     strncpy(msg.channel, channel, sizeof(msg.channel) - 1);
     strncpy(msg.chat_id, chat_id, sizeof(msg.chat_id) - 1);
     msg.content = strdup(jmsg->valuestring);

@@ -234,7 +234,7 @@ static void outbound_dispatch_task(void *arg)
     ESP_LOGI(TAG, "Outbound dispatch started");
 
     while (1) {
-        mimi_msg_t msg;
+        lang_msg_t msg;
         if (message_bus_pop_outbound(&msg, UINT32_MAX) != ESP_OK) continue;
 
         ESP_LOGI(TAG, "Dispatching response to %s:%s", msg.channel, msg.chat_id);

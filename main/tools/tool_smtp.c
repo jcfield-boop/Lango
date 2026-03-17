@@ -1,4 +1,5 @@
 #include "tool_smtp.h"
+#include "config/services_parser.h"
 #include "gateway/ws_server.h"
 
 #include <string.h>
@@ -54,46 +55,28 @@ static bool parse_email_creds(smtp_creds_t *c)
     memset(c, 0, sizeof(*c));
     c->port = 465;  /* Gmail SMTPS default */
 
-    FILE *f = fopen("/lfs/config/SERVICES.md", "r");
-    if (!f) return false;
+    char port_str[8] = {0};
+    services_kv_t kvs[] = {
+        { "smtp_host",    c->smtp_host, sizeof(c->smtp_host) },
+        { "smtp_port",    port_str,     sizeof(port_str)     },
+        { "username",     c->username,  sizeof(c->username)  },
+        { "password",     c->password,  sizeof(c->password)  },
+        { "from_address", c->from_addr, sizeof(c->from_addr) },
+        { "to_address",   c->to_addr,   sizeof(c->to_addr)  },
+    };
+    services_parse_section("## Email", kvs, 6);
 
-    char line[256];
-    bool in_section = false;
+    if (port_str[0]) c->port = atoi(port_str);
 
-    while (fgets(line, sizeof(line), f)) {
-        /* Trim trailing whitespace */
-        int len = (int)strlen(line);
-        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r' ||
-                           line[len-1] == ' '))
-            line[--len] = '\0';
-
-        if (strcmp(line, "## Email") == 0) { in_section = true;  continue; }
-        if (in_section && len > 1 && line[0] == '#') break;
-        if (!in_section || len == 0) continue;
-
-        char *colon = strchr(line, ':');
-        if (!colon) continue;
-        *colon = '\0';
-        const char *key = line;
-        const char *val = colon + 1;
-        while (*val == ' ') val++;
-
-        if      (strcmp(key, "smtp_host")    == 0) strncpy(c->smtp_host,  val, sizeof(c->smtp_host)  - 1);
-        else if (strcmp(key, "smtp_port")    == 0) c->port = atoi(val);
-        else if (strcmp(key, "username")     == 0) strncpy(c->username,   val, sizeof(c->username)   - 1);
-        else if (strcmp(key, "from_address") == 0) strncpy(c->from_addr,  val, sizeof(c->from_addr)  - 1);
-        else if (strcmp(key, "to_address")   == 0) strncpy(c->to_addr,    val, sizeof(c->to_addr)    - 1);
-        else if (strcmp(key, "password")     == 0) {
-            /* Strip spaces from app password (Gmail shows it as "xxxx xxxx xxxx xxxx") */
-            int p = 0;
-            for (int i = 0; val[i] && p < (int)sizeof(c->password) - 1; i++) {
-                if (val[i] != ' ') c->password[p++] = val[i];
-            }
-            c->password[p] = '\0';
+    /* Strip spaces from app password (Gmail shows it as "xxxx xxxx xxxx xxxx") */
+    {
+        int p = 0;
+        for (int i = 0; c->password[i]; i++) {
+            if (c->password[i] != ' ') c->password[p++] = c->password[i];
         }
+        c->password[p] = '\0';
     }
 
-    fclose(f);
     return (c->username[0] && c->password[0] && c->to_addr[0]);
 }
 

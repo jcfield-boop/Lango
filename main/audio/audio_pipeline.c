@@ -88,7 +88,7 @@ static void audio_stt_task(void *arg)
             ws_server_broadcast_monitor("stt_result", result.text);
 
             /* Push transcribed text to message bus using originating channel */
-            mimi_msg_t msg = {0};
+            lang_msg_t msg = {0};
             strncpy(msg.channel, channel[0] ? channel : LANG_CHAN_WEBSOCKET,
                     sizeof(msg.channel) - 1);
             strncpy(msg.chat_id, chat_id, sizeof(msg.chat_id) - 1);

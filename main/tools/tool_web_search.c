@@ -65,7 +65,8 @@ void tool_web_search_get_stats(uint32_t *calls, uint32_t *cost_millicents)
 
 /* ── Tavily search ────────────────────────────────────────────── */
 
-static esp_err_t search_tavily(const char *query, const char *api_key, char **out)
+static esp_err_t search_tavily(const char *query, const char *api_key,
+                               char *output, size_t output_size)
 {
     char *buf = ps_malloc(MIMI_TAVILY_BUF_SIZE);
     if (!buf) return ESP_ERR_NO_MEM;
@@ -93,6 +94,12 @@ static esp_err_t search_tavily(const char *query, const char *api_key, char **ou
     };
     int body_len = (int)strlen(body_str);
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        free(body_str);
+        free(buf);
+        snprintf(output, output_size, "Error: HTTP client init failed (low memory?)");
+        return ESP_FAIL;
+    }
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_header(client, "Authorization", auth_header);
 
@@ -138,35 +145,33 @@ static esp_err_t search_tavily(const char *query, const char *api_key, char **ou
     cJSON *answer  = cJSON_GetObjectItem(root, "answer");
     cJSON *results = cJSON_GetObjectItem(root, "results");
 
-    char *output = ps_malloc(4096);
-    if (!output) { cJSON_Delete(root); return ESP_ERR_NO_MEM; }
     int pos = 0;
+    size_t remain = output_size;
 
     if (answer && cJSON_IsString(answer) && strlen(answer->valuestring) > 10) {
-        pos += snprintf(output + pos, 4096 - pos, "%s\n\n", answer->valuestring);
+        pos += snprintf(output + pos, remain - pos, "%s\n\n", answer->valuestring);
     }
     if (results && cJSON_IsArray(results)) {
         int n = cJSON_GetArraySize(results);
-        for (int i = 0; i < n && i < 5 && pos < 3800; i++) {
+        for (int i = 0; i < n && i < 5 && (size_t)pos < remain - 200; i++) {
             cJSON *item  = cJSON_GetArrayItem(results, i);
             cJSON *title = cJSON_GetObjectItem(item, "title");
             cJSON *url   = cJSON_GetObjectItem(item, "url");
             cJSON *snip  = cJSON_GetObjectItem(item, "content");
             if (title && url) {
-                pos += snprintf(output + pos, 4096 - pos, "[%d] %s\n%s\n",
+                pos += snprintf(output + pos, remain - pos, "[%d] %s\n%s\n",
                                 i + 1,
                                 cJSON_IsString(title) ? title->valuestring : "",
                                 cJSON_IsString(url)   ? url->valuestring   : "");
             }
-            if (snip && cJSON_IsString(snip) && pos < 3600) {
-                pos += snprintf(output + pos, 4096 - pos, "%.200s\n\n", snip->valuestring);
+            if (snip && cJSON_IsString(snip) && (size_t)pos < remain - 200) {
+                pos += snprintf(output + pos, remain - pos, "%.200s\n\n", snip->valuestring);
             }
         }
     }
     cJSON_Delete(root);
 
-    if (pos == 0) { free(output); return ESP_FAIL; }
-    *out = output;
+    if (pos == 0) return ESP_FAIL;
     return ESP_OK;
 }
 
@@ -206,17 +211,13 @@ esp_err_t tool_web_search_execute(const char *input_json, char *output, size_t o
     ESP_LOGI(TAG, "Searching: %s", query->valuestring);
     ws_server_broadcast_monitor_verbose("search", "Tavily");
 
-    char *result = NULL;
-    esp_err_t err = search_tavily(query->valuestring, s_search_key, &result);
+    esp_err_t err = search_tavily(query->valuestring, s_search_key, output, output_size);
     cJSON_Delete(input);
 
-    if (err == ESP_OK && result) {
-        snprintf(output, output_size, "%s", result);
-        free(result);
+    if (err == ESP_OK) {
         s_total_searches++;
         s_search_cost_millicents += 200; /* Tavily: ~$0.002/query = 200 millicents */
     } else {
-        free(result);
         snprintf(output, output_size, "Error: Tavily search failed");
     }
     return err;
@@ -225,9 +226,18 @@ esp_err_t tool_web_search_execute(const char *input_json, char *output, size_t o
 esp_err_t tool_web_search_set_key(const char *api_key)
 {
     nvs_handle_t nvs;
-    ESP_ERROR_CHECK(nvs_open(MIMI_NVS_SEARCH, NVS_READWRITE, &nvs));
-    ESP_ERROR_CHECK(nvs_set_str(nvs, MIMI_NVS_KEY_API_KEY, api_key));
-    ESP_ERROR_CHECK(nvs_commit(nvs));
+    esp_err_t err = nvs_open(MIMI_NVS_SEARCH, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS open failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = nvs_set_str(nvs, MIMI_NVS_KEY_API_KEY, api_key);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS write failed: %s", esp_err_to_name(err));
+        nvs_close(nvs);
+        return err;
+    }
+    nvs_commit(nvs);
     nvs_close(nvs);
 
     strncpy(s_search_key, api_key, sizeof(s_search_key) - 1);
