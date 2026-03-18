@@ -22,6 +22,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <math.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include "esp_log.h"
@@ -239,12 +240,26 @@ static int cmd_say(int argc, char **argv)
     char id_out[9] = {0};
     printf("Generating TTS for: \"%s\"\n", text);
     esp_err_t ret = tts_generate(text, id_out);
-    if (ret == ESP_OK) {
-        printf("Played TTS (id=%s)\n", id_out);
-    } else {
-        printf("TTS failed: %s\n", esp_err_to_name(ret));
+    if (ret != ESP_OK) {
+        printf("TTS generate failed: %s\n", esp_err_to_name(ret));
+        return 1;
     }
-    return (ret == ESP_OK) ? 0 : 1;
+    printf("TTS cached (id=%s), playing via speaker...\n", id_out);
+
+    const uint8_t *wav = NULL;
+    size_t wav_len = 0;
+    ret = tts_cache_get(id_out, &wav, &wav_len);
+    if (ret != ESP_OK || !wav || wav_len == 0) {
+        printf("Failed to retrieve cached WAV: %s\n", esp_err_to_name(ret));
+        return 1;
+    }
+    ret = i2s_audio_play_wav(wav, wav_len);
+    if (ret != ESP_OK) {
+        printf("I2S playback failed: %s\n", esp_err_to_name(ret));
+        return 1;
+    }
+    printf("Played TTS (id=%s)\n", id_out);
+    return 0;
 }
 
 /* --- volume command --- */
@@ -904,6 +919,62 @@ static int cmd_tg_allowlist(int argc, char **argv)
     return 0;
 }
 
+/* mic_test — read I2S mic samples and report levels */
+static int cmd_mic_test(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    printf("Reading mic (GPIO %d) for 2 seconds...\n", LANG_I2S_DIN);
+
+    uint8_t *buf = malloc(1024);
+    if (!buf) { printf("Alloc failed\n"); return 1; }
+
+    int32_t peak_pos = 0, peak_neg = 0;
+    int64_t sum_sq = 0;
+    int     total_samples = 0;
+    int     zero_reads = 0;
+
+    TickType_t start = xTaskGetTickCount();
+    while ((xTaskGetTickCount() - start) < pdMS_TO_TICKS(2000)) {
+        size_t bytes_read = 0;
+        esp_err_t err = i2s_audio_read(buf, 1024, &bytes_read, 200);
+        if (err != ESP_OK) {
+            printf("i2s_audio_read error: %s\n", esp_err_to_name(err));
+            free(buf);
+            return 1;
+        }
+        if (bytes_read == 0) { zero_reads++; continue; }
+
+        int16_t *samples = (int16_t *)buf;
+        int n = bytes_read / 2;
+        for (int i = 0; i < n; i++) {
+            int16_t s = samples[i];
+            if (s > peak_pos) peak_pos = s;
+            if (s < peak_neg) peak_neg = s;
+            sum_sq += (int64_t)s * s;
+        }
+        total_samples += n;
+    }
+
+    free(buf);
+
+    if (total_samples == 0) {
+        printf("No samples captured! (zero_reads=%d) — I2S RX may not be running.\n", zero_reads);
+        return 1;
+    }
+
+    double rms = sqrt((double)sum_sq / total_samples);
+    printf("Samples: %d  |  Peak: +%ld / %ld  |  RMS: %.0f\n",
+           total_samples, (long)peak_pos, (long)peak_neg, rms);
+    if (rms < 5.0) {
+        printf("⚠ Very low signal — mic may not be connected or L/R pin wrong\n");
+    } else if (rms < 100.0) {
+        printf("Quiet room level — mic is working\n");
+    } else {
+        printf("Good signal level — mic is picking up sound\n");
+    }
+    return 0;
+}
+
 /* ── Init ──────────────────────────────────────────────────────── */
 
 esp_err_t serial_cli_init(void)
@@ -1293,6 +1364,14 @@ esp_err_t serial_cli_init(void)
         .argtable = &notify_server_args,
     };
     esp_console_cmd_register(&notify_server_cmd);
+
+    /* mic_test */
+    esp_console_cmd_t mic_test_cmd = {
+        .command = "mic_test",
+        .help    = "Read I2S mic for 2s and report signal levels",
+        .func    = &cmd_mic_test,
+    };
+    esp_console_cmd_register(&mic_test_cmd);
 
     ESP_ERROR_CHECK(esp_console_start_repl(repl));
     ESP_LOGI(TAG, "Serial CLI started");

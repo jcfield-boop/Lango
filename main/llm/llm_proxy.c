@@ -1397,8 +1397,11 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
     }
 
     if (status != 200) {
-        char emsg[80];
-        snprintf(emsg, sizeof(emsg), "LLM API error %d (streaming)", status);
+        char emsg[256];
+        /* Include error body from SSE buffer if available */
+        const char *body = (st->text.len > 0) ? st->text.data : "(no body)";
+        snprintf(emsg, sizeof(emsg), "LLM API error %d (streaming): %.180s", status, body);
+        for (char *p = emsg; *p; p++) if ((unsigned char)*p < 32) *p = ' ';
         ESP_LOGE(TAG, "%s", emsg);
         ws_server_broadcast_monitor("error", emsg);
         sse_state_free(st);

@@ -336,11 +336,7 @@ void app_main(void)
             ESP_LOGI(TAG, "I2S speaker ready (MAX98357A on GPIO%d/%d/%d, amp SD GPIO%d)",
                      LANG_I2S_BCLK, LANG_I2S_LRCLK, LANG_I2S_DOUT, LANG_AMP_SD_GPIO);
 
-            /* INMP441 mic: wake word ("Hi ESP") + PTT (BOOT button).
-             * Disabled until working INMP441 is installed — current board outputs
-             * railed signal (peak=32767) regardless of L/R setting.
-             * TODO: re-enable when replacement INMP441 arrives. */
-#if 0  /* INMP441 damaged — re-enable when replaced */
+            /* INMP441 mic: wake word ("Hi ESP") + PTT (BOOT button). */
             microphone_init();
             esp_err_t ww_err = wake_word_init();
             if (ww_err == ESP_OK) ww_err = wake_word_start();
@@ -351,8 +347,6 @@ void app_main(void)
                          esp_err_to_name(ww_err));
                 microphone_start();
             }
-#endif
-            ESP_LOGW(TAG, "INMP441 mic disabled (awaiting replacement board)");
         } else {
             ESP_LOGW(TAG, "I2S init failed: %s — speaker + mic disabled",
                      esp_err_to_name(i2s_err));

@@ -96,10 +96,10 @@
 #define LANG_LED_GPIO    38   /* GPIO38 = onboard NeoPixel on ESP32-S3-DevKitC-1 */
 
 /* I2S Audio — shared BCLK/LRCLK for speaker + mic */
-#define LANG_I2S_BCLK    15   /* to MAX98357A BCLK + INMP441 SCK  */
-#define LANG_I2S_LRCLK   16   /* to MAX98357A LRC  + INMP441 WS   */
-#define LANG_I2S_DOUT    17   /* to MAX98357A DIN                  */
-#define LANG_I2S_DIN     18   /* from INMP441 SD                   */
+#define LANG_I2S_BCLK     3   /* to MAX98357A BCLK + INMP441 SCK  */
+#define LANG_I2S_LRCLK    4   /* to MAX98357A LRC  + INMP441 WS   */
+#define LANG_I2S_DOUT     6   /* to MAX98357A DIN                  */
+#define LANG_I2S_DIN      5   /* from INMP441 SD                   */
 
 /* Software volume scale: 0–256, where 256 = 100% (0 dB), 128 = 50% (−6 dB).
  * Lower values reduce peak amp current and prevent brownouts on weak PSUs. */
@@ -113,7 +113,7 @@
  * Set to -1 (default) if the SD pin is floating / not connected to a GPIO.
  * Example: wire SD to GPIO 45 and set LANG_AMP_SD_GPIO 45 here. */
 #ifndef LANG_AMP_SD_GPIO
-#define LANG_AMP_SD_GPIO  42
+#define LANG_AMP_SD_GPIO  42   /* MAX98357A shutdown: HIGH=on, LOW=off */
 #endif
 
 /* PTT button — BOOT button, active low, internal pull-up */
