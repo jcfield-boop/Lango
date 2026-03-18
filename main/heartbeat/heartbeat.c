@@ -10,6 +10,11 @@
  *
  * Recurring tasks ([30m] and [daily]) never need file edits —
  * scheduling is tracked in RAM, saving flash wear.
+ *
+ * NOTE: heartbeat_send() does LittleFS I/O which requires a SRAM stack
+ * much larger than the FreeRTOS Timer Service task provides (~2KB).
+ * We use a dedicated task instead of xTimerCreate to avoid stack overflow
+ * in the Tmr Svc task.
  */
 #include "heartbeat/heartbeat.h"
 #include "langoustine_config.h"
@@ -25,7 +30,7 @@
 #include <ctype.h>
 #include <time.h>
 #include "freertos/FreeRTOS.h"
-#include "freertos/timers.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 
 static const char *TAG = "heartbeat";
@@ -35,6 +40,7 @@ static const char *TAG = "heartbeat";
 #define MAX_HB_TASKS     12
 #define HB_TEXT_LEN      384
 #define HB_PROMPT_SIZE   2048
+#define HB_TASK_STACK    4096   /* SRAM — needs room for LittleFS + flash I/O */
 
 typedef enum {
     HB_INTERVAL,    /* [30m]  — every heartbeat cycle */
@@ -150,11 +156,11 @@ static int parse_tasks(hb_task_t *tasks, int max)
 
 /* ── Build prompt and dispatch ───────────────────────────────── */
 
-static TimerHandle_t s_heartbeat_timer = NULL;
+static TaskHandle_t s_heartbeat_task = NULL;
 
 static bool heartbeat_send(void)
 {
-    /* Allocate tasks from PSRAM — too large for timer task stack (8KB). */
+    /* Allocate tasks from PSRAM — too large for stack. */
     hb_task_t *tasks = (hb_task_t *)ps_calloc(MAX_HB_TASKS, sizeof(hb_task_t));
     if (!tasks) {
         ESP_LOGE(TAG, "Failed to alloc task array");
@@ -263,12 +269,16 @@ static bool heartbeat_send(void)
     return true;
 }
 
-/* ── Timer callback ───────────────────────────────────────────── */
+/* ── Dedicated task (replaces timer callback) ────────────────── */
 
-static void heartbeat_timer_callback(TimerHandle_t xTimer)
+static void heartbeat_task_main(void *arg)
 {
-    (void)xTimer;
-    heartbeat_send();
+    (void)arg;
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(MIMI_HEARTBEAT_INTERVAL_MS));
+        heartbeat_send();
+    }
 }
 
 /* ── Public API ───────────────────────────────────────────────── */
@@ -282,26 +292,22 @@ esp_err_t heartbeat_init(void)
 
 esp_err_t heartbeat_start(void)
 {
-    if (s_heartbeat_timer) {
-        ESP_LOGW(TAG, "Heartbeat timer already running");
+    if (s_heartbeat_task) {
+        ESP_LOGW(TAG, "Heartbeat task already running");
         return ESP_OK;
     }
 
-    s_heartbeat_timer = xTimerCreate(
+    BaseType_t ok = xTaskCreate(
+        heartbeat_task_main,
         "heartbeat",
-        pdMS_TO_TICKS(MIMI_HEARTBEAT_INTERVAL_MS),
-        pdTRUE,    /* auto-reload */
+        HB_TASK_STACK,
         NULL,
-        heartbeat_timer_callback
+        2,              /* low priority — same as LED task */
+        &s_heartbeat_task
     );
 
-    if (!s_heartbeat_timer) {
-        ESP_LOGE(TAG, "Failed to create heartbeat timer");
-        return ESP_FAIL;
-    }
-
-    if (xTimerStart(s_heartbeat_timer, pdMS_TO_TICKS(1000)) != pdPASS) {
-        ESP_LOGE(TAG, "Failed to start heartbeat timer");
+    if (ok != pdPASS || !s_heartbeat_task) {
+        ESP_LOGE(TAG, "Failed to create heartbeat task");
         return ESP_FAIL;
     }
 
@@ -311,10 +317,9 @@ esp_err_t heartbeat_start(void)
 
 void heartbeat_stop(void)
 {
-    if (s_heartbeat_timer) {
-        xTimerStop(s_heartbeat_timer, pdMS_TO_TICKS(1000));
-        xTimerDelete(s_heartbeat_timer, pdMS_TO_TICKS(1000));
-        s_heartbeat_timer = NULL;
+    if (s_heartbeat_task) {
+        vTaskDelete(s_heartbeat_task);
+        s_heartbeat_task = NULL;
         ESP_LOGI(TAG, "Heartbeat stopped");
     }
 }

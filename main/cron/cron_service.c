@@ -129,6 +129,10 @@ static esp_err_t cron_load_jobs(void)
         strncpy(job->id, id, sizeof(job->id) - 1);
         strncpy(job->name, name, sizeof(job->name) - 1);
         strncpy(job->message, message, sizeof(job->message) - 1);
+        if (strlen(message) >= sizeof(job->message)) {
+            ESP_LOGW(TAG, "Job %s message truncated (%d→%d bytes)",
+                     id, (int)strlen(message), (int)(sizeof(job->message) - 1));
+        }
         strncpy(job->channel, channel ? channel : LANG_CHAN_SYSTEM,
                 sizeof(job->channel) - 1);
         strncpy(job->chat_id, chat_id ? chat_id : "cron",
@@ -304,8 +308,15 @@ static void cron_process_due_jobs(void)
                 job->next_run = 0;
             }
         } else {
-            /* Recurring: compute next run */
-            job->next_run = now + job->interval_s;
+            /* Recurring: advance from scheduled time, not wall clock,
+             * to prevent drift when jobs fire late (e.g. after reboot).
+             * A briefing scheduled for 06:05 stays at 06:05 even if
+             * the device was down and fires the job at 08:30. */
+            int64_t next = job->next_run + job->interval_s;
+            while (next <= now) {
+                next += job->interval_s;
+            }
+            job->next_run = next;
         }
 
         changed = true;
