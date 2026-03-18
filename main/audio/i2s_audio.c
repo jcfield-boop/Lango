@@ -160,7 +160,7 @@ static esp_err_t i2s_configure(uint32_t sample_rate, i2s_data_bit_width_t bits)
         /* ── First-time initialisation ── */
         i2s_std_config_t std_cfg = {
             .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate),
-            .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(bits, I2S_SLOT_MODE_MONO),
+            .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(bits, I2S_SLOT_MODE_MONO),
             .gpio_cfg = {
                 .mclk = I2S_GPIO_UNUSED,
                 .bclk = LANG_I2S_BCLK,
@@ -182,7 +182,7 @@ static esp_err_t i2s_configure(uint32_t sample_rate, i2s_data_bit_width_t bits)
     } else {
         /* ── Reconfiguration (channel already initialised) ── */
         i2s_std_clk_config_t  clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
-        i2s_std_slot_config_t slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(bits, I2S_SLOT_MODE_MONO);
+        i2s_std_slot_config_t slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(bits, I2S_SLOT_MODE_MONO);
 
         ret = i2s_channel_reconfig_std_clock(s_tx_handle, &clk_cfg);
         if (ret != ESP_OK) {
@@ -245,11 +245,13 @@ esp_err_t i2s_audio_init(void)
     }
 
     /* RX channel: INMP441 microphone, 16kHz 16-bit mono.
+     * INMP441 uses I2S Philips standard (1-bit delay after WS edge).
+     * MSB format misaligns data by 1 bit → signal rails to ±32767.
      * BCLK/WS set to I2S_GPIO_UNUSED because they are already claimed by TX. */
     i2s_std_config_t rx_cfg = {
         .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(LANG_MIC_SAMPLE_RATE),
-        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,
-                                                     I2S_SLOT_MODE_MONO),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,
+                                                         I2S_SLOT_MODE_MONO),
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,
             .bclk = I2S_GPIO_UNUSED,   /* shared with TX */

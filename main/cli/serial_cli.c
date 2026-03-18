@@ -975,6 +975,106 @@ static int cmd_mic_test(int argc, char **argv)
     return 0;
 }
 
+/* mic_playback — record 2s from mic, then play back through speaker */
+static int cmd_mic_playback(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    const uint32_t sample_rate = LANG_MIC_SAMPLE_RATE;  /* 16000 */
+    const uint32_t duration_s  = 2;
+    const uint32_t total_bytes = sample_rate * 2 * duration_s;  /* 16-bit mono */
+
+    printf("Recording %lus from mic at %luHz...\n", (unsigned long)duration_s, (unsigned long)sample_rate);
+
+    /* Allocate recording buffer in PSRAM (64KB for 2s @ 16kHz 16-bit) */
+    uint8_t *rec_buf = ps_malloc(total_bytes);
+    if (!rec_buf) { printf("PSRAM alloc failed (%lu bytes)\n", (unsigned long)total_bytes); return 1; }
+
+    uint32_t rec_pos = 0;
+    int32_t peak_pos = 0, peak_neg = 0;
+    int64_t sum_sq = 0;
+
+    TickType_t start = xTaskGetTickCount();
+    while (rec_pos < total_bytes && (xTaskGetTickCount() - start) < pdMS_TO_TICKS(duration_s * 1000 + 500)) {
+        size_t bytes_read = 0;
+        uint32_t chunk = total_bytes - rec_pos;
+        if (chunk > 1024) chunk = 1024;
+        esp_err_t err = i2s_audio_read(rec_buf + rec_pos, chunk, &bytes_read, 200);
+        if (err != ESP_OK) {
+            printf("i2s_audio_read error: %s\n", esp_err_to_name(err));
+            free(rec_buf);
+            return 1;
+        }
+        /* Track signal levels */
+        int16_t *samples = (int16_t *)(rec_buf + rec_pos);
+        int n = bytes_read / 2;
+        for (int i = 0; i < n; i++) {
+            int16_t s = samples[i];
+            if (s > peak_pos) peak_pos = s;
+            if (s < peak_neg) peak_neg = s;
+            sum_sq += (int64_t)s * s;
+        }
+        rec_pos += bytes_read;
+    }
+
+    uint32_t total_samples = rec_pos / 2;
+    double rms = total_samples > 0 ? sqrt((double)sum_sq / total_samples) : 0;
+    printf("Recorded %lu bytes (%lu samples). Peak: +%ld/%ld  RMS: %.0f\n",
+           (unsigned long)rec_pos, (unsigned long)total_samples, (long)peak_pos, (long)peak_neg, rms);
+
+    if (rec_pos == 0) {
+        printf("Nothing recorded!\n");
+        free(rec_buf);
+        return 1;
+    }
+
+    /* Build a minimal WAV header and play back */
+    const uint32_t wav_hdr_size = 44;
+    uint32_t wav_total = wav_hdr_size + rec_pos;
+    uint8_t *wav = ps_malloc(wav_total);
+    if (!wav) {
+        printf("WAV alloc failed\n");
+        free(rec_buf);
+        return 1;
+    }
+
+    /* RIFF header */
+    memcpy(wav, "RIFF", 4);
+    uint32_t riff_size = wav_total - 8;
+    memcpy(wav + 4, &riff_size, 4);
+    memcpy(wav + 8, "WAVE", 4);
+    /* fmt chunk */
+    memcpy(wav + 12, "fmt ", 4);
+    uint32_t fmt_size = 16;
+    memcpy(wav + 16, &fmt_size, 4);
+    uint16_t audio_fmt = 1;  /* PCM */
+    memcpy(wav + 20, &audio_fmt, 2);
+    uint16_t channels = 1;
+    memcpy(wav + 22, &channels, 2);
+    memcpy(wav + 24, &sample_rate, 4);
+    uint32_t byte_rate = sample_rate * 2;
+    memcpy(wav + 28, &byte_rate, 4);
+    uint16_t block_align = 2;
+    memcpy(wav + 32, &block_align, 2);
+    uint16_t bits_per_sample = 16;
+    memcpy(wav + 34, &bits_per_sample, 2);
+    /* data chunk */
+    memcpy(wav + 36, "data", 4);
+    memcpy(wav + 40, &rec_pos, 4);
+    memcpy(wav + wav_hdr_size, rec_buf, rec_pos);
+    free(rec_buf);
+
+    printf("Playing back through speaker...\n");
+    esp_err_t ret = i2s_audio_play_wav(wav, wav_total);
+    free(wav);
+
+    if (ret != ESP_OK) {
+        printf("Playback failed: %s\n", esp_err_to_name(ret));
+        return 1;
+    }
+    printf("Playback complete.\n");
+    return 0;
+}
+
 /* ── Init ──────────────────────────────────────────────────────── */
 
 esp_err_t serial_cli_init(void)
@@ -1372,6 +1472,14 @@ esp_err_t serial_cli_init(void)
         .func    = &cmd_mic_test,
     };
     esp_console_cmd_register(&mic_test_cmd);
+
+    /* mic_playback */
+    esp_console_cmd_t mic_playback_cmd = {
+        .command = "mic_playback",
+        .help    = "Record 2s from mic, then play back through speaker",
+        .func    = &cmd_mic_playback,
+    };
+    esp_console_cmd_register(&mic_playback_cmd);
 
     ESP_ERROR_CHECK(esp_console_start_repl(repl));
     ESP_LOGI(TAG, "Serial CLI started");
