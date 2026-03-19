@@ -1,4 +1,5 @@
 #include "i2s_audio.h"
+#include "audio/wake_word.h"
 #include "langoustine_config.h"
 
 #include <string.h>
@@ -174,6 +175,13 @@ static esp_err_t i2s_configure(uint32_t sample_rate, i2s_data_bit_width_t bits)
                 },
             },
         };
+        /* INMP441 requires 64 BCLK per frame (32-bit slots).
+         * I2S_SLOT_BIT_WIDTH_AUTO defaults to data_bit_width (16),
+         * generating only 32 BCLK → INMP441 underclocked.
+         * Force 32-bit slots so BCLK = 2*32*Fs (1.024 MHz @ 16kHz).
+         * MAX98357A works fine with 32-bit slots (ignores padding). */
+        std_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
+        std_cfg.slot_cfg.ws_width      = 32;  /* WS high/low = 32 BCLK each */
         ret = i2s_channel_init_std_mode(s_tx_handle, &std_cfg);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "i2s_channel_init_std_mode failed: %s", esp_err_to_name(ret));
@@ -183,6 +191,8 @@ static esp_err_t i2s_configure(uint32_t sample_rate, i2s_data_bit_width_t bits)
         /* ── Reconfiguration (channel already initialised) ── */
         i2s_std_clk_config_t  clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
         i2s_std_slot_config_t slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(bits, I2S_SLOT_MODE_MONO);
+        slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
+        slot_cfg.ws_width       = 32;
 
         ret = i2s_channel_reconfig_std_clock(s_tx_handle, &clk_cfg);
         if (ret != ESP_OK) {
@@ -244,13 +254,15 @@ esp_err_t i2s_audio_init(void)
         return ret;
     }
 
-    /* RX channel: INMP441 microphone, 16kHz 16-bit mono.
+    /* RX channel: INMP441 microphone, 16kHz mono.
      * INMP441 uses I2S Philips standard (1-bit delay after WS edge).
-     * MSB format misaligns data by 1 bit → signal rails to ±32767.
+     * INMP441 always outputs 24-bit data left-justified in 32-bit slots.
+     * We MUST read 32-bit samples (data_bit_width=32) to get the full slot.
+     * i2s_audio_read() post-processes: right-shift 16 → int16_t for callers.
      * BCLK/WS set to I2S_GPIO_UNUSED because they are already claimed by TX. */
     i2s_std_config_t rx_cfg = {
         .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(LANG_MIC_SAMPLE_RATE),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT,
                                                          I2S_SLOT_MODE_MONO),
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,
@@ -265,6 +277,8 @@ esp_err_t i2s_audio_init(void)
             },
         },
     };
+    rx_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
+    rx_cfg.slot_cfg.ws_width       = 32;
     ret = i2s_channel_init_std_mode(s_rx_handle, &rx_cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "i2s_channel_init_std_mode (RX) failed: %s", esp_err_to_name(ret));
@@ -335,12 +349,28 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
             return ESP_ERR_INVALID_ARG;
     }
 
+    /* Suspend wake word feed task before reconfiguring I2S clock.
+     * The feed task calls i2s_channel_read() which races with
+     * i2s_channel_disable/enable during reconfiguration → permanent RX failure.
+     * Suspend BEFORE reconfig, resume AFTER playback + restore completes. */
+    bool ww_was_running = wake_word_is_running();
+    bool ww_suspended = false;
+    if (ww_was_running &&
+        (info.sample_rate != s_current_sample_rate ||
+         (uint32_t)bits   != s_current_bits)) {
+        wake_word_suspend();
+        ww_suspended = true;
+    }
+
     /* Reconfigure I2S only if sample rate or bit depth changed.
      * WiFi PS is disabled globally (WIFI_PS_NONE) so no per-playback transitions needed. */
     if (info.sample_rate != s_current_sample_rate ||
         (uint32_t)bits    != s_current_bits) {
         ret = i2s_configure(info.sample_rate, bits);
-        if (ret != ESP_OK) return ret;
+        if (ret != ESP_OK) {
+            if (ww_suspended) wake_word_resume();
+            return ret;
+        }
     }
 
 #if LANG_AMP_SD_GPIO >= 0
@@ -394,6 +424,29 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
     gpio_set_level(LANG_AMP_SD_GPIO, 0);
     ESP_LOGD(TAG, "Amp shutdown (GPIO%d low)", LANG_AMP_SD_GPIO);
 #endif
+
+    /* Restore I2S to 16kHz (mic native rate) after playback.
+     * TX and RX share I2S_NUM_0 (full-duplex), so any TX sample-rate change
+     * also changes RX BCLK.  The AFE/wake-word expects 16kHz; leaving the
+     * bus at e.g. 24kHz after TTS breaks wake-word detection. */
+    if (s_current_sample_rate != LANG_MIC_SAMPLE_RATE) {
+        ESP_LOGI(TAG, "Restoring I2S to %u Hz for mic", (unsigned)LANG_MIC_SAMPLE_RATE);
+        i2s_configure(LANG_MIC_SAMPLE_RATE, I2S_DATA_BIT_WIDTH_16BIT);
+    }
+
+    /* Explicitly restart RX channel after any clock change.
+     * The TX-focused reconfiguration in i2s_configure() disables/re-enables RX,
+     * but the RX DMA can get stuck if the BCLK changed during playback.
+     * A full disable→enable cycle resets the DMA pointers. */
+    if (ww_suspended) {
+        i2s_audio_rx_restart();
+        ESP_LOGI(TAG, "I2S RX restarted after playback");
+    }
+
+    /* Resume wake word feed task now that I2S is back to mic rate */
+    if (ww_suspended) {
+        wake_word_resume();
+    }
 
     ESP_LOGI(TAG, "Playback complete");
     return ESP_OK;
@@ -507,6 +560,16 @@ esp_err_t i2s_audio_test_tone(void)
     return ESP_OK;
 }
 
+esp_err_t i2s_audio_rx_restart(void)
+{
+    if (!s_rx_handle) return ESP_ERR_INVALID_STATE;
+    ESP_LOGI(TAG, "Restarting I2S RX channel");
+    i2s_channel_disable(s_rx_handle);
+    esp_err_t ret = i2s_channel_enable(s_rx_handle);
+    s_rx_enabled = (ret == ESP_OK);
+    return ret;
+}
+
 esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint32_t timeout_ms)
 {
     if (!s_rx_handle || !s_rx_enabled) {
@@ -515,6 +578,132 @@ esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint
     }
     if (!buf || buf_size == 0 || !bytes_read) return ESP_ERR_INVALID_ARG;
 
-    return i2s_channel_read(s_rx_handle, buf, buf_size, bytes_read,
-                            pdMS_TO_TICKS(timeout_ms));
+    /* RX is configured for 32-bit data (INMP441 outputs 24-bit left-justified
+     * in 32-bit slots).  Callers expect 16-bit PCM.
+     *
+     * ESP32-S3 DMA delivers interleaved L+R 32-bit samples even in "mono" mode
+     * when data_bit_width=32.  We extract every other sample (the real mic
+     * channel), then right-shift by 16.
+     *
+     * Caller asks for N bytes of 16-bit data = N/2 samples.
+     * Each output sample needs 2 raw 32-bit values (L+R pair) = 8 bytes.
+     * So raw_size = N/2 * 8 = N*4. */
+    size_t raw_size = buf_size * 4;
+
+    /* Heap-allocate the raw buffer (too large for task stacks) */
+    uint8_t *raw_buf = malloc(raw_size);  /* falls to PSRAM if >4KB */
+    if (!raw_buf) return ESP_ERR_NO_MEM;
+
+    size_t raw_read = 0;
+    esp_err_t ret = i2s_channel_read(s_rx_handle, raw_buf, raw_size,
+                                      &raw_read, pdMS_TO_TICKS(timeout_ms));
+    if (ret != ESP_OK) {
+        /* Log the first few errors and periodically to avoid spamming */
+        static int s_read_err_count = 0;
+        s_read_err_count++;
+        if (s_read_err_count <= 3 || (s_read_err_count % 50000 == 0)) {
+            ESP_LOGW(TAG, "i2s_channel_read error: %s (#%d, rx_en=%d)",
+                     esp_err_to_name(ret), s_read_err_count, s_rx_enabled);
+        }
+        free(raw_buf);
+        *bytes_read = 0;
+        return ret;
+    }
+
+    /* DMA delivers interleaved L+R 32-bit samples even in "mono" mode on
+     * ESP32-S3 when data_bit_width=32 and slot_bit_width=32.
+     * INMP441 with L/R=GND outputs real data in one channel; the other
+     * channel is tri-stated garbage (floating bus → 0, -256, -32768, etc).
+     *
+     * PROBLEM: DMA channel alignment can shift between reads on ESP32-S3.
+     * A one-time auto-detect is NOT reliable — the L/R order can change.
+     *
+     * SOLUTION: DC-tracking per-sample channel selection.
+     * The mic signal stays near a slowly-moving DC offset (~80 in silence).
+     * The garbage channel produces values far from the mic DC (0, ±256, ±32768).
+     * For each L+R pair, pick the value closer to the running DC estimate.
+     * Bootstrap: auto-detect on first read to seed the DC estimate. */
+    size_t n_raw = raw_read / 4;
+    int32_t *src = (int32_t *)raw_buf;
+    int16_t *dst = (int16_t *)buf;
+
+    /* One-time diagnostic: dump first 8 raw samples */
+    static bool s_dump_done = false;
+    if (!s_dump_done && n_raw >= 8) {
+        ESP_LOGI(TAG, "RX raw 32-bit [0..7]: 0x%08lx 0x%08lx 0x%08lx 0x%08lx "
+                 "0x%08lx 0x%08lx 0x%08lx 0x%08lx",
+                 (unsigned long)(uint32_t)src[0], (unsigned long)(uint32_t)src[1],
+                 (unsigned long)(uint32_t)src[2], (unsigned long)(uint32_t)src[3],
+                 (unsigned long)(uint32_t)src[4], (unsigned long)(uint32_t)src[5],
+                 (unsigned long)(uint32_t)src[6], (unsigned long)(uint32_t)src[7]);
+        s_dump_done = true;
+    }
+
+    /* DC-tracking state (persists across calls).
+     * s_dc_q16: Q16.16 fixed-point DC estimate of the mic signal.
+     * Initialised from the first read's auto-detected mic channel. */
+    static int32_t s_dc_q16 = 0;
+    static bool    s_dc_init = false;
+
+    if (!s_dc_init && n_raw >= 64) {
+        /* Bootstrap: auto-detect mic channel on first read to seed the DC.
+         * Use cross-zero + range heuristic (reliable for one read). */
+        int16_t min_e = INT16_MAX, max_e = INT16_MIN;
+        int16_t min_o = INT16_MAX, max_o = INT16_MIN;
+        int64_t sum_e = 0, sum_o = 0;
+        int pairs = (n_raw < 128) ? (int)(n_raw / 2) : 64;
+        for (int k = 0; k < pairs; k++) {
+            int16_t a = (int16_t)(src[k * 2]     >> 16);
+            int16_t b = (int16_t)(src[k * 2 + 1] >> 16);
+            if (a < min_e) min_e = a;
+            if (a > max_e) max_e = a;
+            if (b < min_o) min_o = b;
+            if (b > max_o) max_o = b;
+            sum_e += a;  sum_o += b;
+        }
+        bool xzero_e = (min_e < 0 && max_e > 0);
+        bool xzero_o = (min_o < 0 && max_o > 0);
+        int range_e  = (int)max_e - (int)min_e;
+        int range_o  = (int)max_o - (int)min_o;
+
+        int boot_ch;
+        if (xzero_e && !xzero_o)       boot_ch = 0;
+        else if (!xzero_e && xzero_o)   boot_ch = 1;
+        else                             boot_ch = (range_e <= range_o) ? 0 : 1;
+
+        int32_t dc_int = (int32_t)((boot_ch == 0 ? sum_e : sum_o) / pairs);
+        s_dc_q16 = dc_int << 16;
+        s_dc_init = true;
+
+        ESP_LOGW(TAG, "Mic DC-track boot: ch=%s dc=%d (xzero e=%d o=%d, "
+                 "range e=%d [%d..%d] o=%d [%d..%d], n=%d)",
+                 boot_ch ? "ODD" : "EVEN", (int)dc_int,
+                 xzero_e, xzero_o,
+                 range_e, (int)min_e, (int)max_e,
+                 range_o, (int)min_o, (int)max_o, pairs);
+    }
+
+    /* Per-sample DC-tracking channel selection.
+     * For each L+R pair, pick the value closer to the DC estimate.
+     * Update DC with IIR: alpha=1/1024 → time constant ~64ms @ 16kHz. */
+    size_t out_idx = 0;
+    for (size_t i = 0; i + 1 < n_raw; i += 2) {
+        int16_t a = (int16_t)(src[i]     >> 16);
+        int16_t b = (int16_t)(src[i + 1] >> 16);
+        int32_t dc16 = s_dc_q16 >> 16;         /* integer part of DC */
+        int32_t da = (int32_t)a - dc16;
+        int32_t db = (int32_t)b - dc16;
+        if (da < 0) da = -da;
+        if (db < 0) db = -db;
+        int16_t pick = (da <= db) ? a : b;
+
+        /* IIR DC update: dc += (pick - dc) >> 10  (alpha ≈ 1/1024) */
+        s_dc_q16 += (((int32_t)pick << 16) - s_dc_q16) >> 10;
+
+        dst[out_idx++] = pick;
+    }
+    *bytes_read = out_idx * 2;
+
+    free(raw_buf);
+    return ESP_OK;
 }

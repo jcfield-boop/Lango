@@ -11,6 +11,7 @@
 #include "audio/tts_client.h"
 #include "audio/uac_microphone.h"
 #include "audio/i2s_audio.h"
+#include "audio/wake_word.h"
 #include "config/services_config.h"
 #include "tools/tool_say.h"
 
@@ -1214,6 +1215,7 @@ static esp_err_t config_get_handler(httpd_req_t *req)
     cJSON_AddStringToObject(j, "tts_voice",    tts_voice);
     cJSON_AddStringToObject(j, "notify_topic", notify_topic);
     cJSON_AddBoolToObject(j, "verbose_logs", s_verbose_logs);
+    cJSON_AddBoolToObject(j, "wake_word", wake_word_is_running());
     cJSON_AddNumberToObject(j, "volume", (double)i2s_audio_get_volume());
 
     char *json_str = cJSON_PrintUnformatted(j);
@@ -1332,6 +1334,15 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         if (v < 0) v = 0;
         if (v > 255) v = 255;
         i2s_audio_set_volume((uint8_t)v);
+    }
+
+    cJSON *ww = cJSON_GetObjectItem(root, "wake_word");
+    if (ww != NULL && wake_word_is_running()) {
+        if (cJSON_IsTrue(ww)) {
+            wake_word_resume();
+        } else {
+            wake_word_suspend();
+        }
     }
 
     cJSON *verbose = cJSON_GetObjectItem(root, "verbose_logs");

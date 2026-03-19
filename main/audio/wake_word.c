@@ -22,7 +22,11 @@
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 #include <inttypes.h>
+#include <math.h>
 
 static const char *TAG = "wake_word";
 
@@ -48,6 +52,16 @@ static const char *TAG = "wake_word";
 /* Max recording duration (safety limit) */
 #define WW_MAX_RECORD_MS        8000
 
+/* Default tuning values (can be overridden via NVS) */
+#define WW_DEFAULT_GAIN       3.0f
+#define WW_DEFAULT_THRESHOLD  0.5f
+#define WW_AFE_GAIN           1.0f   /* AFE's own gain — keep at 1.0, we apply software gain */
+
+/* NVS namespace and keys for persistent wake word config */
+#define WW_NVS_NAMESPACE "ww_config"
+#define WW_NVS_KEY_GAIN  "gain"
+#define WW_NVS_KEY_THRESH "threshold"
+
 /* ── Module state ─────────────────────────────────────────────── */
 
 static const esp_afe_sr_iface_t *s_afe_iface = NULL;
@@ -57,6 +71,56 @@ static int                       s_feed_chunk = 0;   /* samples per feed() call 
 /* Shared between feed_task and detect_task (detect_task reads PTT too) */
 static TaskHandle_t s_feed_task_handle   = NULL;
 static TaskHandle_t s_detect_task_handle = NULL;
+
+/* Cooperative suspend: tasks check this flag and voluntarily pause.
+ * Using vTaskSuspend is unsafe because it can freeze a task mid-read
+ * while holding the I2S DMA semaphore → deadlock on i2s_channel_disable. */
+static volatile bool s_suspended = false;
+
+/* Runtime-adjustable parameters (atomic float via volatile + single-writer) */
+static volatile float s_sw_gain     = WW_DEFAULT_GAIN;      /* software pre-gain */
+static volatile float s_wn_threshold = WW_DEFAULT_THRESHOLD; /* WakeNet threshold */
+
+/* Test mode: when > 0, detect_task prints every speech/wakeup event.
+ * Decremented each second; auto-expires to 0. */
+static volatile int s_test_seconds = 0;
+
+/* Cumulative counters for snapshot-based testing */
+static volatile uint32_t s_total_feeds    = 0;
+static volatile uint32_t s_total_fetches  = 0;
+static volatile uint32_t s_total_speech   = 0;
+static volatile uint32_t s_total_wakeups  = 0;
+static volatile float    s_last_volume_db = -99.0f;
+static volatile int16_t  s_test_peak_pos  = 0;
+static volatile int16_t  s_test_peak_neg  = 0;
+
+/* ── NVS helpers ─────────────────────────────────────────────── */
+
+static void ww_nvs_save_float(const char *key, float val)
+{
+    nvs_handle_t h;
+    if (nvs_open(WW_NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
+        uint32_t bits;
+        memcpy(&bits, &val, sizeof(bits));
+        nvs_set_u32(h, key, bits);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+static float ww_nvs_load_float(const char *key, float def)
+{
+    nvs_handle_t h;
+    float result = def;
+    if (nvs_open(WW_NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
+        uint32_t bits;
+        if (nvs_get_u32(h, key, &bits) == ESP_OK) {
+            memcpy(&result, &bits, sizeof(result));
+        }
+        nvs_close(h);
+    }
+    return result;
+}
 
 /* ── Feed task (Core 0) ──────────────────────────────────────── */
 
@@ -74,37 +138,98 @@ static void feed_task(void *arg)
     uint32_t feed_count = 0;
     uint32_t fail_count = 0;
     int16_t  peak_val   = 0;
+    int16_t  min_val    = 0;
+    int32_t  sum_val    = 0;  /* for DC offset (average) calculation */
+    uint32_t sum_count  = 0;
+    bool     first_diag = true;  /* print raw samples on first diag */
     TickType_t last_diag = xTaskGetTickCount();
 
     while (1) {
+        /* Cooperative suspend: yield while paused (releases all locks) */
+        while (s_suspended) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+
         size_t got = 0;
         esp_err_t ret = i2s_audio_read((uint8_t *)buf,
                                        s_feed_chunk * sizeof(int16_t),
                                        &got, 200);
         if (ret == ESP_OK && got == (size_t)(s_feed_chunk * sizeof(int16_t))) {
+            /* Apply software pre-gain before feeding AFE.
+             * Fixed-point multiply: gain stored as Q16 for fast int math.
+             * Clamp to INT16 range to avoid overflow artifacts. */
+            float cur_gain = s_sw_gain;
+            if (cur_gain != 1.0f) {
+                int32_t gain_q16 = (int32_t)(cur_gain * 65536.0f);
+                for (int i = 0; i < s_feed_chunk; i++) {
+                    int32_t v = ((int32_t)buf[i] * gain_q16) >> 16;
+                    if (v > 32767) {
+                        v = 32767;
+                    }
+                    if (v < -32768) {
+                        v = -32768;
+                    }
+                    buf[i] = (int16_t)v;
+                }
+            }
+
             s_afe_iface->feed(s_afe_data, buf);
             feed_count++;
-            /* Track peak amplitude for mic level diagnostic */
+            s_total_feeds++;
+            /* Track peak, min, and sum for diagnostics (post-gain) */
             for (int i = 0; i < s_feed_chunk; i++) {
-                int16_t v = buf[i] < 0 ? -buf[i] : buf[i];
-                if (v > peak_val) peak_val = v;
+                int16_t v = buf[i];
+                if (v > peak_val) {
+                    peak_val = v;
+                }
+                if (v < min_val) {
+                    min_val = v;
+                }
+                /* Update test peaks (relaxed atomic — single writer) */
+                if (v > s_test_peak_pos) s_test_peak_pos = v;
+                if (v < s_test_peak_neg) s_test_peak_neg = v;
+                sum_val += v;
+                sum_count++;
             }
         } else {
             fail_count++;
         }
 
-        /* Periodic diagnostic every 10 s */
+        /* Periodic diagnostic every 10 s (verbose only) */
         TickType_t now = xTaskGetTickCount();
         if ((now - last_diag) > pdMS_TO_TICKS(10000)) {
-            ESP_LOGI(TAG, "Feed diag: %"PRIu32" feeds, %"PRIu32" fails, peak=%d",
-                     feed_count, fail_count, (int)peak_val);
-            char diag[80];
-            snprintf(diag, sizeof(diag), "feeds=%"PRIu32" fails=%"PRIu32" peak=%d",
-                     feed_count, fail_count, (int)peak_val);
-            ws_server_broadcast_monitor("ww_feed", diag);
+            int32_t dc_offset = sum_count ? (sum_val / (int32_t)sum_count) : 0;
+            ESP_LOGD(TAG, "Feed diag: %"PRIu32" feeds, %"PRIu32" fails, "
+                     "min=%d max=%d dc=%"PRId32" gain=%.1f",
+                     feed_count, fail_count,
+                     (int)min_val, (int)peak_val, dc_offset,
+                     (double)s_sw_gain);
+
+            /* First diagnostic: dump first 16 raw samples for waveform inspection */
+            if (first_diag && s_feed_chunk >= 16) {
+                ESP_LOGD(TAG, "Raw samples[0..15]: %d %d %d %d %d %d %d %d "
+                         "%d %d %d %d %d %d %d %d",
+                         buf[0], buf[1], buf[2], buf[3],
+                         buf[4], buf[5], buf[6], buf[7],
+                         buf[8], buf[9], buf[10], buf[11],
+                         buf[12], buf[13], buf[14], buf[15]);
+                first_diag = false;
+            }
+
+            char diag[140];
+            snprintf(diag, sizeof(diag),
+                     "feeds=%"PRIu32" fails=%"PRIu32" min=%d max=%d dc=%"PRId32
+                     " gain=%.1f",
+                     feed_count, fail_count,
+                     (int)min_val, (int)peak_val, dc_offset,
+                     (double)s_sw_gain);
+            ws_server_broadcast_monitor_verbose("ww_feed", diag);
             feed_count = 0;
             fail_count = 0;
             peak_val   = 0;
+            min_val    = 0;
+            sum_val    = 0;
+            sum_count  = 0;
             last_diag  = now;
         }
     }
@@ -127,6 +252,11 @@ static void detect_task(void *arg)
     TickType_t last_detect_diag = xTaskGetTickCount();
 
     while (1) {
+        /* Cooperative suspend: yield while paused */
+        while (s_suspended) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+
         /* ── Check PTT button ────────────────────────────────── */
         bool ptt = (gpio_get_level(LANG_PTT_GPIO) == 0);
 
@@ -162,22 +292,45 @@ static void detect_task(void *arg)
         if (!res) continue;
 
         detect_count++;
-        if (res->vad_state == VAD_SPEECH) speech_frames++;
+        s_total_fetches++;
+        if (res->vad_state == VAD_SPEECH) {
+            speech_frames++;
+            s_total_speech++;
+        }
+        s_last_volume_db = res->data_volume;
+        if (res->wakeup_state == WAKENET_DETECTED) {
+            s_total_wakeups++;
+        }
 
-        /* Periodic detect diagnostic every 10 s */
+        /* Test mode: print detailed per-event info */
+        if (s_test_seconds > 0) {
+            if (res->vad_state == VAD_SPEECH) {
+                ESP_LOGI(TAG, "[TEST] SPEECH vol=%.0fdB wakeup=%d",
+                         res->data_volume, (int)res->wakeup_state);
+            }
+            if (res->wakeup_state != WAKENET_NO_DETECT) {
+                ESP_LOGW(TAG, "[TEST] WAKEUP state=%d word_idx=%d model_idx=%d vol=%.0fdB",
+                         (int)res->wakeup_state, res->wake_word_index,
+                         res->wakenet_model_index, res->data_volume);
+            }
+        }
+
+        /* Periodic detect diagnostic every 10 s (verbose only) */
         {
             TickType_t now_d = xTaskGetTickCount();
             if ((now_d - last_detect_diag) > pdMS_TO_TICKS(10000)) {
-                ESP_LOGI(TAG, "Detect diag: %"PRIu32" fetches, %"PRIu32" speech frames, "
-                         "wakeup=%d, recording=%d",
+                ESP_LOGD(TAG, "Detect diag: %"PRIu32" fetches, %"PRIu32" speech frames, "
+                         "wakeup=%d, recording=%d, vol=%.0fdB",
                          detect_count, speech_frames,
-                         (int)res->wakeup_state, (int)recording);
-                char diag[120];
+                         (int)res->wakeup_state, (int)recording,
+                         res->data_volume);
+                char diag[140];
                 snprintf(diag, sizeof(diag),
-                         "fetches=%"PRIu32" speech=%"PRIu32" wakeup=%d rec=%d",
+                         "fetches=%"PRIu32" speech=%"PRIu32" wakeup=%d rec=%d vol=%.0fdB",
                          detect_count, speech_frames,
-                         (int)res->wakeup_state, (int)recording);
-                ws_server_broadcast_monitor("ww_detect", diag);
+                         (int)res->wakeup_state, (int)recording,
+                         res->data_volume);
+                ws_server_broadcast_monitor_verbose("ww_detect", diag);
                 detect_count     = 0;
                 speech_frames    = 0;
                 last_detect_diag = now_d;
@@ -266,6 +419,12 @@ static void detect_task(void *arg)
 
 esp_err_t wake_word_init(void)
 {
+    /* Load runtime-tunable params from NVS (or use defaults) */
+    s_sw_gain      = ww_nvs_load_float(WW_NVS_KEY_GAIN,  WW_DEFAULT_GAIN);
+    s_wn_threshold = ww_nvs_load_float(WW_NVS_KEY_THRESH, WW_DEFAULT_THRESHOLD);
+    ESP_LOGI(TAG, "WW config: sw_gain=%.2f threshold=%.3f (from NVS or default)",
+             (double)s_sw_gain, (double)s_wn_threshold);
+
     /* Load models from the "model" flash partition (must exist in partitions CSV) */
     srmodel_list_t *models = esp_srmodel_init("model");
     if (!models) {
@@ -283,6 +442,23 @@ esp_err_t wake_word_init(void)
         return ESP_FAIL;
     }
 
+    /* Keep AFE's own gain at 1.0 — we apply software gain in feed_task
+     * before calling afe->feed().  This way the gain can be adjusted at
+     * runtime without reinitializing the AFE. */
+    cfg->afe_linear_gain = WW_AFE_GAIN;
+    ESP_LOGI(TAG, "AFE linear gain=%.1f, software pre-gain=%.2f",
+             (double)cfg->afe_linear_gain, (double)s_sw_gain);
+
+    /* Diagnostic: dump AFE config to verify WakeNet is configured */
+    ESP_LOGI(TAG, "AFE config: wakenet_init=%d, wakenet_model='%s', "
+             "vad_init=%d, se_init=%d, ns_init=%d, agc_init=%d, "
+             "afe_type=%d, afe_mode=%d",
+             cfg->wakenet_init,
+             cfg->wakenet_model_name ? cfg->wakenet_model_name : "(null)",
+             cfg->vad_init, cfg->se_init, cfg->ns_init, cfg->agc_init,
+             cfg->afe_type, cfg->afe_mode);
+    afe_config_print(cfg);
+
     s_afe_iface = esp_afe_handle_from_config(cfg);
     if (!s_afe_iface) {
         ESP_LOGE(TAG, "esp_afe_handle_from_config failed");
@@ -295,10 +471,30 @@ esp_err_t wake_word_init(void)
         return ESP_FAIL;
     }
 
+    /* Apply WakeNet detection threshold from NVS (or default).
+     * Range 0.0 – 0.9999.  Lower = more sensitive.
+     * Index 1 = first wake word (API is 1-based: 1=wakenet1, 2=wakenet2). */
+    int thr_ret = s_afe_iface->set_wakenet_threshold(s_afe_data, 1, s_wn_threshold);
+    ESP_LOGI(TAG, "set_wakenet_threshold(1, %.3f) returned %d",
+             (double)s_wn_threshold, thr_ret);
+    ESP_LOGI(TAG, "WakeNet threshold set to %.3f", (double)s_wn_threshold);
+
     s_feed_chunk = s_afe_iface->get_feed_chunksize(s_afe_data);
     ESP_LOGI(TAG, "ESP-SR AFE init OK (feed_chunk=%d samples)", s_feed_chunk);
     return ESP_OK;
 }
+
+/* SRAM stack sizes — MUST be in internal SRAM (not PSRAM) because ESP-SR
+ * reads model data from flash, and PSRAM stacks trigger the SPI flash
+ * cache safety assertion.  Feed needs 8KB (DSP processing inside afe->feed).
+ * Detect needs 4KB. */
+#define WW_FEED_STACK    8192
+#define WW_DETECT_STACK  4096
+
+static StaticTask_t  s_feed_tcb;
+static StaticTask_t  s_detect_tcb;
+static StackType_t  *s_feed_stack  = NULL;
+static StackType_t  *s_detect_stack = NULL;
 
 esp_err_t wake_word_start(void)
 {
@@ -307,23 +503,130 @@ esp_err_t wake_word_start(void)
         if (ret != ESP_OK) return ret;
     }
 
-    BaseType_t r1 = xTaskCreatePinnedToCore(
+    /* Allocate task stacks in SRAM (MALLOC_CAP_INTERNAL) — critical for flash access */
+    if (!s_feed_stack) {
+        s_feed_stack = heap_caps_malloc(WW_FEED_STACK, MALLOC_CAP_INTERNAL);
+    }
+    if (!s_detect_stack) {
+        s_detect_stack = heap_caps_malloc(WW_DETECT_STACK, MALLOC_CAP_INTERNAL);
+    }
+    if (!s_feed_stack || !s_detect_stack) {
+        ESP_LOGE(TAG, "Failed to alloc SRAM stacks for wake word tasks "
+                 "(need %d+%d bytes, free SRAM=%"PRIu32")",
+                 WW_FEED_STACK, WW_DETECT_STACK,
+                 (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_feed_task_handle = xTaskCreateStaticPinnedToCore(
         feed_task, "ww_feed",
-        4096, NULL, 6,       /* slightly higher than detect to ensure continuous feeding */
-        &s_feed_task_handle, 0);
+        WW_FEED_STACK, NULL, 6,
+        s_feed_stack, &s_feed_tcb, 0);
 
-    BaseType_t r2 = xTaskCreatePinnedToCore(
+    s_detect_task_handle = xTaskCreateStaticPinnedToCore(
         detect_task, "ww_detect",
-        4096, NULL, 5,
-        &s_detect_task_handle, 0);
+        WW_DETECT_STACK, NULL, 5,
+        s_detect_stack, &s_detect_tcb, 0);
 
-    if (r1 != pdPASS || r2 != pdPASS) {
+    if (!s_feed_task_handle || !s_detect_task_handle) {
         ESP_LOGE(TAG, "Failed to create wake word tasks");
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Wake word tasks started ('Hi ESP' ready)");
+    ESP_LOGI(TAG, "Wake word tasks started ('Hi ESP' ready) — SRAM stacks: feed=%d detect=%d",
+             WW_FEED_STACK, WW_DETECT_STACK);
     return ESP_OK;
+}
+
+void wake_word_suspend(void)
+{
+    /* Cooperative stop: set flag and wait for both tasks to park themselves.
+     * This avoids the vTaskSuspend deadlock (task holds I2S DMA semaphore). */
+    s_suspended = true;
+    /* Wait up to 500ms for the feed task to finish its current I2S read
+     * and park in the yield loop.  Each iteration is ~32ms (one feed chunk). */
+    vTaskDelay(pdMS_TO_TICKS(250));
+    ESP_LOGI(TAG, "Wake word suspended");
+}
+
+void wake_word_resume(void)
+{
+    s_suspended = false;
+    ESP_LOGI(TAG, "Wake word resumed");
+}
+
+bool wake_word_is_running(void)
+{
+    return s_feed_task_handle != NULL;
+}
+
+void wake_word_set_gain(float gain)
+{
+    if (gain < 0.1f) gain = 0.1f;
+    if (gain > 50.0f) gain = 50.0f;
+    s_sw_gain = gain;
+    ww_nvs_save_float(WW_NVS_KEY_GAIN, gain);
+    ESP_LOGI(TAG, "Software pre-gain set to %.2f (saved to NVS)", (double)gain);
+}
+
+float wake_word_get_gain(void)
+{
+    return s_sw_gain;
+}
+
+void wake_word_set_threshold(float threshold)
+{
+    if (threshold < 0.0f) threshold = 0.0f;
+    if (threshold > 0.9999f) threshold = 0.9999f;
+    s_wn_threshold = threshold;
+    ww_nvs_save_float(WW_NVS_KEY_THRESH, threshold);
+    /* Apply immediately to the running AFE if available.
+     * Index 1 = first wake word (API is 1-based). */
+    if (s_afe_iface && s_afe_data) {
+        s_afe_iface->set_wakenet_threshold(s_afe_data, 1, threshold);
+        ESP_LOGI(TAG, "WakeNet threshold set to %.3f (live + NVS)", (double)threshold);
+    } else {
+        ESP_LOGI(TAG, "WakeNet threshold set to %.3f (saved to NVS, apply on next init)",
+                 (double)threshold);
+    }
+}
+
+float wake_word_get_threshold(void)
+{
+    return s_wn_threshold;
+}
+
+void wake_word_test_start(int seconds)
+{
+    /* Reset test counters */
+    s_total_feeds   = 0;
+    s_total_fetches = 0;
+    s_total_speech  = 0;
+    s_total_wakeups = 0;
+    s_test_peak_pos = 0;
+    s_test_peak_neg = 0;
+    s_last_volume_db = -99.0f;
+    s_test_seconds = (seconds > 0) ? seconds : 15;
+    ESP_LOGI(TAG, "Test mode ON for %d seconds — say 'Hi ESP'", s_test_seconds);
+}
+
+void wake_word_test_stop(void)
+{
+    s_test_seconds = 0;
+}
+
+void wake_word_test_snapshot(wake_word_test_result_t *out)
+{
+    if (!out) return;
+    out->feeds      = s_total_feeds;
+    out->fetches    = s_total_fetches;
+    out->speech     = s_total_speech;
+    out->wakeups    = s_total_wakeups;
+    out->volume_db  = s_last_volume_db;
+    out->peak_pos   = s_test_peak_pos;
+    out->peak_neg   = s_test_peak_neg;
+    out->gain       = s_sw_gain;
+    out->threshold  = s_wn_threshold;
 }
 
 /* ── Stub implementations when esp-sr is not available ────────── */
@@ -340,5 +643,16 @@ esp_err_t wake_word_start(void)
 {
     return ESP_ERR_NOT_SUPPORTED;
 }
+
+void wake_word_suspend(void) {}
+void wake_word_resume(void) {}
+bool wake_word_is_running(void) { return false; }
+void wake_word_set_gain(float gain) { (void)gain; }
+float wake_word_get_gain(void) { return 1.0f; }
+void wake_word_set_threshold(float threshold) { (void)threshold; }
+float wake_word_get_threshold(void) { return 0.5f; }
+void wake_word_test_start(int seconds) { (void)seconds; }
+void wake_word_test_stop(void) {}
+void wake_word_test_snapshot(wake_word_test_result_t *out) { if (out) memset(out, 0, sizeof(*out)); }
 
 #endif /* __has_include("esp_afe_sr_iface.h") */

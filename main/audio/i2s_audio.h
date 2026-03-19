@@ -77,6 +77,16 @@ void i2s_audio_set_volume(uint8_t vol);
 uint8_t i2s_audio_get_volume(void);
 
 /**
+ * @brief Restart the I2S RX channel (disable + enable).
+ *
+ * Call after suspending the wake word feed task to clear any pending
+ * i2s_channel_read that was holding the DMA semaphore.
+ *
+ * @return ESP_OK on success.
+ */
+esp_err_t i2s_audio_rx_restart(void);
+
+/**
  * @brief Play a test tone (440 Hz sine wave, ~2 seconds) through the speaker.
  *
  * Generates PCM samples in-memory — no TTS API call needed.
