@@ -419,6 +419,10 @@ static void process_updates(const char *json_str)
         }
     }
 
+    /* Force-save offset after processing all updates in this cycle,
+     * so no messages are replayed if the device reboots shortly after. */
+    save_update_offset_if_needed(true);
+
     cJSON_Delete(root);
 }
 
