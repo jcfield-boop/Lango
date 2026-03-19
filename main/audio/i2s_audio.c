@@ -236,8 +236,13 @@ esp_err_t i2s_audio_init(void)
     }
 
     /* Create full-duplex TX+RX channel pair on I2S_NUM_0.
-     * Both channels share BCLK and LRCLK (MAX98357A + INMP441 use the same lines). */
+     * Both channels share BCLK and LRCLK (MAX98357A + INMP441 use the same lines).
+     * Override DMA defaults for gapless playback: larger buffers survive
+     * WiFi TX bursts that preempt the playback task on Core 0. */
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    chan_cfg.dma_desc_num       = LANG_I2S_DMA_DESC_NUM;
+    chan_cfg.dma_frame_num      = LANG_I2S_DMA_FRAME_NUM;
+    chan_cfg.auto_clear_after_cb = true;  /* send silence on DMA underrun (not stale data) */
     esp_err_t ret = i2s_new_channel(&chan_cfg, &s_tx_handle, &s_rx_handle);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "i2s_new_channel failed: %s", esp_err_to_name(ret));
@@ -305,8 +310,10 @@ esp_err_t i2s_audio_init(void)
         }
     }
 
-    ESP_LOGI(TAG, "I2S audio init OK (BCLK=%d LRCLK=%d DOUT=%d DIN=%d vol=%u/255)",
-             LANG_I2S_BCLK, LANG_I2S_LRCLK, LANG_I2S_DOUT, LANG_I2S_DIN, s_volume);
+    ESP_LOGI(TAG, "I2S audio init OK (BCLK=%d LRCLK=%d DOUT=%d DIN=%d vol=%u/255 "
+             "dma=%dx%d auto_clear=1)",
+             LANG_I2S_BCLK, LANG_I2S_LRCLK, LANG_I2S_DOUT, LANG_I2S_DIN, s_volume,
+             LANG_I2S_DMA_DESC_NUM, LANG_I2S_DMA_FRAME_NUM);
 
 #if LANG_AMP_SD_GPIO >= 0
     /* Configure amp shutdown pin — output, start low (amp off) */
@@ -315,6 +322,13 @@ esp_err_t i2s_audio_init(void)
     gpio_set_level(LANG_AMP_SD_GPIO, 0);
     ESP_LOGI(TAG, "Amp SD pin GPIO%d configured (amp off)", LANG_AMP_SD_GPIO);
 #endif
+
+    /* Increase drive strength on I2S clock/data GPIOs for cleaner edges.
+     * At higher BCLK rates (e.g. 48kHz × 64 = 3.072 MHz), stronger drive
+     * reduces ringing and improves signal integrity on breadboard wires. */
+    gpio_set_drive_capability(LANG_I2S_BCLK,  GPIO_DRIVE_CAP_3);
+    gpio_set_drive_capability(LANG_I2S_LRCLK, GPIO_DRIVE_CAP_3);
+    gpio_set_drive_capability(LANG_I2S_DOUT,  GPIO_DRIVE_CAP_3);
 
     return ESP_OK;
 }
@@ -381,16 +395,23 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
     vTaskDelay(pdMS_TO_TICKS(20));
 #endif
 
-    /* Stream PCM data in 4KB chunks with software volume scaling.
-     * LANG_AUDIO_VOLUME (0–256, 128 = 50% = -6 dB) reduces peak amp current
-     * to prevent brownouts on USB/limited PSU rails. */
+    /* Stream PCM data in 4KB chunks with volume scaling + fade-in/fade-out.
+     * Volume: 0–255, where 255 = 100%, 128 = 50% (−6 dB), default 64 (−12 dB).
+     * Fade: linear ramp over LANG_I2S_FADE_MS at start/end to eliminate pop/click. */
     const uint8_t *pcm    = wav_data + info.pcm_offset;
     size_t         remain = info.pcm_len;
     size_t         written;
     int16_t        vol_buf[2048];   /* 4096 bytes = 2048 samples, stack is fine */
 
-    uint8_t vol = s_volume;
-    ESP_LOGI(TAG, "Playing WAV: %u bytes PCM (vol=%u/255)", (unsigned)remain, vol);
+    uint8_t  vol = s_volume;
+    uint32_t total_samples  = (uint32_t)(info.pcm_len / 2);  /* 16-bit samples */
+    uint32_t fade_samples   = (info.sample_rate * LANG_I2S_FADE_MS) / 1000;
+    if (fade_samples > total_samples / 2) fade_samples = total_samples / 2;
+    uint32_t fade_out_start = total_samples - fade_samples;
+    uint32_t sample_offset  = 0;
+
+    ESP_LOGI(TAG, "Playing WAV: %u bytes PCM (vol=%u/255, fade=%u samples)",
+             (unsigned)remain, vol, (unsigned)fade_samples);
 
     while (remain > 0) {
         if (s_play_cancel) {
@@ -398,17 +419,34 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
             break;
         }
         size_t chunk = remain < 4096 ? remain : 4096;
-        if (vol < 255) {
-            /* Scale 16-bit samples; safe for both mono and stereo */
-            size_t samples = chunk / 2;
-            const int16_t *src = (const int16_t *)pcm;
-            for (size_t i = 0; i < samples; i++) {
-                vol_buf[i] = (int16_t)(((int32_t)src[i] * vol) >> 8);
+        size_t chunk_samples = chunk / 2;
+        const int16_t *src = (const int16_t *)pcm;
+
+        /* Combined volume + fade processing into vol_buf */
+        for (size_t i = 0; i < chunk_samples; i++) {
+            int32_t s = (int32_t)src[i];
+
+            /* Volume scaling */
+            if (vol < 255) {
+                s = (s * vol) >> 8;
             }
-            ret = i2s_channel_write(s_tx_handle, vol_buf, chunk, &written, pdMS_TO_TICKS(1000));
-        } else {
-            ret = i2s_channel_write(s_tx_handle, pcm, chunk, &written, pdMS_TO_TICKS(1000));
+
+            /* Fade-in: linear ramp 0→1 over fade_samples */
+            uint32_t abs_idx = sample_offset + (uint32_t)i;
+            if (abs_idx < fade_samples) {
+                s = (s * (int32_t)abs_idx) / (int32_t)fade_samples;
+            }
+            /* Fade-out: linear ramp 1→0 over fade_samples */
+            else if (abs_idx >= fade_out_start) {
+                uint32_t pos = abs_idx - fade_out_start;
+                s = (s * (int32_t)(fade_samples - pos)) / (int32_t)fade_samples;
+            }
+
+            vol_buf[i] = (int16_t)s;
         }
+        sample_offset += (uint32_t)chunk_samples;
+
+        ret = i2s_channel_write(s_tx_handle, vol_buf, chunk, &written, pdMS_TO_TICKS(1000));
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "i2s_channel_write error: %s", esp_err_to_name(ret));
             break;
@@ -418,9 +456,12 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
     }
 
 #if LANG_AMP_SD_GPIO >= 0
-    /* Drain: flush the I2S DMA FIFO so the last samples reach the DAC,
-     * then disable amp. Small delay avoids a click/pop from abrupt shutdown. */
-    vTaskDelay(pdMS_TO_TICKS(30));
+    /* Drain: wait for DMA pipeline to empty before disabling amp.
+     * One DMA buffer duration + margin ensures last samples reach the speaker. */
+    {
+        uint32_t one_buf_ms = (LANG_I2S_DMA_FRAME_NUM * 1000) / info.sample_rate;
+        vTaskDelay(pdMS_TO_TICKS(one_buf_ms + 20));
+    }
     gpio_set_level(LANG_AMP_SD_GPIO, 0);
     ESP_LOGD(TAG, "Amp shutdown (GPIO%d low)", LANG_AMP_SD_GPIO);
 #endif
@@ -530,7 +571,12 @@ esp_err_t i2s_audio_test_tone(void)
 #endif
 
     uint8_t vol = s_volume;
-    ESP_LOGI(TAG, "Test tone: 440 Hz, %g s, %u Hz, vol=%u/255", duration, sample_rate, vol);
+    uint32_t fade_samples = (sample_rate * LANG_I2S_FADE_MS) / 1000;
+    if (fade_samples > total_samples / 2) fade_samples = total_samples / 2;
+    uint32_t fade_out_start = total_samples - fade_samples;
+
+    ESP_LOGI(TAG, "Test tone: 440 Hz, %g s, %u Hz, vol=%u/255, fade=%u",
+             duration, sample_rate, vol, (unsigned)fade_samples);
 
     int16_t buf[512];
     uint32_t sample = 0;
@@ -539,8 +585,18 @@ esp_err_t i2s_audio_test_tone(void)
         if (chunk > 512) chunk = 512;
         for (uint32_t i = 0; i < chunk; i++) {
             float t = (float)(sample + i) / (float)sample_rate;
-            int16_t s = (int16_t)(sinf(2.0f * M_PI * freq * t) * 16000.0f);
-            buf[i] = (int16_t)(((int32_t)s * vol) >> 8);
+            int32_t s = (int32_t)(sinf(2.0f * M_PI * freq * t) * 16000.0f);
+            /* Volume */
+            if (vol < 255) s = (s * vol) >> 8;
+            /* Fade-in/fade-out envelope */
+            uint32_t abs_idx = sample + i;
+            if (abs_idx < fade_samples) {
+                s = (s * (int32_t)abs_idx) / (int32_t)fade_samples;
+            } else if (abs_idx >= fade_out_start) {
+                uint32_t pos = abs_idx - fade_out_start;
+                s = (s * (int32_t)(fade_samples - pos)) / (int32_t)fade_samples;
+            }
+            buf[i] = (int16_t)s;
         }
         size_t written;
         esp_err_t ret = i2s_channel_write(s_tx_handle, buf, chunk * 2, &written, pdMS_TO_TICKS(1000));
@@ -552,7 +608,10 @@ esp_err_t i2s_audio_test_tone(void)
     }
 
 #if LANG_AMP_SD_GPIO >= 0
-    vTaskDelay(pdMS_TO_TICKS(30));
+    {
+        uint32_t one_buf_ms = (LANG_I2S_DMA_FRAME_NUM * 1000) / sample_rate;
+        vTaskDelay(pdMS_TO_TICKS(one_buf_ms + 20));
+    }
     gpio_set_level(LANG_AMP_SD_GPIO, 0);
 #endif
 

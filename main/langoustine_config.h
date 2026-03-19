@@ -116,6 +116,17 @@
 #define LANG_AMP_SD_GPIO  42   /* MAX98357A shutdown: HIGH=on, LOW=off */
 #endif
 
+/* I2S DMA buffer tuning for gapless speaker playback.
+ * Each DMA buffer holds dma_frame_num frames of (data_bit_width/8 * slots) bytes.
+ * At 24kHz mono 16-bit: 480 frames × 2 bytes = 960 B/buf, 8 bufs = 7.7KB TX.
+ * Provides ~160ms buffering at 24kHz — survives WiFi TX bursts (10-50ms). */
+#define LANG_I2S_DMA_DESC_NUM    8    /* number of DMA descriptors (was 6 default) */
+#define LANG_I2S_DMA_FRAME_NUM   480  /* frames per DMA buffer (was 240 default) */
+
+/* Software fade duration (ms) applied at start/end of WAV playback.
+ * Eliminates pop/click from abrupt amp enable/disable transitions. */
+#define LANG_I2S_FADE_MS         15
+
 /* PTT button — BOOT button, active low, internal pull-up */
 #define LANG_PTT_GPIO              0
 

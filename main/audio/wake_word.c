@@ -446,8 +446,20 @@ esp_err_t wake_word_init(void)
      * before calling afe->feed().  This way the gain can be adjusted at
      * runtime without reinitializing the AFE. */
     cfg->afe_linear_gain = WW_AFE_GAIN;
-    ESP_LOGI(TAG, "AFE linear gain=%.1f, software pre-gain=%.2f",
-             (double)cfg->afe_linear_gain, (double)s_sw_gain);
+
+    /* Enable AGC on the AFE output (post-WakeNet).
+     * This normalizes the audio returned by fetch() for better STT quality.
+     * Note: AGC does NOT affect what WakeNet sees — detection still depends
+     * on the software pre-gain applied in feed_task before afe->feed(). */
+    cfg->agc_init = true;
+    cfg->agc_mode = AFE_AGC_MODE_WEBRTC;
+    cfg->agc_compression_gain_db = 18;  /* aggressive: default was 9 */
+    cfg->agc_target_level_dbfs   = 3;   /* target -3 dBFS peak output */
+
+    ESP_LOGI(TAG, "AFE linear gain=%.1f, software pre-gain=%.2f, AGC=%s (comp=%ddB target=-%ddBFS)",
+             (double)cfg->afe_linear_gain, (double)s_sw_gain,
+             cfg->agc_init ? "on" : "off",
+             cfg->agc_compression_gain_db, cfg->agc_target_level_dbfs);
 
     /* Diagnostic: dump AFE config to verify WakeNet is configured */
     ESP_LOGI(TAG, "AFE config: wakenet_init=%d, wakenet_model='%s', "
