@@ -66,7 +66,7 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 4. STT task POSTs to Groq Whisper API → pushes transcript as inbound message
 5. Agent processes transcript → generates response → calls `tts_generate()`
 6. TTS client POSTs to Groq PlayAI API → WAV cached in PSRAM (up to 4 entries, 512KB each, 5-min TTL)
-7. If `LANG_I2S_AUDIO_ENABLED`: WAV is played immediately via MAX98357A on GPIO 15/16/17
+7. If `LANG_I2S_AUDIO_ENABLED`: WAV is played immediately via MAX98357A on GPIO 3/4/6
 8. `{"type":"message","tts_id":"<8hex>"}` sent to browser → browser fetches `GET /tts/<id>`
 
 ## Configuration & Secrets
@@ -124,13 +124,15 @@ Available GPIOs: 0–21, 38–48. GPIO 22–37 used internally for Flash/PSRAM.
 
 | GPIO | Function | Connected to |
 |------|----------|-------------|
-| 15 | I2S_BCLK | MAX98357A BCLK + INMP441 SCK |
-| 16 | I2S_LRCLK | MAX98357A LRC + INMP441 WS |
-| 17 | I2S_DOUT | MAX98357A DIN (speaker) |
-| 18 | I2S_DIN | INMP441 SD (microphone) |
+| 3 | I2S_BCLK (TX) | MAX98357A BCLK (speaker) |
+| 4 | I2S_LRCLK (TX) | MAX98357A LRC (speaker) |
+| 6 | I2S_DOUT (TX) | MAX98357A DIN (speaker) |
+| 7 | I2S_RX_BCLK | INMP441 SCK (mic, separate I2S port) |
+| 8 | I2S_RX_LRCLK | INMP441 WS (mic, separate I2S port) |
+| 5 | I2S_DIN (RX) | INMP441 SD (microphone) |
 | 9 | I2C_SDA | Camera SCCB + PCA9685 |
 | 10 | I2C_SCL | Camera SCCB + PCA9685 |
-| 1–8, 21 | Cam D0–D7 | OV2640 parallel data (future) |
+| 1–2, 11–18, 21 | Cam D0–D7 | OV2640 parallel data (future) |
 | 38–41 | Cam XCLK/PCLK/VSYNC/HREF | OV2640 timing (future) |
 | 42 | AMP_SD | MAX98357A SD (amp shutdown/enable) |
 | 43 | UART0 TX | Serial CLI |
@@ -144,9 +146,9 @@ Constants in `main/langoustine_config.h` under `LANG_I2S_*` and `LANG_I2C_*`.
 ```
 VIN   → 5V  (USB rail — keeps amp current off the 3.3V/ESP32 rail entirely)
 GND   → GND
-DIN   → GPIO17
-BCLK  → GPIO15
-LRC   → GPIO16
+DIN   → GPIO6
+BCLK  → GPIO3
+LRC   → GPIO4
 SD    → GPIO42  (firmware-controlled: high=enabled, low=shutdown; eliminates idle hiss)
 GAIN  → GND  (3 dB gain; floating = 12 dB default)
 ```
@@ -162,9 +164,9 @@ Black wire→ − terminal
 ```
 VDD  → 3.3V  (max 3.6V — never 5V)
 GND  → GND
-SD   → GPIO18
-SCK  → GPIO15  (shared with MAX98357A BCLK)
-WS   → GPIO16  (shared with MAX98357A LRC)
+SD   → GPIO5
+SCK  → GPIO7   (dedicated RX I2S port — NOT shared with speaker)
+WS   → GPIO8   (dedicated RX I2S port — NOT shared with speaker)
 L/R  → GND  (left channel)
 ```
 
