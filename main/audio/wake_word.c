@@ -128,20 +128,36 @@ static void feed_task(void *arg)
 {
     ESP_LOGI(TAG, "AFE feed task started (chunk=%d samples)", s_feed_chunk);
 
-    int16_t *buf = (int16_t *)ps_malloc(s_feed_chunk * sizeof(int16_t));
+    /* i2s_audio_read() receives 32-bit DMA words and extracts 16-bit samples
+     * in-place.  To get N 16-bit samples we must pass N×4 bytes (32-bit DMA).
+     *
+     * The slave RX DMA only fills the ring buffer once per enable cycle
+     * (8 descriptors × 480 frames × 4B = 15360 bytes, taking ~240ms at 16kHz).
+     * Reading the full ring per cycle amortises the 30ms DMA restart delay
+     * over ~7 AFE feeds instead of one.
+     *
+     * Buffer layout: [--- 32-bit DMA data (read_buf_sz bytes) ---]
+     * After extraction: [--- 16-bit samples (read_buf_sz/2 bytes) ---] */
+    const size_t read_buf_sz = LANG_I2S_DMA_DESC_NUM * LANG_I2S_DMA_FRAME_NUM * 4;
+    int16_t *buf = (int16_t *)ps_malloc(read_buf_sz);
     if (!buf) {
-        ESP_LOGE(TAG, "feed buf alloc failed");
+        ESP_LOGE(TAG, "feed buf alloc failed (%u bytes)", (unsigned)read_buf_sz);
         vTaskDelete(NULL);
         return;
     }
+
+    ESP_LOGI(TAG, "Feed buffer: %u bytes (holds %u 16-bit samples after extraction, "
+             "%d AFE feeds per DMA cycle)",
+             (unsigned)read_buf_sz, (unsigned)(read_buf_sz / 4),
+             (int)(read_buf_sz / 4 / s_feed_chunk));
 
     uint32_t feed_count = 0;
     uint32_t fail_count = 0;
     int16_t  peak_val   = 0;
     int16_t  min_val    = 0;
-    int32_t  sum_val    = 0;  /* for DC offset (average) calculation */
+    int32_t  sum_val    = 0;
     uint32_t sum_count  = 0;
-    bool     first_diag = true;  /* print raw samples on first diag */
+    bool     first_diag = true;
     TickType_t last_diag = xTaskGetTickCount();
 
     while (1) {
@@ -150,49 +166,54 @@ static void feed_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(50));
         }
 
+        /* Read a large chunk of 32-bit DMA data.  i2s_audio_read() does
+         * disable+enable+30ms delay once, then reads up to read_buf_sz
+         * bytes with 500ms timeout (enough for all 8 DMA descriptors to
+         * fill at 16kHz).  Returns 16-bit extracted samples in buf. */
         size_t got = 0;
-        esp_err_t ret = i2s_audio_read((uint8_t *)buf,
-                                       s_feed_chunk * sizeof(int16_t),
-                                       &got, 200);
-        if (ret == ESP_OK && got == (size_t)(s_feed_chunk * sizeof(int16_t))) {
-            /* Apply software pre-gain before feeding AFE.
-             * Fixed-point multiply: gain stored as Q16 for fast int math.
-             * Clamp to INT16 range to avoid overflow artifacts. */
+        esp_err_t ret = i2s_audio_read((uint8_t *)buf, read_buf_sz,
+                                       &got, 500);
+        if (ret != ESP_OK || got == 0) {
+            fail_count++;
+            continue;
+        }
+
+        /* got = bytes of 16-bit samples after extraction.
+         * Feed AFE in s_feed_chunk-sized pieces. */
+        size_t total_samples = got / sizeof(int16_t);
+        size_t offset = 0;
+
+        while (offset + (size_t)s_feed_chunk <= total_samples) {
+            int16_t *chunk = buf + offset;
+
+            /* Apply software pre-gain (fixed-point Q16) */
             float cur_gain = s_sw_gain;
             if (cur_gain != 1.0f) {
                 int32_t gain_q16 = (int32_t)(cur_gain * 65536.0f);
                 for (int i = 0; i < s_feed_chunk; i++) {
-                    int32_t v = ((int32_t)buf[i] * gain_q16) >> 16;
-                    if (v > 32767) {
-                        v = 32767;
-                    }
-                    if (v < -32768) {
-                        v = -32768;
-                    }
-                    buf[i] = (int16_t)v;
+                    int32_t v = ((int32_t)chunk[i] * gain_q16) >> 16;
+                    if (v > 32767)  v = 32767;
+                    if (v < -32768) v = -32768;
+                    chunk[i] = (int16_t)v;
                 }
             }
 
-            s_afe_iface->feed(s_afe_data, buf);
+            s_afe_iface->feed(s_afe_data, chunk);
             feed_count++;
             s_total_feeds++;
-            /* Track peak, min, and sum for diagnostics (post-gain) */
+
+            /* Track peak, min, sum for diagnostics */
             for (int i = 0; i < s_feed_chunk; i++) {
-                int16_t v = buf[i];
-                if (v > peak_val) {
-                    peak_val = v;
-                }
-                if (v < min_val) {
-                    min_val = v;
-                }
-                /* Update test peaks (relaxed atomic — single writer) */
+                int16_t v = chunk[i];
+                if (v > peak_val) peak_val = v;
+                if (v < min_val)  min_val  = v;
                 if (v > s_test_peak_pos) s_test_peak_pos = v;
                 if (v < s_test_peak_neg) s_test_peak_neg = v;
                 sum_val += v;
                 sum_count++;
             }
-        } else {
-            fail_count++;
+
+            offset += s_feed_chunk;
         }
 
         /* Periodic diagnostic every 10 s (verbose only) */
@@ -205,8 +226,7 @@ static void feed_task(void *arg)
                      (int)min_val, (int)peak_val, dc_offset,
                      (double)s_sw_gain);
 
-            /* First diagnostic: dump first 16 raw samples for waveform inspection */
-            if (first_diag && s_feed_chunk >= 16) {
+            if (first_diag && total_samples >= 16) {
                 ESP_LOGD(TAG, "Raw samples[0..15]: %d %d %d %d %d %d %d %d "
                          "%d %d %d %d %d %d %d %d",
                          buf[0], buf[1], buf[2], buf[3],
