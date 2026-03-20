@@ -168,13 +168,15 @@ static void feed_task(void *arg)
 
         /* Read a large chunk of 32-bit DMA data.  i2s_audio_read() does
          * disable+enable+30ms delay once, then reads up to read_buf_sz
-         * bytes with 500ms timeout (enough for all 8 DMA descriptors to
-         * fill at 16kHz).  Returns 16-bit extracted samples in buf. */
+         * bytes with 300ms timeout.  Returns 16-bit extracted samples.
+         * The timeout must be short enough that IDLE0 gets CPU time
+         * between read cycles (WDT checks IDLE task ran). */
         size_t got = 0;
         esp_err_t ret = i2s_audio_read((uint8_t *)buf, read_buf_sz,
-                                       &got, 500);
+                                       &got, 300);
         if (ret != ESP_OK || got == 0) {
             fail_count++;
+            vTaskDelay(1);  /* yield to IDLE on failure path */
             continue;
         }
 
@@ -214,7 +216,17 @@ static void feed_task(void *arg)
             }
 
             offset += s_feed_chunk;
+
+            /* Yield between AFE feed chunks so WiFi/httpd/IDLE
+             * get CPU time.  Each feed() does DSP work that can
+             * take several ms of CPU on Core 0. */
+            taskYIELD();
         }
+
+        /* Yield to IDLE task after each DMA read+feed cycle.
+         * Without this, the feed loop (read 300ms + feed 7 chunks)
+         * starves IDLE0 and triggers the task watchdog. */
+        vTaskDelay(1);
 
         /* Periodic diagnostic every 10 s (verbose only) */
         TickType_t now = xTaskGetTickCount();
