@@ -924,6 +924,20 @@ static int cmd_tg_allowlist(int argc, char **argv)
     return 0;
 }
 
+/* test_tone — play a 440Hz sine wave through the speaker (no network needed) */
+static int cmd_test_tone(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    printf("Playing 440 Hz test tone...\n");
+    esp_err_t ret = i2s_audio_test_tone();
+    if (ret != ESP_OK) {
+        printf("test_tone failed: %s\n", esp_err_to_name(ret));
+        return 1;
+    }
+    printf("Test tone complete.\n");
+    return 0;
+}
+
 /* mic_diag — I2S RX diagnostics: register dump, raw DMA read, wiring guide */
 static int cmd_mic_diag(int argc, char **argv)
 {
@@ -1690,6 +1704,14 @@ esp_err_t serial_cli_init(void)
         .argtable = &notify_server_args,
     };
     esp_console_cmd_register(&notify_server_cmd);
+
+    /* test_tone */
+    esp_console_cmd_t test_tone_cmd = {
+        .command = "test_tone",
+        .help    = "Play 440 Hz test tone through speaker (no network needed)",
+        .func    = &cmd_test_tone,
+    };
+    esp_console_cmd_register(&test_tone_cmd);
 
     /* mic_diag */
     esp_console_cmd_t mic_diag_cmd = {

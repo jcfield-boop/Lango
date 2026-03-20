@@ -782,14 +782,12 @@ esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint
      * i2s_channel_enable.  Subsequent reads timeout because DMA doesn't
      * cycle.  Workaround: disable+enable RX before each read to restart
      * DMA.  This matches what mic_diag does (which always succeeds).
-     * After enable, delay so DMA fills ≥1 descriptor before reading.
-     * At 16kHz × 4 bytes (32-bit mono), 1920-byte descriptor fills in
-     * 30ms.  We use the FreeRTOS tick delay (10ms granularity at 100Hz).
-     * A 30ms delay lets ~1 descriptor fill; combined with 200ms read
-     * timeout this gives reliable reads. */
+     * After enable, use a generous read timeout so i2s_channel_read
+     * blocks in the DMA semaphore (yielding CPU) until data arrives.
+     * The 30ms DMA fill time is handled by the read timeout, not a
+     * separate vTaskDelay — this avoids starving IDLE/WDT. */
     i2s_channel_disable(s_rx_handle);
     i2s_channel_enable(s_rx_handle);
-    vTaskDelay(pdMS_TO_TICKS(30));
 
     size_t raw_read = 0;
     esp_err_t ret = i2s_channel_read(s_rx_handle, buf, buf_size,
