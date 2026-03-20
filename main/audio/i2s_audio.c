@@ -193,11 +193,17 @@ static esp_err_t i2s_configure(uint32_t sample_rate, i2s_data_bit_width_t bits)
     }
 
     /* Disable RX first — BCLK/WS are physically shared, so RX (slave on
-     * I2S_NUM_1) would see garbled clocks during TX reconfiguration. */
+     * I2S_NUM_1) would see garbled clocks during TX reconfiguration.
+     * Note: i2s_audio_read() does its own disable+enable cycle without
+     * updating s_rx_enabled, so the flag may be stale.  Always attempt
+     * disable (ignore ESP_ERR_INVALID_STATE = already disabled). */
     bool rx_was_enabled = s_rx_enabled;
-    if (rx_was_enabled && s_rx_handle) {
-        i2s_channel_disable(s_rx_handle);
-        s_rx_enabled = false;
+    if (s_rx_handle) {
+        esp_err_t dis_ret = i2s_channel_disable(s_rx_handle);
+        if (dis_ret == ESP_OK || dis_ret == ESP_ERR_INVALID_STATE) {
+            s_rx_enabled = false;
+            rx_was_enabled = true;  /* re-enable afterwards regardless */
+        }
     }
 
     /* Disable TX, reconfigure, re-enable */
@@ -231,7 +237,8 @@ reenable:
 
     if (rx_was_enabled && s_rx_handle) {
         esp_err_t rx_ret = i2s_channel_enable(s_rx_handle);
-        if (rx_ret == ESP_OK) {
+        if (rx_ret == ESP_OK || rx_ret == ESP_ERR_INVALID_STATE) {
+            /* ESP_ERR_INVALID_STATE = already enabled (feed task race) — fine */
             s_rx_enabled = true;
         } else {
             ESP_LOGE(TAG, "RX re-enable failed: %s", esp_err_to_name(rx_ret));
@@ -782,12 +789,16 @@ esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint
      * i2s_channel_enable.  Subsequent reads timeout because DMA doesn't
      * cycle.  Workaround: disable+enable RX before each read to restart
      * DMA.  This matches what mic_diag does (which always succeeds).
-     * After enable, use a generous read timeout so i2s_channel_read
-     * blocks in the DMA semaphore (yielding CPU) until data arrives.
-     * The 30ms DMA fill time is handled by the read timeout, not a
-     * separate vTaskDelay — this avoids starving IDLE/WDT. */
+     * After enable, delay 1 tick (10ms at 100Hz) for DMA to begin filling.
+     * This yields CPU to IDLE task (preventing WDT starvation) while giving
+     * DMA enough time that the subsequent read finds data. */
     i2s_channel_disable(s_rx_handle);
     i2s_channel_enable(s_rx_handle);
+    vTaskDelay(pdMS_TO_TICKS(30));  /* At 16kHz × 4B mono, one DMA descriptor
+                                     * (1920B) fills in exactly 30ms.  This
+                                     * delay yields CPU (prevents WDT starvation)
+                                     * and gives DMA time to fill ≥1 descriptor
+                                     * before i2s_channel_read. */
 
     size_t raw_read = 0;
     esp_err_t ret = i2s_channel_read(s_rx_handle, buf, buf_size,
