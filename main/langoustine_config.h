@@ -95,13 +95,15 @@
 /* RGB Status LED — WS2812/NeoPixel on dev board via RMT */
 #define LANG_LED_GPIO    38   /* GPIO38 = onboard NeoPixel on ESP32-S3-DevKitC-1 */
 
-/* I2S Audio — separate ports: I2S_NUM_0 TX (speaker), I2S_NUM_1 RX (mic) */
-#define LANG_I2S_BCLK     3   /* TX: to MAX98357A BCLK             */
-#define LANG_I2S_LRCLK    4   /* TX: to MAX98357A LRC              */
-#define LANG_I2S_DOUT     6   /* TX: to MAX98357A DIN              */
-#define LANG_I2S_RX_BCLK  7   /* RX: to INMP441 SCK               */
-#define LANG_I2S_RX_LRCLK 8   /* RX: to INMP441 WS                */
-#define LANG_I2S_DIN      5   /* RX: from INMP441 SD               */
+/* I2S Audio — full-duplex on I2S_NUM_0 (shared bus for speaker + mic).
+ * MAX98357A and INMP441 share BCLK/WS on GPIO 3/4.
+ * TX is master (generates clocks), RX is slave (sig_loopback).
+ * Silence pump keeps TX DMA active so BCLK runs continuously for mic.
+ * Amp gated by GPIO 42 — silence writes produce no audible output. */
+#define LANG_I2S_BCLK     3   /* shared: MAX98357A BCLK + INMP441 SCK */
+#define LANG_I2S_LRCLK    4   /* shared: MAX98357A LRC  + INMP441 WS  */
+#define LANG_I2S_DOUT     6   /* TX: to MAX98357A DIN                 */
+#define LANG_I2S_DIN      5   /* RX: from INMP441 SD                  */
 
 /* Software volume scale: 0–256, where 256 = 100% (0 dB), 128 = 50% (−6 dB).
  * Lower values reduce peak amp current and prevent brownouts on weak PSUs. */

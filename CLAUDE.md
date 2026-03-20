@@ -124,11 +124,9 @@ Available GPIOs: 0–21, 38–48. GPIO 22–37 used internally for Flash/PSRAM.
 
 | GPIO | Function | Connected to |
 |------|----------|-------------|
-| 3 | I2S_BCLK (TX) | MAX98357A BCLK (speaker) |
-| 4 | I2S_LRCLK (TX) | MAX98357A LRC (speaker) |
+| 3 | I2S_BCLK | MAX98357A BCLK + INMP441 SCK (shared bus) |
+| 4 | I2S_LRCLK | MAX98357A LRC + INMP441 WS (shared bus) |
 | 6 | I2S_DOUT (TX) | MAX98357A DIN (speaker) |
-| 7 | I2S_RX_BCLK | INMP441 SCK (mic, separate I2S port) |
-| 8 | I2S_RX_LRCLK | INMP441 WS (mic, separate I2S port) |
 | 5 | I2S_DIN (RX) | INMP441 SD (microphone) |
 | 9 | I2C_SDA | Camera SCCB + PCA9685 |
 | 10 | I2C_SCL | Camera SCCB + PCA9685 |
@@ -165,8 +163,8 @@ Black wire→ − terminal
 VDD  → 3.3V  (max 3.6V — never 5V)
 GND  → GND
 SD   → GPIO5
-SCK  → GPIO7   (dedicated RX I2S port — NOT shared with speaker)
-WS   → GPIO8   (dedicated RX I2S port — NOT shared with speaker)
+SCK  → GPIO3   (shared I2S bus — same wire as MAX98357A BCLK)
+WS   → GPIO4   (shared I2S bus — same wire as MAX98357A LRC)
 L/R  → GND  (left channel)
 ```
 

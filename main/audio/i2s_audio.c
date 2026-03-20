@@ -42,36 +42,74 @@ uint8_t i2s_audio_get_volume(void)
     return s_volume;
 }
 
-/* I2S TX/RX channel handles (separate ports: TX=I2S_NUM_0, RX=I2S_NUM_1) */
-static i2s_chan_handle_t s_tx_handle      = NULL;  /* speaker TX on I2S_NUM_0 */
-static i2s_chan_handle_t s_rx_handle      = NULL;  /* mic RX on I2S_NUM_1 */
-static i2s_chan_handle_t s_rx_clk_handle  = NULL;  /* dummy TX on I2S_NUM_1 (clock gen) */
-static bool             s_rx_enabled = false;  /* true after RX init+enable */
+/* I2S channel handles — full-duplex on I2S_NUM_0 (TX=speaker, RX=mic).
+ * BCLK/WS shared between MAX98357A and INMP441 on GPIO 3/4.
+ * In full-duplex, RX is forced to slave and uses TX clocks via sig_loopback.
+ * TX DMA runs continuously: auto_clear_after_cb fills played buffers with
+ * silence, keeping BCLK alive for the mic even when no audio is playing.
+ * Amp gated by GPIO 42 (SD pin) so silence writes produce no sound. */
+static i2s_chan_handle_t s_tx_handle = NULL;  /* speaker TX */
+static i2s_chan_handle_t s_rx_handle = NULL;  /* mic RX     */
+static bool             s_rx_enabled = false;
 
 /* Track current I2S configuration to avoid unnecessary reconfigures */
 static uint32_t s_current_sample_rate = 0;
 static uint32_t s_current_bits        = 0;
 
+/* ── Silence pump task ─────────────────────────────────────────── */
+/* Keeps TX DMA active by writing silence when no playback is running.
+ * This ensures BCLK/WS stay alive for the INMP441 mic (RX is slave).
+ * The amp SD pin is LOW during silence so no sound is produced.
+ * During playback, the pump yields — play_wav takes over TX writes. */
+static volatile bool s_playback_active = false;
+
+static void silence_pump_task(void *arg)
+{
+    const size_t buf_sz = LANG_I2S_DMA_FRAME_NUM * 4;  /* 32-bit slot × mono */
+    uint8_t *zeros = calloc(1, buf_sz);
+    if (!zeros) {
+        ESP_LOGE(TAG, "silence_pump: calloc failed");
+        vTaskDelete(NULL);
+        return;
+    }
+    ESP_LOGI(TAG, "Silence pump started (%u bytes/write)", (unsigned)buf_sz);
+    int err_count = 0;
+    while (1) {
+        /* Yield while playback owns the TX channel */
+        if (s_playback_active) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+        size_t written;
+        esp_err_t ret = i2s_channel_write(s_tx_handle, zeros, buf_sz,
+                                           &written, pdMS_TO_TICKS(500));
+        if (ret != ESP_OK) {
+            err_count++;
+            if (err_count <= 3 || (err_count % 100) == 0) {
+                ESP_LOGW(TAG, "silence_pump err: %s (#%d)",
+                         esp_err_to_name(ret), err_count);
+            }
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        } else {
+            err_count = 0;
+        }
+    }
+}
+
 /* ── WAV header parsing ─────────────────────────────────────────── */
 
-/*
- * Minimal WAV/RIFF parser.  Handles non-standard chunk ordering
- * by scanning for the "fmt " and "data" sub-chunks rather than
- * assuming a fixed 44-byte layout.
- */
 typedef struct {
     uint32_t sample_rate;
     uint16_t bits_per_sample;
     uint16_t num_channels;
-    size_t   pcm_offset;  /* byte offset into wav_data[] where PCM begins */
-    size_t   pcm_len;     /* byte length of PCM payload */
+    size_t   pcm_offset;
+    size_t   pcm_len;
 } wav_info_t;
 
 static esp_err_t parse_wav(const uint8_t *buf, size_t buf_len, wav_info_t *out)
 {
     if (!buf || buf_len < 44 || !out) return ESP_ERR_INVALID_ARG;
 
-    /* Check RIFF + WAVE magic */
     if (memcmp(buf,     "RIFF", 4) != 0 ||
         memcmp(buf + 8, "WAVE", 4) != 0) {
         ESP_LOGE(TAG, "Not a RIFF/WAVE file");
@@ -80,10 +118,9 @@ static esp_err_t parse_wav(const uint8_t *buf, size_t buf_len, wav_info_t *out)
 
     bool found_fmt  = false;
     bool found_data = false;
-    size_t pos = 12;  /* skip "RIFF" + size + "WAVE" */
+    size_t pos = 12;
 
     while (pos + 8 <= buf_len) {
-        /* Each chunk: 4-byte ID + 4-byte little-endian size */
         uint32_t chunk_size =
             (uint32_t)buf[pos+4]        |
             ((uint32_t)buf[pos+5] << 8) |
@@ -92,7 +129,6 @@ static esp_err_t parse_wav(const uint8_t *buf, size_t buf_len, wav_info_t *out)
 
         if (memcmp(buf + pos, "fmt ", 4) == 0) {
             if (pos + 8 + 16 > buf_len) break;
-            /* audio format (offset 8): 1 = PCM */
             uint16_t fmt = (uint16_t)buf[pos+8] | ((uint16_t)buf[pos+9] << 8);
             if (fmt != 1) {
                 ESP_LOGW(TAG, "Unsupported WAV format: %u (only PCM=1 supported)", fmt);
@@ -108,8 +144,6 @@ static esp_err_t parse_wav(const uint8_t *buf, size_t buf_len, wav_info_t *out)
         } else if (memcmp(buf + pos, "data", 4) == 0) {
             out->pcm_offset = pos + 8;
             out->pcm_len    = chunk_size;
-            /* Clamp to actual buffer. Also handles 0xFFFFFFFF "unspecified"
-             * size (streaming WAV) which overflows a 32-bit addition. */
             if (out->pcm_offset >= buf_len ||
                 out->pcm_len > buf_len - out->pcm_offset) {
                 out->pcm_len = buf_len - out->pcm_offset;
@@ -118,8 +152,6 @@ static esp_err_t parse_wav(const uint8_t *buf, size_t buf_len, wav_info_t *out)
         }
 
         if (found_fmt && found_data) break;
-
-        /* Advance to next chunk (size is always even-padded in WAV) */
         pos += 8 + chunk_size + (chunk_size & 1);
     }
 
@@ -139,20 +171,14 @@ static esp_err_t parse_wav(const uint8_t *buf, size_t buf_len, wav_info_t *out)
 
 /*
  * i2s_configure() handles both the first-time init and all subsequent
- * sample-rate / bit-depth changes.
- *
- * ESP-IDF v5.x rule:
- *   - i2s_channel_init_std_mode()  — must be called exactly ONCE per channel
- *     (after i2s_new_channel, before first enable).
- *   - i2s_channel_reconfig_std_clock() / _slot() — used for every subsequent
- *     change; channel must be disabled first.
+ * sample-rate / bit-depth changes.  Only touches TX — in full-duplex,
+ * RX is a slave that automatically follows TX clock changes.
  */
 static esp_err_t i2s_configure(uint32_t sample_rate, i2s_data_bit_width_t bits)
 {
     esp_err_t ret;
 
     if (s_current_sample_rate != 0) {
-        /* TX-only reconfigure: RX is on separate I2S port, unaffected */
         i2s_channel_disable(s_tx_handle);
     }
 
@@ -166,7 +192,7 @@ static esp_err_t i2s_configure(uint32_t sample_rate, i2s_data_bit_width_t bits)
                 .bclk = LANG_I2S_BCLK,
                 .ws   = LANG_I2S_LRCLK,
                 .dout = LANG_I2S_DOUT,
-                .din  = I2S_GPIO_UNUSED,
+                .din  = LANG_I2S_DIN,
                 .invert_flags = {
                     .mclk_inv = false,
                     .bclk_inv = false,
@@ -175,15 +201,13 @@ static esp_err_t i2s_configure(uint32_t sample_rate, i2s_data_bit_width_t bits)
             },
         };
         /* INMP441 requires 64 BCLK per frame (32-bit slots).
-         * I2S_SLOT_BIT_WIDTH_AUTO defaults to data_bit_width (16),
-         * generating only 32 BCLK → INMP441 underclocked.
          * Force 32-bit slots so BCLK = 2*32*Fs (1.024 MHz @ 16kHz).
          * MAX98357A works fine with 32-bit slots (ignores padding). */
         std_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
-        std_cfg.slot_cfg.ws_width      = 32;  /* WS high/low = 32 BCLK each */
+        std_cfg.slot_cfg.ws_width      = 32;
         ret = i2s_channel_init_std_mode(s_tx_handle, &std_cfg);
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "i2s_channel_init_std_mode failed: %s", esp_err_to_name(ret));
+            ESP_LOGE(TAG, "i2s_channel_init_std_mode (TX) failed: %s", esp_err_to_name(ret));
             return ret;
         }
     } else {
@@ -226,87 +250,37 @@ esp_err_t i2s_audio_init(void)
         return ESP_OK;
     }
 
-    /* TX on I2S_NUM_0 — speaker only (simplex).
-     * Override DMA defaults for gapless playback: larger buffers survive
-     * WiFi TX bursts that preempt the playback task on Core 0. */
-    i2s_chan_config_t tx_chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    tx_chan_cfg.dma_desc_num       = LANG_I2S_DMA_DESC_NUM;
-    tx_chan_cfg.dma_frame_num      = LANG_I2S_DMA_FRAME_NUM;
-    tx_chan_cfg.auto_clear_after_cb = true;  /* send silence on DMA underrun (not stale data) */
-    esp_err_t ret = i2s_new_channel(&tx_chan_cfg, &s_tx_handle, NULL);
+    /* Full-duplex on I2S_NUM_0: TX (speaker) + RX (mic).
+     * BCLK/WS shared on GPIO 3/4 between MAX98357A and INMP441.
+     * TX is master — generates clocks.  RX is forced to slave in
+     * full-duplex and uses TX clocks via sig_loopback. */
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    chan_cfg.dma_desc_num       = LANG_I2S_DMA_DESC_NUM;
+    chan_cfg.dma_frame_num      = LANG_I2S_DMA_FRAME_NUM;
+    chan_cfg.auto_clear_after_cb = true;  /* auto-fill played buffers with silence */
+    esp_err_t ret = i2s_new_channel(&chan_cfg, &s_tx_handle, &s_rx_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "i2s_new_channel (TX) failed: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "i2s_new_channel (full-duplex) failed: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    /* Mic on I2S_NUM_1 — full-duplex with dummy TX for clock generation.
-     * ESP32-S3 I2S: BCLK/WS are generated by the TX DMA engine. A simplex
-     * RX-only port cannot sustain clocks beyond the initial DMA fill.
-     * Solution: create a full-duplex pair on I2S_NUM_1. The TX channel
-     * (s_rx_clk_handle) is initialised with auto_clear_after_cb=true and
-     * preloaded with silence so its DMA runs continuously, keeping BCLK/WS
-     * alive for the RX channel (s_rx_handle).  TX DOUT is unused. */
-    i2s_chan_config_t rx_chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
-    rx_chan_cfg.dma_desc_num       = LANG_I2S_DMA_DESC_NUM;
-    rx_chan_cfg.dma_frame_num      = LANG_I2S_DMA_FRAME_NUM;
-    rx_chan_cfg.auto_clear_after_cb = true;  /* TX auto-fills silence → BCLK never stops */
-    ret = i2s_new_channel(&rx_chan_cfg, &s_rx_clk_handle, &s_rx_handle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "i2s_new_channel (RX port) failed: %s", esp_err_to_name(ret));
-        /* Non-fatal: speaker still works without mic */
-    }
-
-    /* Initial TX configuration: 16kHz, 16-bit mono (matches most TTS output) */
+    /* Initial TX configuration: 16kHz, 16-bit mono (mic rate).
+     * GPIO config includes both DOUT (speaker) and DIN (mic). */
     ret = i2s_configure(16000, I2S_DATA_BIT_WIDTH_16BIT);
     if (ret != ESP_OK) {
         i2s_del_channel(s_tx_handle);
+        i2s_del_channel(s_rx_handle);
         s_tx_handle = NULL;
-        if (s_rx_handle) { i2s_del_channel(s_rx_handle); s_rx_handle = NULL; }
+        s_rx_handle = NULL;
         return ret;
     }
 
-    /* I2S_NUM_1 TX (clock generator): init with mic-rate clock, DOUT unused.
-     * This channel exists solely to keep BCLK/WS running for the RX side.
-     * INMP441 requires 64 BCLK per frame (32-bit slots × 2 channels). */
-    if (s_rx_clk_handle) {
-        i2s_std_config_t clk_cfg = {
-            .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(LANG_MIC_SAMPLE_RATE),
-            .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT,
-                                                             I2S_SLOT_MODE_MONO),
-            .gpio_cfg = {
-                .mclk = I2S_GPIO_UNUSED,
-                .bclk = LANG_I2S_RX_BCLK,
-                .ws   = LANG_I2S_RX_LRCLK,
-                .dout = I2S_GPIO_UNUSED,
-                .din  = I2S_GPIO_UNUSED,
-                .invert_flags = { false, false, false },
-            },
-        };
-        clk_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
-        clk_cfg.slot_cfg.ws_width       = 32;
-        ret = i2s_channel_init_std_mode(s_rx_clk_handle, &clk_cfg);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "i2s_channel_init_std_mode (RX-CLK) failed: %s", esp_err_to_name(ret));
-        } else {
-            /* Preload silence so DMA starts immediately on enable */
-            uint8_t silence[256] = {0};
-            size_t loaded = 0;
-            i2s_channel_preload_data(s_rx_clk_handle, silence, sizeof(silence), &loaded);
-            ret = i2s_channel_enable(s_rx_clk_handle);
-            if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "i2s_channel_enable (RX-CLK) failed: %s", esp_err_to_name(ret));
-            } else {
-                ESP_LOGI(TAG, "I2S_NUM_1 TX clock gen enabled (preloaded %u bytes)", (unsigned)loaded);
-            }
-        }
-    }
-
-    /* RX channel: INMP441 microphone on I2S_NUM_1, 16kHz mono.
-     * INMP441 uses I2S Philips standard (1-bit delay after WS edge).
-     * INMP441 always outputs 24-bit data left-justified in 32-bit slots.
-     * We MUST read 32-bit samples (data_bit_width=32) to get the full slot.
-     * i2s_audio_read() post-processes: right-shift 16 → int16_t for callers.
-     * BCLK/WS set to I2S_GPIO_UNUSED — shared with TX clock gen on same port. */
+    /* RX channel: INMP441 microphone, 16kHz mono.
+     * In full-duplex, RX is forced to slave — clocks come from TX via
+     * sig_loopback.  We still specify the GPIO pins (same as TX) so the
+     * driver doesn't de-route them.
+     * INMP441 outputs 24-bit data left-justified in 32-bit slots.
+     * We read 32-bit samples; i2s_audio_read() downshifts to 16-bit. */
     if (s_rx_handle) {
         i2s_std_config_t rx_cfg = {
             .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(LANG_MIC_SAMPLE_RATE),
@@ -314,8 +288,8 @@ esp_err_t i2s_audio_init(void)
                                                              I2S_SLOT_MODE_MONO),
             .gpio_cfg = {
                 .mclk = I2S_GPIO_UNUSED,
-                .bclk = I2S_GPIO_UNUSED,   /* shared with TX clock gen */
-                .ws   = I2S_GPIO_UNUSED,   /* shared with TX clock gen */
+                .bclk = LANG_I2S_BCLK,    /* same pin as TX — shared bus */
+                .ws   = LANG_I2S_LRCLK,   /* same pin as TX — shared bus */
                 .dout = I2S_GPIO_UNUSED,
                 .din  = LANG_I2S_DIN,
                 .invert_flags = { false, false, false },
@@ -326,7 +300,6 @@ esp_err_t i2s_audio_init(void)
         ret = i2s_channel_init_std_mode(s_rx_handle, &rx_cfg);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "i2s_channel_init_std_mode (RX) failed: %s", esp_err_to_name(ret));
-            /* Non-fatal: TX still works for speaker output */
         } else {
             ret = i2s_channel_enable(s_rx_handle);
             if (ret != ESP_OK) {
@@ -338,7 +311,12 @@ esp_err_t i2s_audio_init(void)
         }
     }
 
-    /* Load persisted volume from NVS (falls back to LANG_AUDIO_VOLUME if not set) */
+    /* Start silence pump — keeps TX DMA active so BCLK runs for the mic.
+     * Low priority, small SRAM stack (no flash/NVS access). */
+    xTaskCreatePinnedToCore(silence_pump_task, "i2s_sil",
+                            2048, NULL, 2, NULL, 0);
+
+    /* Load persisted volume from NVS */
     {
         nvs_handle_t nvs;
         if (nvs_open(LANG_NVS_AUDIO, NVS_READONLY, &nvs) == ESP_OK) {
@@ -350,28 +328,24 @@ esp_err_t i2s_audio_init(void)
         }
     }
 
-    ESP_LOGI(TAG, "I2S audio init OK (TX: BCLK=%d LRCLK=%d DOUT=%d | "
-             "RX: BCLK=%d LRCLK=%d DIN=%d | vol=%u/255 dma=%dx%d)",
-             LANG_I2S_BCLK, LANG_I2S_LRCLK, LANG_I2S_DOUT,
-             LANG_I2S_RX_BCLK, LANG_I2S_RX_LRCLK, LANG_I2S_DIN, s_volume,
-             LANG_I2S_DMA_DESC_NUM, LANG_I2S_DMA_FRAME_NUM);
+    ESP_LOGI(TAG, "I2S audio init OK (full-duplex I2S_NUM_0: BCLK=%d LRCLK=%d "
+             "DOUT=%d DIN=%d | vol=%u/255 dma=%dx%d)",
+             LANG_I2S_BCLK, LANG_I2S_LRCLK, LANG_I2S_DOUT, LANG_I2S_DIN,
+             s_volume, LANG_I2S_DMA_DESC_NUM, LANG_I2S_DMA_FRAME_NUM);
 
 #if LANG_AMP_SD_GPIO >= 0
-    /* Configure amp shutdown pin — output, start low (amp off) */
+    /* Configure amp shutdown pin — output, start low (amp off).
+     * Silence pump writes to TX but amp is off → no sound. */
     gpio_reset_pin(LANG_AMP_SD_GPIO);
     gpio_set_direction(LANG_AMP_SD_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_level(LANG_AMP_SD_GPIO, 0);
     ESP_LOGI(TAG, "Amp SD pin GPIO%d configured (amp off)", LANG_AMP_SD_GPIO);
 #endif
 
-    /* Increase drive strength on I2S clock/data GPIOs for cleaner edges.
-     * At higher BCLK rates (e.g. 48kHz × 64 = 3.072 MHz), stronger drive
-     * reduces ringing and improves signal integrity on breadboard wires. */
+    /* Increase drive strength on I2S clock/data GPIOs for cleaner edges. */
     gpio_set_drive_capability(LANG_I2S_BCLK,  GPIO_DRIVE_CAP_3);
     gpio_set_drive_capability(LANG_I2S_LRCLK, GPIO_DRIVE_CAP_3);
     gpio_set_drive_capability(LANG_I2S_DOUT,  GPIO_DRIVE_CAP_3);
-    gpio_set_drive_capability(LANG_I2S_RX_BCLK,  GPIO_DRIVE_CAP_3);
-    gpio_set_drive_capability(LANG_I2S_RX_LRCLK, GPIO_DRIVE_CAP_3);
 
     return ESP_OK;
 }
@@ -384,7 +358,6 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
     }
     if (!wav_data || len == 0) return ESP_ERR_INVALID_ARG;
 
-    /* Parse WAV header */
     wav_info_t info = {0};
     esp_err_t ret = parse_wav(wav_data, len, &info);
     if (ret != ESP_OK) return ret;
@@ -394,7 +367,6 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
         return ESP_OK;
     }
 
-    /* Map bit depth to IDF enum */
     i2s_data_bit_width_t bits;
     switch (info.bits_per_sample) {
         case 8:  bits = I2S_DATA_BIT_WIDTH_8BIT;  break;
@@ -406,33 +378,34 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
             return ESP_ERR_INVALID_ARG;
     }
 
-    /* Reconfigure TX only if sample rate or bit depth changed.
-     * RX is on separate I2S port — no suspend/resume needed for wake word.
-     * WiFi PS is disabled globally (WIFI_PS_NONE) so no per-playback transitions needed. */
+    /* Take over TX from silence pump */
+    s_playback_active = true;
+
+    /* Reconfigure TX if sample rate or bit depth changed.
+     * In full-duplex, this also changes the RX clock — mic data will be
+     * at the wrong rate during playback, but feed_task handles that
+     * gracefully (reads succeed, data is just at wrong rate). */
     if (info.sample_rate != s_current_sample_rate ||
         (uint32_t)bits    != s_current_bits) {
         ret = i2s_configure(info.sample_rate, bits);
-        if (ret != ESP_OK) return ret;
+        if (ret != ESP_OK) {
+            s_playback_active = false;
+            return ret;
+        }
     }
 
 #if LANG_AMP_SD_GPIO >= 0
-    /* Enable amp; 20 ms for output capacitor and supply to stabilise.
-     * The SD pin gates the class-D output stage — pulling low eliminates
-     * idle current draw and hiss between utterances. */
     gpio_set_level(LANG_AMP_SD_GPIO, 1);
     vTaskDelay(pdMS_TO_TICKS(20));
 #endif
 
-    /* Stream PCM data in 4KB chunks with volume scaling + fade-in/fade-out.
-     * Volume: 0–255, where 255 = 100%, 128 = 50% (−6 dB), default 64 (−12 dB).
-     * Fade: linear ramp over LANG_I2S_FADE_MS at start/end to eliminate pop/click. */
     const uint8_t *pcm    = wav_data + info.pcm_offset;
     size_t         remain = info.pcm_len;
     size_t         written;
-    int16_t        vol_buf[2048];   /* 4096 bytes = 2048 samples, stack is fine */
+    int16_t        vol_buf[2048];
 
     uint8_t  vol = s_volume;
-    uint32_t total_samples  = (uint32_t)(info.pcm_len / 2);  /* 16-bit samples */
+    uint32_t total_samples  = (uint32_t)(info.pcm_len / 2);
     uint32_t fade_samples   = (info.sample_rate * LANG_I2S_FADE_MS) / 1000;
     if (fade_samples > total_samples / 2) fade_samples = total_samples / 2;
     uint32_t fade_out_start = total_samples - fade_samples;
@@ -450,21 +423,17 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
         size_t chunk_samples = chunk / 2;
         const int16_t *src = (const int16_t *)pcm;
 
-        /* Combined volume + fade processing into vol_buf */
         for (size_t i = 0; i < chunk_samples; i++) {
             int32_t s = (int32_t)src[i];
 
-            /* Volume scaling */
             if (vol < 255) {
                 s = (s * vol) >> 8;
             }
 
-            /* Fade-in: linear ramp 0→1 over fade_samples */
             uint32_t abs_idx = sample_offset + (uint32_t)i;
             if (abs_idx < fade_samples) {
                 s = (s * (int32_t)abs_idx) / (int32_t)fade_samples;
             }
-            /* Fade-out: linear ramp 1→0 over fade_samples */
             else if (abs_idx >= fade_out_start) {
                 uint32_t pos = abs_idx - fade_out_start;
                 s = (s * (int32_t)(fade_samples - pos)) / (int32_t)fade_samples;
@@ -484,8 +453,6 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
     }
 
 #if LANG_AMP_SD_GPIO >= 0
-    /* Drain: wait for DMA pipeline to empty before disabling amp.
-     * One DMA buffer duration + margin ensures last samples reach the speaker. */
     {
         uint32_t one_buf_ms = (LANG_I2S_DMA_FRAME_NUM * 1000) / info.sample_rate;
         vTaskDelay(pdMS_TO_TICKS(one_buf_ms + 20));
@@ -493,6 +460,16 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
     gpio_set_level(LANG_AMP_SD_GPIO, 0);
     ESP_LOGD(TAG, "Amp shutdown (GPIO%d low)", LANG_AMP_SD_GPIO);
 #endif
+
+    /* Restore mic sample rate if playback changed it.
+     * This ensures BCLK returns to 16kHz for the INMP441. */
+    if (s_current_sample_rate != LANG_MIC_SAMPLE_RATE) {
+        ESP_LOGI(TAG, "Restoring I2S to mic rate (%u Hz)", LANG_MIC_SAMPLE_RATE);
+        i2s_configure(LANG_MIC_SAMPLE_RATE, I2S_DATA_BIT_WIDTH_16BIT);
+    }
+
+    /* Release TX back to silence pump */
+    s_playback_active = false;
 
     ESP_LOGI(TAG, "Playback complete");
     return ESP_OK;
@@ -520,7 +497,6 @@ esp_err_t i2s_audio_play_wav_async(const uint8_t *wav_data, size_t len)
 {
     if (!s_tx_handle) return ESP_ERR_INVALID_STATE;
 
-    /* Create playback task on first call (Core 0, keeps Core 1 for agent) */
     if (!s_play_task) {
         BaseType_t ret = xTaskCreatePinnedToCore(
             i2s_play_task, "i2s_play", 8192, NULL, 4, &s_play_task, 0);
@@ -530,8 +506,6 @@ esp_err_t i2s_audio_play_wav_async(const uint8_t *wav_data, size_t len)
         }
     }
 
-    /* Cancel current playback if any.
-     * 100ms allows: cancel flag seen (1 write cycle ~50ms) + amp shutdown (30ms) */
     s_play_cancel = true;
     vTaskDelay(pdMS_TO_TICKS(100));
 
@@ -563,16 +537,17 @@ esp_err_t i2s_audio_test_tone(void)
     const float duration = 2.0f;
     const uint32_t total_samples = (uint32_t)(sample_rate * duration);
 
-    /* Reconfigure to 16kHz if needed */
+    s_playback_active = true;
+
     if (s_current_sample_rate != sample_rate ||
         s_current_bits != (uint32_t)I2S_DATA_BIT_WIDTH_16BIT) {
         esp_err_t ret = i2s_configure(sample_rate, I2S_DATA_BIT_WIDTH_16BIT);
-        if (ret != ESP_OK) return ret;
+        if (ret != ESP_OK) { s_playback_active = false; return ret; }
     }
 
 #if LANG_AMP_SD_GPIO >= 0
     gpio_set_level(LANG_AMP_SD_GPIO, 1);
-    vTaskDelay(pdMS_TO_TICKS(50));  /* longer settle for cold-start test */
+    vTaskDelay(pdMS_TO_TICKS(50));
 #endif
 
     uint8_t vol = s_volume;
@@ -591,9 +566,7 @@ esp_err_t i2s_audio_test_tone(void)
         for (uint32_t i = 0; i < chunk; i++) {
             float t = (float)(sample + i) / (float)sample_rate;
             int32_t s = (int32_t)(sinf(2.0f * M_PI * freq * t) * 16000.0f);
-            /* Volume */
             if (vol < 255) s = (s * vol) >> 8;
-            /* Fade-in/fade-out envelope */
             uint32_t abs_idx = sample + i;
             if (abs_idx < fade_samples) {
                 s = (s * (int32_t)abs_idx) / (int32_t)fade_samples;
@@ -620,6 +593,7 @@ esp_err_t i2s_audio_test_tone(void)
     gpio_set_level(LANG_AMP_SD_GPIO, 0);
 #endif
 
+    s_playback_active = false;
     ESP_LOGI(TAG, "Test tone complete");
     return ESP_OK;
 }
@@ -642,27 +616,17 @@ esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint
     }
     if (!buf || buf_size == 0 || !bytes_read) return ESP_ERR_INVALID_ARG;
 
-    /* RX is configured for 32-bit data (INMP441 outputs 24-bit left-justified
-     * in 32-bit slots).  Callers expect 16-bit PCM.
-     *
-     * ESP32-S3 DMA delivers interleaved L+R 32-bit samples even in "mono" mode
-     * when data_bit_width=32.  We extract every other sample (the real mic
-     * channel), then right-shift by 16.
-     *
-     * Caller asks for N bytes of 16-bit data = N/2 samples.
-     * Each output sample needs 2 raw 32-bit values (L+R pair) = 8 bytes.
-     * So raw_size = N/2 * 8 = N*4. */
+    /* RX reads 32-bit samples (INMP441: 24-bit in 32-bit slot).
+     * Callers expect 16-bit PCM.  raw_size = buf_size * 4. */
     size_t raw_size = buf_size * 4;
 
-    /* Heap-allocate the raw buffer (too large for task stacks) */
-    uint8_t *raw_buf = malloc(raw_size);  /* falls to PSRAM if >4KB */
+    uint8_t *raw_buf = malloc(raw_size);
     if (!raw_buf) return ESP_ERR_NO_MEM;
 
     size_t raw_read = 0;
     esp_err_t ret = i2s_channel_read(s_rx_handle, raw_buf, raw_size,
                                       &raw_read, pdMS_TO_TICKS(timeout_ms));
     if (ret != ESP_OK) {
-        /* Log the first few errors and periodically to avoid spamming */
         static int s_read_err_count = 0;
         s_read_err_count++;
         if (s_read_err_count <= 3 || (s_read_err_count % 50000 == 0)) {
@@ -674,16 +638,11 @@ esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint
         return ret;
     }
 
-    /* DMA delivers interleaved L+R 32-bit samples even in "mono" mode on
-     * ESP32-S3 when data_bit_width=32 and slot_bit_width=32.
-     * INMP441 L/R pin is tied to GND → left channel (EVEN samples: 0, 2, 4…).
-     * The other channel is tri-stated garbage.  Extract left channel only,
-     * right-shift 16 to convert 24-bit-in-32 → 16-bit PCM. */
     size_t n_raw = raw_read / 4;
     int32_t *src = (int32_t *)raw_buf;
     int16_t *dst = (int16_t *)buf;
 
-    /* One-time diagnostic: dump first 8 raw samples */
+    /* One-time diagnostic: dump first 8 raw 32-bit samples */
     static bool s_dump_done = false;
     if (!s_dump_done && n_raw >= 8) {
         ESP_LOGI(TAG, "RX raw 32-bit [0..7]: 0x%08lx 0x%08lx 0x%08lx 0x%08lx "
