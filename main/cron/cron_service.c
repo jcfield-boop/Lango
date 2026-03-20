@@ -257,6 +257,24 @@ static void cron_process_due_jobs(void)
         if (job->next_run <= 0) continue;
         if (job->next_run > now) continue;
 
+        /* Skip massively overdue recurring jobs — they're stale after reboot.
+         * If overdue by >2× interval, advance to the next future slot and
+         * skip this run.  Prevents burst-firing all jobs after a reflash. */
+        if (job->kind == CRON_KIND_EVERY && job->interval_s > 0) {
+            int64_t overdue = (int64_t)(now - job->next_run);
+            if (overdue > 2 * job->interval_s) {
+                int64_t next = job->next_run;
+                while (next <= now) {
+                    next += job->interval_s;
+                }
+                ESP_LOGW(TAG, "Cron job %s (%s) overdue by %llds (>2x interval) — skipping to next",
+                         job->name, job->id, (long long)overdue);
+                job->next_run = next;
+                changed = true;
+                continue;
+            }
+        }
+
         /* Limit to 1 job per check interval to prevent burst-firing
          * all overdue jobs at once (causes network/power stress on boot) */
         if (fired >= 1) {

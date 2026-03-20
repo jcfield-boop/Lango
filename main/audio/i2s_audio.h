@@ -95,3 +95,11 @@ esp_err_t i2s_audio_rx_restart(void);
  * @return ESP_OK on success.
  */
 esp_err_t i2s_audio_test_tone(void);
+
+/**
+ * @brief Run I2S RX diagnostics — register dump, raw DMA read, wiring checklist.
+ *
+ * Prints results directly to stdout (serial console).
+ * Suspends wake word before calling if needed.
+ */
+void i2s_audio_diag(void);

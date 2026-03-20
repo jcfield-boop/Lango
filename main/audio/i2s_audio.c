@@ -1,6 +1,7 @@
 #include "i2s_audio.h"
 #include "langoustine_config.h"
 
+#include <stdio.h>
 #include <string.h>
 #include "esp_log.h"
 #include "driver/i2s_std.h"
@@ -10,6 +11,8 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "soc/i2s_struct.h"
+#include "driver/i2s_common.h"
 
 static const char *TAG = "i2s_audio";
 
@@ -55,6 +58,10 @@ static bool             s_rx_enabled = false;
 /* Track current I2S configuration to avoid unnecessary reconfigures */
 static uint32_t s_current_sample_rate = 0;
 static uint32_t s_current_bits        = 0;
+
+/* DMA stall recovery counters (reset by i2s_audio_rx_restart) */
+static int s_rx_restart_count = 0;
+static int s_rx_consec_fails  = 0;
 
 /* ── Silence pump task ─────────────────────────────────────────── */
 /* Keeps TX DMA active by writing silence when no playback is running.
@@ -170,75 +177,73 @@ static esp_err_t parse_wav(const uint8_t *buf, size_t buf_len, wav_info_t *out)
 /* ── I2S channel (re)configuration ─────────────────────────────── */
 
 /*
- * i2s_configure() handles both the first-time init and all subsequent
- * sample-rate / bit-depth changes.  Only touches TX — in full-duplex,
- * RX is a slave that automatically follows TX clock changes.
+ * i2s_configure() handles sample-rate / bit-depth changes for playback.
+ * MUST disable RX before TX — RX is a slave that derives clocks from TX
+ * via sig_loopback.  Changing TX clocks with RX DMA running causes the
+ * RX DMA to stall (descriptor cycle completes but next fetch sees wrong
+ * clock → timeout on the next i2s_channel_read).
  */
 static esp_err_t i2s_configure(uint32_t sample_rate, i2s_data_bit_width_t bits)
 {
     esp_err_t ret;
 
-    if (s_current_sample_rate != 0) {
-        i2s_channel_disable(s_tx_handle);
-    }
-
     if (s_current_sample_rate == 0) {
-        /* ── First-time initialisation ── */
-        i2s_std_config_t std_cfg = {
-            .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate),
-            .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(bits, I2S_SLOT_MODE_MONO),
-            .gpio_cfg = {
-                .mclk = I2S_GPIO_UNUSED,
-                .bclk = LANG_I2S_BCLK,
-                .ws   = LANG_I2S_LRCLK,
-                .dout = LANG_I2S_DOUT,
-                .din  = LANG_I2S_DIN,
-                .invert_flags = {
-                    .mclk_inv = false,
-                    .bclk_inv = false,
-                    .ws_inv   = false,
-                },
-            },
-        };
-        /* INMP441 requires 64 BCLK per frame (32-bit slots).
-         * Force 32-bit slots so BCLK = 2*32*Fs (1.024 MHz @ 16kHz).
-         * MAX98357A works fine with 32-bit slots (ignores padding). */
-        std_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
-        std_cfg.slot_cfg.ws_width      = 32;
-        ret = i2s_channel_init_std_mode(s_tx_handle, &std_cfg);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "i2s_channel_init_std_mode (TX) failed: %s", esp_err_to_name(ret));
-            return ret;
-        }
-    } else {
-        /* ── Reconfiguration (channel already initialised) ── */
-        i2s_std_clk_config_t  clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
-        i2s_std_slot_config_t slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(bits, I2S_SLOT_MODE_MONO);
-        slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
-        slot_cfg.ws_width       = 32;
-
-        ret = i2s_channel_reconfig_std_clock(s_tx_handle, &clk_cfg);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "i2s_channel_reconfig_std_clock failed: %s", esp_err_to_name(ret));
-            return ret;
-        }
-        ret = i2s_channel_reconfig_std_slot(s_tx_handle, &slot_cfg);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "i2s_channel_reconfig_std_slot failed: %s", esp_err_to_name(ret));
-            return ret;
-        }
+        ESP_LOGE(TAG, "i2s_configure called before init — should not happen");
+        return ESP_ERR_INVALID_STATE;
     }
 
-    ret = i2s_channel_enable(s_tx_handle);
+    /* Disable RX first — BCLK/WS are physically shared, so RX (slave on
+     * I2S_NUM_1) would see garbled clocks during TX reconfiguration. */
+    bool rx_was_enabled = s_rx_enabled;
+    if (rx_was_enabled && s_rx_handle) {
+        i2s_channel_disable(s_rx_handle);
+        s_rx_enabled = false;
+    }
+
+    /* Disable TX, reconfigure, re-enable */
+    i2s_channel_disable(s_tx_handle);
+
+    i2s_std_clk_config_t  clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
+    i2s_std_slot_config_t slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(bits, I2S_SLOT_MODE_MONO);
+    slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
+    slot_cfg.ws_width       = 32;
+
+    ret = i2s_channel_reconfig_std_clock(s_tx_handle, &clk_cfg);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "i2s_channel_enable failed: %s", esp_err_to_name(ret));
-        return ret;
+        ESP_LOGE(TAG, "i2s_channel_reconfig_std_clock failed: %s", esp_err_to_name(ret));
+        goto reenable;
+    }
+    ret = i2s_channel_reconfig_std_slot(s_tx_handle, &slot_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "i2s_channel_reconfig_std_slot failed: %s", esp_err_to_name(ret));
+        goto reenable;
     }
 
-    s_current_sample_rate = sample_rate;
-    s_current_bits        = (uint32_t)bits;
-    ESP_LOGI(TAG, "I2S configured: %u Hz, %u-bit", (unsigned)sample_rate, (unsigned)bits);
-    return ESP_OK;
+reenable:
+    /* Re-enable TX first (generates clocks), then RX (slave) */
+    {
+        esp_err_t en_ret = i2s_channel_enable(s_tx_handle);
+        if (en_ret != ESP_OK) {
+            ESP_LOGE(TAG, "TX re-enable failed: %s", esp_err_to_name(en_ret));
+            if (ret == ESP_OK) ret = en_ret;
+        }
+    }
+
+    if (rx_was_enabled && s_rx_handle) {
+        esp_err_t rx_ret = i2s_channel_enable(s_rx_handle);
+        if (rx_ret == ESP_OK) {
+            s_rx_enabled = true;
+        } else {
+            ESP_LOGE(TAG, "RX re-enable failed: %s", esp_err_to_name(rx_ret));
+        }
+    }
+
+    if (ret == ESP_OK) {
+        s_current_sample_rate = sample_rate;
+        s_current_bits        = (uint32_t)bits;
+        ESP_LOGI(TAG, "I2S configured: %u Hz, %u-bit", (unsigned)sample_rate, (unsigned)bits);
+    }
+    return ret;
 }
 
 /* ── Public API ─────────────────────────────────────────────────── */
@@ -250,71 +255,161 @@ esp_err_t i2s_audio_init(void)
         return ESP_OK;
     }
 
-    /* Full-duplex on I2S_NUM_0: TX (speaker) + RX (mic).
-     * BCLK/WS shared on GPIO 3/4 between MAX98357A and INMP441.
-     * TX is master — generates clocks.  RX is forced to slave in
-     * full-duplex and uses TX clocks via sig_loopback. */
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    chan_cfg.dma_desc_num       = LANG_I2S_DMA_DESC_NUM;
-    chan_cfg.dma_frame_num      = LANG_I2S_DMA_FRAME_NUM;
-    chan_cfg.auto_clear_after_cb = true;  /* auto-fill played buffers with silence */
-    esp_err_t ret = i2s_new_channel(&chan_cfg, &s_tx_handle, &s_rx_handle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "i2s_new_channel (full-duplex) failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
+    /* SIMPLEX architecture: TX on I2S_NUM_0 (master), RX on I2S_NUM_1 (slave).
+     *
+     * BCLK/WS physically shared on GPIO 3/4 between MAX98357A and INMP441.
+     * TX (I2S_NUM_0) drives BCLK/WS as outputs.
+     * RX (I2S_NUM_1) reads the same BCLK/WS pins as inputs (slave mode).
+     *
+     * This avoids the full-duplex sig_loopback DMA coupling that caused
+     * permanent RX timeouts on ESP32-S3.  Matches Espressif's own ESP-SR
+     * example (esp32s3-eye) which uses simplex RX-only on I2S_NUM_1. */
+    esp_err_t ret;
 
-    /* Initial TX configuration: 16kHz, 16-bit mono (mic rate).
-     * GPIO config includes both DOUT (speaker) and DIN (mic). */
-    ret = i2s_configure(16000, I2S_DATA_BIT_WIDTH_16BIT);
-    if (ret != ESP_OK) {
-        i2s_del_channel(s_tx_handle);
-        i2s_del_channel(s_rx_handle);
-        s_tx_handle = NULL;
-        s_rx_handle = NULL;
-        return ret;
-    }
+    /* ── Step 1: Create + init TX channel (I2S_NUM_0, master, TX-only) ── */
+    {
+        i2s_chan_config_t tx_chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+        tx_chan_cfg.dma_desc_num       = LANG_I2S_DMA_DESC_NUM;
+        tx_chan_cfg.dma_frame_num      = LANG_I2S_DMA_FRAME_NUM;
+        tx_chan_cfg.auto_clear_after_cb = true;
+        ret = i2s_new_channel(&tx_chan_cfg, &s_tx_handle, NULL);  /* TX-only */
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "TX i2s_new_channel failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
 
-    /* RX channel: INMP441 microphone, 16kHz mono.
-     * In full-duplex, RX is forced to slave — clocks come from TX via
-     * sig_loopback.  We still specify the GPIO pins (same as TX) so the
-     * driver doesn't de-route them.
-     * INMP441 outputs 24-bit data left-justified in 32-bit slots.
-     * We read 32-bit samples; i2s_audio_read() downshifts to 16-bit. */
-    if (s_rx_handle) {
-        i2s_std_config_t rx_cfg = {
+        /* INMP441 requires 64 BCLK per frame (32-bit slots).
+         * MAX98357A works fine with 32-bit slots (ignores padding). */
+        i2s_std_config_t tx_cfg = {
             .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(LANG_MIC_SAMPLE_RATE),
-            .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT,
+            .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,
                                                              I2S_SLOT_MODE_MONO),
             .gpio_cfg = {
                 .mclk = I2S_GPIO_UNUSED,
-                .bclk = LANG_I2S_BCLK,    /* same pin as TX — shared bus */
-                .ws   = LANG_I2S_LRCLK,   /* same pin as TX — shared bus */
-                .dout = I2S_GPIO_UNUSED,
-                .din  = LANG_I2S_DIN,
+                .bclk = LANG_I2S_BCLK,
+                .ws   = LANG_I2S_LRCLK,
+                .dout = LANG_I2S_DOUT,
+                .din  = I2S_GPIO_UNUSED,
                 .invert_flags = { false, false, false },
             },
         };
-        rx_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
-        rx_cfg.slot_cfg.ws_width       = 32;
-        ret = i2s_channel_init_std_mode(s_rx_handle, &rx_cfg);
+        tx_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
+        tx_cfg.slot_cfg.ws_width       = 32;
+        ret = i2s_channel_init_std_mode(s_tx_handle, &tx_cfg);
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "i2s_channel_init_std_mode (RX) failed: %s", esp_err_to_name(ret));
-        } else {
-            ret = i2s_channel_enable(s_rx_handle);
-            if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "i2s_channel_enable (RX) failed: %s", esp_err_to_name(ret));
-            } else {
-                s_rx_enabled = true;
-                ESP_LOGI(TAG, "I2S RX (mic) enabled on GPIO %d", LANG_I2S_DIN);
+            ESP_LOGE(TAG, "TX init FAILED: %s", esp_err_to_name(ret));
+            i2s_del_channel(s_tx_handle);
+            s_tx_handle = NULL;
+            return ret;
+        }
+        ESP_LOGI(TAG, "TX init OK on I2S_NUM_0 (BCLK=%d WS=%d DOUT=%d)",
+                 LANG_I2S_BCLK, LANG_I2S_LRCLK, LANG_I2S_DOUT);
+    }
+
+    /* ── Step 2: Enable TX + preload silence so BCLK/WS are running ── */
+    ret = i2s_channel_enable(s_tx_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "TX enable FAILED: %s", esp_err_to_name(ret));
+        i2s_del_channel(s_tx_handle);
+        s_tx_handle = NULL;
+        return ret;
+    }
+    s_current_sample_rate = LANG_MIC_SAMPLE_RATE;
+    s_current_bits        = (uint32_t)I2S_DATA_BIT_WIDTH_16BIT;
+
+    {
+        const size_t fill_sz = LANG_I2S_DMA_FRAME_NUM * 4;
+        uint8_t *silence = calloc(1, fill_sz);
+        if (silence) {
+            size_t wr;
+            for (int i = 0; i < LANG_I2S_DMA_DESC_NUM; i++) {
+                i2s_channel_write(s_tx_handle, silence, fill_sz, &wr, pdMS_TO_TICKS(500));
             }
+            free(silence);
+            ESP_LOGI(TAG, "TX preloaded %d silence buffers — BCLK running", LANG_I2S_DMA_DESC_NUM);
+        }
+    }
+
+    /* ── Step 3: Create + init RX channel (I2S_NUM_1, slave, RX-only) ──
+     * Slave mode: reads BCLK/WS generated by TX on the shared bus.
+     * Same GPIO pins — the I2S peripheral configures them as inputs. */
+    {
+        i2s_chan_config_t rx_chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_SLAVE);
+        rx_chan_cfg.dma_desc_num  = LANG_I2S_DMA_DESC_NUM;
+        rx_chan_cfg.dma_frame_num = LANG_I2S_DMA_FRAME_NUM;
+        ret = i2s_new_channel(&rx_chan_cfg, NULL, &s_rx_handle);  /* RX-only */
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "RX i2s_new_channel failed: %s", esp_err_to_name(ret));
+            /* TX still works for speaker; mic just won't work */
+        } else {
+            i2s_std_config_t rx_cfg = {
+                .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(LANG_MIC_SAMPLE_RATE),
+                .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT,
+                                                                 I2S_SLOT_MODE_MONO),
+                .gpio_cfg = {
+                    .mclk = I2S_GPIO_UNUSED,
+                    .bclk = LANG_I2S_BCLK,
+                    .ws   = LANG_I2S_LRCLK,
+                    .dout = I2S_GPIO_UNUSED,
+                    .din  = LANG_I2S_DIN,
+                    .invert_flags = { false, false, false },
+                },
+            };
+            /* INMP441 outputs 24-bit data left-justified in 32-bit slots.
+             * data_bit_width MUST be 32 to match — using 16 causes DMA
+             * descriptor byte-count mismatch (first read OK, then stall).
+             * We extract the upper 16 bits in i2s_audio_read(). */
+            rx_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
+            rx_cfg.slot_cfg.ws_width       = 32;
+            rx_cfg.slot_cfg.slot_mask      = I2S_STD_SLOT_LEFT;
+            ret = i2s_channel_init_std_mode(s_rx_handle, &rx_cfg);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "RX init FAILED: %s", esp_err_to_name(ret));
+                i2s_del_channel(s_rx_handle);
+                s_rx_handle = NULL;
+            } else {
+                ESP_LOGI(TAG, "RX init OK on I2S_NUM_1 slave (BCLK=%d WS=%d DIN=%d)",
+                         LANG_I2S_BCLK, LANG_I2S_LRCLK, LANG_I2S_DIN);
+            }
+        }
+    }
+
+    /* ── Step 4: Enable RX ── */
+    if (s_rx_handle) {
+        ret = i2s_channel_enable(s_rx_handle);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "RX enable FAILED: %s", esp_err_to_name(ret));
+        } else {
+            s_rx_enabled = true;
+            ESP_LOGI(TAG, "RX enabled on DIN=%d (slave, clocked by TX)", LANG_I2S_DIN);
+        }
+    }
+
+    /* Diagnostic: immediate RX read to confirm DMA is alive */
+    if (s_rx_enabled) {
+        uint8_t *test_buf = malloc(256);
+        if (test_buf) {
+            size_t test_read = 0;
+            esp_err_t rx_test = i2s_channel_read(s_rx_handle, test_buf, 256,
+                                                  &test_read, pdMS_TO_TICKS(2000));
+            if (rx_test == ESP_OK && test_read > 0) {
+                int32_t *raw32 = (int32_t *)test_buf;
+                ESP_LOGI(TAG, "RX self-test OK: %u bytes, raw32[0]=0x%08lx raw32[1]=0x%08lx",
+                         (unsigned)test_read,
+                         (unsigned long)(uint32_t)raw32[0],
+                         (unsigned long)(uint32_t)raw32[1]);
+            } else {
+                ESP_LOGE(TAG, "RX self-test FAILED: %s (%u bytes)",
+                         esp_err_to_name(rx_test), (unsigned)test_read);
+            }
+            free(test_buf);
         }
     }
 
     /* Start silence pump — keeps TX DMA active so BCLK runs for the mic.
      * Low priority, small SRAM stack (no flash/NVS access). */
     xTaskCreatePinnedToCore(silence_pump_task, "i2s_sil",
-                            2048, NULL, 2, NULL, 0);
+                            3072, NULL, 2, NULL, 0);
 
     /* Load persisted volume from NVS */
     {
@@ -328,21 +423,19 @@ esp_err_t i2s_audio_init(void)
         }
     }
 
-    ESP_LOGI(TAG, "I2S audio init OK (full-duplex I2S_NUM_0: BCLK=%d LRCLK=%d "
-             "DOUT=%d DIN=%d | vol=%u/255 dma=%dx%d)",
+    ESP_LOGI(TAG, "I2S audio init OK (simplex: TX=I2S0 master, RX=I2S1 slave | "
+             "BCLK=%d LRCLK=%d DOUT=%d DIN=%d | vol=%u/255 dma=%dx%d)",
              LANG_I2S_BCLK, LANG_I2S_LRCLK, LANG_I2S_DOUT, LANG_I2S_DIN,
              s_volume, LANG_I2S_DMA_DESC_NUM, LANG_I2S_DMA_FRAME_NUM);
 
 #if LANG_AMP_SD_GPIO >= 0
-    /* Configure amp shutdown pin — output, start low (amp off).
-     * Silence pump writes to TX but amp is off → no sound. */
     gpio_reset_pin(LANG_AMP_SD_GPIO);
     gpio_set_direction(LANG_AMP_SD_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_level(LANG_AMP_SD_GPIO, 0);
     ESP_LOGI(TAG, "Amp SD pin GPIO%d configured (amp off)", LANG_AMP_SD_GPIO);
 #endif
 
-    /* Increase drive strength on I2S clock/data GPIOs for cleaner edges. */
+    /* Increase drive strength on I2S clock GPIOs for cleaner edges */
     gpio_set_drive_capability(LANG_I2S_BCLK,  GPIO_DRIVE_CAP_3);
     gpio_set_drive_capability(LANG_I2S_LRCLK, GPIO_DRIVE_CAP_3);
     gpio_set_drive_capability(LANG_I2S_DOUT,  GPIO_DRIVE_CAP_3);
@@ -601,67 +694,141 @@ esp_err_t i2s_audio_test_tone(void)
 esp_err_t i2s_audio_rx_restart(void)
 {
     if (!s_rx_handle) return ESP_ERR_INVALID_STATE;
-    ESP_LOGI(TAG, "Restarting I2S RX channel");
+    ESP_LOGI(TAG, "Restarting I2S RX channel (I2S_NUM_1)");
     i2s_channel_disable(s_rx_handle);
     esp_err_t ret = i2s_channel_enable(s_rx_handle);
     s_rx_enabled = (ret == ESP_OK);
+    s_rx_restart_count = 0;
+    s_rx_consec_fails  = 0;
     return ret;
+}
+
+void i2s_audio_diag(void)
+{
+    printf("\n=== I2S DIAGNOSTIC (simplex: TX=I2S0 master, RX=I2S1 slave) ===\n");
+    printf("Handles: TX=%p RX=%p  rx_enabled=%d\n",
+           (void *)s_tx_handle, (void *)s_rx_handle, s_rx_enabled);
+    printf("Config:  rate=%lu bits=%lu  playback_active=%d\n",
+           (unsigned long)s_current_sample_rate, (unsigned long)s_current_bits,
+           s_playback_active);
+
+    if (!s_rx_handle) {
+        printf("ERROR: RX handle is NULL — i2s_audio_init failed\n");
+        return;
+    }
+
+    /* Raw DMA read — 1024 bytes, 3-second timeout, bypasses i2s_audio_read() */
+    uint8_t raw[1024];
+    size_t got = 0;
+    printf("Raw i2s_channel_read(1024 bytes, 3s timeout)...\n");
+    esp_err_t ret = i2s_channel_read(s_rx_handle, raw, sizeof(raw), &got, pdMS_TO_TICKS(3000));
+    printf("Result: %s, got=%u bytes\n", esp_err_to_name(ret), (unsigned)got);
+
+    if (ret == ESP_OK && got > 0) {
+        printf("Hex dump [0..64]:\n");
+        for (size_t i = 0; i < got && i < 64; i++) {
+            printf("%02x ", raw[i]);
+            if ((i & 15) == 15) printf("\n");
+        }
+        printf("\n");
+
+        int16_t *s16 = (int16_t *)raw;
+        size_t n16 = got / 2;
+        printf("As int16[0..%u]: ", (unsigned)(n16 < 16 ? n16 : 16));
+        for (size_t i = 0; i < n16 && i < 16; i++) {
+            printf("%d ", s16[i]);
+        }
+        printf("\n");
+
+        bool all_zero = true;
+        for (size_t i = 0; i < got; i++) {
+            if (raw[i] != 0) { all_zero = false; break; }
+        }
+        if (all_zero) {
+            printf("WARNING: All bytes are zero — INMP441 SD line may not be connected\n");
+        }
+    }
+
+    printf("\n=== WIRING CHECKLIST ===\n");
+    printf("  1. INMP441 VDD → 3.3V:  expect 3.2-3.4V\n");
+    printf("  2. INMP441 GND → GND:   expect continuity\n");
+    printf("  3. INMP441 L/R → GND:   left channel select\n");
+    printf("  4. INMP441 SCK → GPIO%d: expect ~1.6V avg\n", LANG_I2S_BCLK);
+    printf("  5. INMP441 WS  → GPIO%d: expect ~1.6V avg\n", LANG_I2S_LRCLK);
+    printf("  6. INMP441 SD  → GPIO%d: expect ~1.0-1.8V avg\n", LANG_I2S_DIN);
+    printf("======================\n\n");
 }
 
 esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint32_t timeout_ms)
 {
     if (!s_rx_handle || !s_rx_enabled) {
-        ESP_LOGE(TAG, "I2S RX not ready — call i2s_audio_init() first");
+        if (bytes_read) *bytes_read = 0;
         return ESP_ERR_INVALID_STATE;
     }
     if (!buf || buf_size == 0 || !bytes_read) return ESP_ERR_INVALID_ARG;
 
-    /* RX reads 32-bit samples (INMP441: 24-bit in 32-bit slot).
-     * Callers expect 16-bit PCM.  raw_size = buf_size * 4. */
-    size_t raw_size = buf_size * 4;
+    /* During playback at a different sample rate, RX clocks are wrong
+     * (BCLK/WS shared physically).  Return immediately so callers
+     * (wake word feed) don't get garbage. */
+    if (s_playback_active && s_current_sample_rate != LANG_MIC_SAMPLE_RATE) {
+        *bytes_read = 0;
+        return ESP_ERR_INVALID_STATE;
+    }
 
-    uint8_t *raw_buf = malloc(raw_size);
-    if (!raw_buf) return ESP_ERR_NO_MEM;
+    /* RX data_bit_width=32, slot_bit_width=32 (matches INMP441 wire format).
+     * DMA delivers 32-bit words.  Each word: upper 16 = sample, lower 16 = 0.
+     *
+     * ESP32-S3 I2S slave RX DMA only fills the ring buffer once after
+     * i2s_channel_enable.  Subsequent reads timeout because DMA doesn't
+     * cycle.  Workaround: disable+enable RX before each read to restart
+     * DMA.  This matches what mic_diag does (which always succeeds).
+     * After enable, delay so DMA fills ≥1 descriptor before reading.
+     * At 16kHz × 4 bytes (32-bit mono), 1920-byte descriptor fills in
+     * 30ms.  We use the FreeRTOS tick delay (10ms granularity at 100Hz).
+     * A 30ms delay lets ~1 descriptor fill; combined with 200ms read
+     * timeout this gives reliable reads. */
+    i2s_channel_disable(s_rx_handle);
+    i2s_channel_enable(s_rx_handle);
+    vTaskDelay(pdMS_TO_TICKS(30));
 
     size_t raw_read = 0;
-    esp_err_t ret = i2s_channel_read(s_rx_handle, raw_buf, raw_size,
+    esp_err_t ret = i2s_channel_read(s_rx_handle, buf, buf_size,
                                       &raw_read, pdMS_TO_TICKS(timeout_ms));
-    if (ret != ESP_OK) {
-        static int s_read_err_count = 0;
-        s_read_err_count++;
-        if (s_read_err_count <= 3 || (s_read_err_count % 50000 == 0)) {
-            ESP_LOGW(TAG, "i2s_channel_read error: %s (#%d, rx_en=%d)",
-                     esp_err_to_name(ret), s_read_err_count, s_rx_enabled);
+
+    if (ret == ESP_OK) {
+        s_rx_consec_fails = 0;
+    } else {
+        if (ret == ESP_ERR_TIMEOUT) {
+            s_rx_consec_fails++;
+            if (s_rx_consec_fails <= 3 || (s_rx_consec_fails % 500 == 0)) {
+                ESP_LOGW(TAG, "RX read timeout (consec=%d)", s_rx_consec_fails);
+            }
         }
-        free(raw_buf);
         *bytes_read = 0;
         return ret;
     }
 
-    size_t n_raw = raw_read / 4;
-    int32_t *src = (int32_t *)raw_buf;
-    int16_t *dst = (int16_t *)buf;
+    if (raw_read == 0) {
+        *bytes_read = 0;
+        return ESP_ERR_TIMEOUT;
+    }
 
-    /* One-time diagnostic: dump first 8 raw 32-bit samples */
+    /* Extract upper 16 bits from each 32-bit DMA word (in-place).
+     * Hex dump: 00 00 xx xx → int16[0]=pad, int16[1]=sample */
+    size_t n_words = raw_read / 4;
+    int16_t *s16 = (int16_t *)buf;
+
     static bool s_dump_done = false;
-    if (!s_dump_done && n_raw >= 8) {
-        ESP_LOGI(TAG, "RX raw 32-bit [0..7]: 0x%08lx 0x%08lx 0x%08lx 0x%08lx "
-                 "0x%08lx 0x%08lx 0x%08lx 0x%08lx",
-                 (unsigned long)(uint32_t)src[0], (unsigned long)(uint32_t)src[1],
-                 (unsigned long)(uint32_t)src[2], (unsigned long)(uint32_t)src[3],
-                 (unsigned long)(uint32_t)src[4], (unsigned long)(uint32_t)src[5],
-                 (unsigned long)(uint32_t)src[6], (unsigned long)(uint32_t)src[7]);
+    if (!s_dump_done && n_words >= 4) {
+        ESP_LOGI(TAG, "RX raw int16 pairs: [%d,%d] [%d,%d] [%d,%d] [%d,%d]",
+                 s16[0], s16[1], s16[2], s16[3], s16[4], s16[5], s16[6], s16[7]);
         s_dump_done = true;
     }
 
-    /* Extract left channel (even-indexed 32-bit samples) → 16-bit output.
-     * INMP441 with L/R=GND puts mic data in left slot (Philips format). */
-    size_t out_idx = 0;
-    for (size_t i = 0; i + 1 < n_raw; i += 2) {
-        dst[out_idx++] = (int16_t)(src[i] >> 16);
+    for (size_t i = 0; i < n_words; i++) {
+        s16[i] = s16[i * 2 + 1];
     }
-    *bytes_read = out_idx * 2;
+    *bytes_read = n_words * 2;
 
-    free(raw_buf);
     return ESP_OK;
 }

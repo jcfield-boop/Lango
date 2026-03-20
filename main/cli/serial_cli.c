@@ -924,12 +924,24 @@ static int cmd_tg_allowlist(int argc, char **argv)
     return 0;
 }
 
+/* mic_diag — I2S RX diagnostics: register dump, raw DMA read, wiring guide */
+static int cmd_mic_diag(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    bool ww_active = wake_word_is_running();
+    if (ww_active) { wake_word_suspend(); vTaskDelay(pdMS_TO_TICKS(100)); }
+    i2s_audio_diag();
+    if (ww_active) wake_word_resume();
+    return 0;
+}
+
 /* mic_test — read I2S mic samples and report levels */
 static int cmd_mic_test(int argc, char **argv)
 {
     (void)argc; (void)argv;
     bool ww_active = wake_word_is_running();
-    if (ww_active) { wake_word_suspend(); vTaskDelay(pdMS_TO_TICKS(50)); }
+    if (ww_active) { wake_word_suspend(); vTaskDelay(pdMS_TO_TICKS(100)); }
+    i2s_audio_rx_restart();
     printf("Reading mic (GPIO %d) for 2 seconds...\n", LANG_I2S_DIN);
 
     uint8_t *buf = malloc(1024);
@@ -1678,6 +1690,14 @@ esp_err_t serial_cli_init(void)
         .argtable = &notify_server_args,
     };
     esp_console_cmd_register(&notify_server_cmd);
+
+    /* mic_diag */
+    esp_console_cmd_t mic_diag_cmd = {
+        .command = "mic_diag",
+        .help    = "I2S RX diagnostics: registers, raw DMA read, wiring checklist",
+        .func    = &cmd_mic_diag,
+    };
+    esp_console_cmd_register(&mic_diag_cmd);
 
     /* mic_test */
     esp_console_cmd_t mic_test_cmd = {

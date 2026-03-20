@@ -3,7 +3,7 @@
     {
       "id": "brfng001",
       "name": "Daily Morning Briefing",
-      "enabled": true,
+      "enabled": false,
       "kind": "every",
       "interval_s": 86400,
       "next_run": 1773237900,
@@ -16,7 +16,7 @@
     {
       "id": "surf0002",
       "name": "Saturday Surf Check",
-      "enabled": true,
+      "enabled": false,
       "kind": "every",
       "interval_s": 604800,
       "next_run": 1773453600,
@@ -29,7 +29,7 @@
     {
       "id": "wire0003",
       "name": "Monday Wirecutter Deals",
-      "enabled": true,
+      "enabled": false,
       "kind": "every",
       "interval_s": 604800,
       "next_run": 1773684000,
@@ -42,7 +42,7 @@
     {
       "id": "wknd0004",
       "name": "Friday Weekend Planner",
-      "enabled": true,
+      "enabled": false,
       "kind": "every",
       "interval_s": 604800,
       "next_run": 1773446441,
@@ -55,7 +55,7 @@
     {
       "id": "armnw005",
       "name": "Sunday ARM Ecosystem News",
-      "enabled": true,
+      "enabled": false,
       "kind": "every",
       "interval_s": 604800,
       "next_run": 1773586841,
@@ -68,7 +68,7 @@
     {
       "id": "148f0222",
       "name": "France Trip Prep Reminder",
-      "enabled": true,
+      "enabled": false,
       "kind": "at",
       "at_epoch": 1780930000,
       "next_run": 1780930000,
@@ -81,7 +81,7 @@
     {
       "id": "cmpct006",
       "name": "Weekly Memory Compaction",
-      "enabled": true,
+      "enabled": false,
       "kind": "every",
       "interval_s": 604800,
       "next_run": 1773644400,

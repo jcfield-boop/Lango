@@ -69,6 +69,14 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 7. If `LANG_I2S_AUDIO_ENABLED`: WAV is played immediately via MAX98357A on GPIO 3/4/6
 8. `{"type":"message","tts_id":"<8hex>"}` sent to browser → browser fetches `GET /tts/<id>`
 
+### I2S Bus Architecture
+
+Simplex mode: TX on I2S_NUM_0 (master), RX on I2S_NUM_1 (slave). BCLK/WS shared physically on GPIO 3/4. Full-duplex `sig_loopback` mode caused permanent RX DMA stalls on ESP32-S3 — simplex avoids this entirely.
+
+- **TX (I2S_NUM_0, master)**: drives BCLK/WS, feeds MAX98357A speaker via DOUT (GPIO 6). Silence pump task keeps BCLK alive when no audio is playing.
+- **RX (I2S_NUM_1, slave)**: reads BCLK/WS as inputs, captures INMP441 mic via DIN (GPIO 5). `data_bit_width=32` matches INMP441's 24-bit-in-32-bit-slot format.
+- **DMA workaround**: slave RX DMA only fills the ring buffer once after `i2s_channel_enable`. Each `i2s_audio_read()` call does disable+enable+30ms delay to restart DMA before reading.
+
 ## Configuration & Secrets
 
 ### Hierarchy (highest → lowest priority)
@@ -187,7 +195,7 @@ L/R  → GND  (left channel)
 | `main/audio/audio_pipeline.c` | PSRAM ring buffer + STT task coordination |
 | `main/audio/stt_client.c` | Groq Whisper multipart POST |
 | `main/audio/tts_client.c` | Groq PlayAI POST + PSRAM cache; local I2S playback |
-| `main/audio/i2s_audio.c` | I2S driver init + WAV playback via MAX98357A |
+| `main/audio/i2s_audio.c` | I2S driver: simplex TX (I2S0 master) + RX (I2S1 slave) + WAV playback |
 | `main/telegram/telegram_bot.c` | Long-poll Telegram bot |
 | `main/bus/message_bus.c` | FreeRTOS inbound/outbound queues |
 | `main/memory/psram_alloc.h` | PSRAM/SRAM allocation wrappers |
