@@ -202,7 +202,12 @@ esp_err_t stt_transcribe(const uint8_t *audio, size_t audio_len,
     }
 
     ESP_LOGI(TAG, "STT POST: %u audio bytes → %u multipart body", (unsigned)audio_len, (unsigned)body_len);
-    ws_server_broadcast_monitor_verbose("stt", "Groq Whisper");
+    {
+        char stt_info[80];
+        snprintf(stt_info, sizeof(stt_info), "Sending %.1fs audio (%uKB) to Groq Whisper",
+                 (float)audio_len / (LANG_MIC_SAMPLE_RATE * 2), (unsigned)(audio_len / 1024));
+        ws_server_broadcast_monitor_verbose("stt", stt_info);
+    }
 
     /* Response buffer — small initial alloc (JSON response is tiny) */
     resp_buf_t rb = { .data = ps_malloc(2048), .len = 0, .cap = 2048, .oom = false };
@@ -230,7 +235,7 @@ esp_err_t stt_transcribe(const uint8_t *audio, size_t audio_len,
         return ESP_FAIL;
     }
 
-    /* Point session at this call's response buffer */
+    /* Point session at this call's response buffer and configure request */
     http_session_set_ctx(&s_session, &rb);
 
     esp_http_client_set_method(s_session.handle, HTTP_METHOD_POST);
@@ -238,8 +243,28 @@ esp_err_t stt_transcribe(const uint8_t *audio, size_t audio_len,
     esp_http_client_set_header(s_session.handle, "Content-Type", ct);
     esp_http_client_set_post_field(s_session.handle, (const char *)body, (int)body_len);
 
-    esp_err_t ret = http_session_perform(&s_session);  /* auto-retry on drop */
-    int status    = esp_http_client_get_status_code(s_session.handle);
+    esp_err_t ret = esp_http_client_perform(s_session.handle);
+
+    /* If connection was stale, reset session and retry with headers re-applied.
+     * http_session_reset() creates a fresh handle — old headers/body are lost. */
+    if (ret == ESP_ERR_HTTP_CONNECT || ret == ESP_ERR_HTTP_CONNECTION_CLOSED) {
+        ESP_LOGW(TAG, "STT connection lost (%s), resetting and retrying", esp_err_to_name(ret));
+        ws_server_broadcast_monitor_verbose("stt", "Connection lost, retrying...");
+        http_session_reset(&s_session);
+        if (s_session.valid) {
+            /* Re-apply all request params on the fresh handle */
+            http_session_set_ctx(&s_session, &rb);
+            esp_http_client_set_method(s_session.handle, HTTP_METHOD_POST);
+            esp_http_client_set_header(s_session.handle, "Authorization", auth);
+            esp_http_client_set_header(s_session.handle, "Content-Type", ct);
+            esp_http_client_set_post_field(s_session.handle, (const char *)body, (int)body_len);
+            rb.len = 0;  /* reset response buffer for retry */
+            if (rb.data) rb.data[0] = '\0';
+            ret = esp_http_client_perform(s_session.handle);
+        }
+    }
+
+    int status = esp_http_client_get_status_code(s_session.handle);
     /* Do NOT cleanup — keep handle alive for TLS session reuse */
     free(body);
 
@@ -274,6 +299,13 @@ esp_err_t stt_transcribe(const uint8_t *audio, size_t audio_len,
         if (cJSON_IsString(text_item) && text_item->valuestring[0]) {
             strncpy(out->text, text_item->valuestring, sizeof(out->text) - 1);
             result = ESP_OK;
+            /* Verbose log: show what Groq heard */
+            {
+                char stt_out[160];
+                snprintf(stt_out, sizeof(stt_out), "Transcribed: \"%.140s\"",
+                         text_item->valuestring);
+                ws_server_broadcast_monitor_verbose("stt", stt_out);
+            }
         } else {
             strncpy(out->error, "Empty transcription result", sizeof(out->error) - 1);
         }

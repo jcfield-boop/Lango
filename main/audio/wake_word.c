@@ -249,7 +249,7 @@ static void feed_task(void *arg)
                      feed_count, fail_count,
                      (int)min_val, (int)peak_val, dc_offset,
                      (double)s_sw_gain);
-            ws_server_broadcast_monitor_verbose("ww_feed", diag);
+            /* ww_feed diag kept in ESP_LOGD only — too noisy for web UI */
             feed_count = 0;
             fail_count = 0;
             peak_val   = 0;
@@ -356,7 +356,7 @@ static void detect_task(void *arg)
                          detect_count, speech_frames,
                          (int)res->wakeup_state, (int)recording,
                          res->data_volume);
-                ws_server_broadcast_monitor_verbose("ww_detect", diag);
+                /* ww_detect diag kept in ESP_LOGD only — too noisy for web UI */
                 detect_count     = 0;
                 speech_frames    = 0;
                 last_detect_diag = now_d;
