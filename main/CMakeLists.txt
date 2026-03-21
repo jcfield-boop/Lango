@@ -54,6 +54,8 @@ idf_component_register(
         "camera/uvc_camera.c"
         "tools/tool_capture_image.c"
         "led/led_indicator.c"
+        "display/ssd1306.c"
+        "display/oled_display.c"
         "config/services_config.c"
         "config/services_parser.c"
         "diag/log_buffer.c"

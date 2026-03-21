@@ -13,6 +13,7 @@
 #include "audio/i2s_audio.h"
 #include "telegram/telegram_bot.h"
 #include "led/led_indicator.h"
+#include "display/oled_display.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -712,6 +713,9 @@ static void agent_loop_task(void *arg)
                     *dst = '\0';
                     tts_text = cleaned;
                 }
+                /* Push response preview to OLED display */
+                oled_display_set_message(tts_text ? tts_text : final_text);
+
                 esp_err_t tts_err = tts_generate(tts_text, tts_id);
 
                 /* Only include image URL if a capture actually succeeded (file exists) */

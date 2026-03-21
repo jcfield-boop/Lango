@@ -141,9 +141,16 @@
 #define LANG_MIC_STACK_SIZE      12288  /* 12KB: UAC ctrl xfers need headroom, 8KB caused StoreProhibited */
 #define LANG_MIC_TASK_PRIO          5
 
-/* I2C bus (camera SCCB + future PCA9685 servos) */
-#define LANG_I2C_SDA      9
-#define LANG_I2C_SCL     10
+/* I2C bus (OLED display + BME280 sensor + future peripherals) */
+#define LANG_I2C_SDA        9
+#define LANG_I2C_SCL       10
+#define LANG_I2C_FREQ_HZ   400000   /* 400 kHz fast mode */
+
+/* SSD1306 OLED display */
+#define LANG_OLED_ADDR      0x3C    /* default I2C address */
+#define LANG_OLED_WIDTH     128
+#define LANG_OLED_HEIGHT    64
+#define LANG_OLED_ENABLED   1
 
 /* Enable local speaker playback via MAX98357A after TTS generation */
 #define LANG_I2S_AUDIO_ENABLED  1

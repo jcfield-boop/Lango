@@ -42,8 +42,10 @@
 #include "audio/uac_microphone.h"
 #include "camera/uvc_camera.h"
 #include "led/led_indicator.h"
+#include "display/oled_display.h"
 #include "config/services_config.h"
 #include "diag/log_buffer.h"
+#include "driver/i2c_master.h"
 #include "mdns.h"
 #include "esp_ota_ops.h"
 
@@ -312,6 +314,32 @@ void app_main(void)
 
     /* LED: init early so it shows booting state immediately */
     led_indicator_init();
+
+    /* I2C bus + OLED display: init early for boot status visibility */
+#if LANG_OLED_ENABLED
+    {
+        i2c_master_bus_config_t i2c_cfg = {
+            .i2c_port     = I2C_NUM_0,
+            .sda_io_num   = LANG_I2C_SDA,
+            .scl_io_num   = LANG_I2C_SCL,
+            .clk_source   = I2C_CLK_SRC_DEFAULT,
+            .glitch_ignore_cnt = 7,
+            .flags.enable_internal_pullup = true,
+        };
+        i2c_master_bus_handle_t i2c_bus = NULL;
+        esp_err_t i2c_ret = i2c_new_master_bus(&i2c_cfg, &i2c_bus);
+        if (i2c_ret == ESP_OK) {
+            ESP_LOGI(TAG, "I2C bus ready (SDA=%d, SCL=%d)", LANG_I2C_SDA, LANG_I2C_SCL);
+            esp_err_t oled_ret = oled_display_init(i2c_bus);
+            if (oled_ret != ESP_OK) {
+                ESP_LOGW(TAG, "OLED display init failed: %s (continuing without display)",
+                         esp_err_to_name(oled_ret));
+            }
+        } else {
+            ESP_LOGW(TAG, "I2C bus init failed: %s (OLED disabled)", esp_err_to_name(i2c_ret));
+        }
+    }
+#endif
 
     /* Log ring buffer: captures ESP_LOG output for remote retrieval via /api/logs */
     log_buffer_init();
