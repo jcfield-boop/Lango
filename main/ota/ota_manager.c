@@ -3,6 +3,7 @@
 #include "gateway/ws_server.h"
 #include "led/led_indicator.h"
 #include "agent/agent_loop.h"
+#include "audio/wake_word.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -110,6 +111,10 @@ esp_err_t ota_update_from_url(const char *url)
     led_indicator_set(LED_OTA);
     status_set(OTA_STATE_DOWNLOADING, 0, NULL, NULL);
 
+    /* Suspend wake word feed task — it competes for Core 0 CPU and SPI bus
+     * during flash erase/write cycles, causing progressive OTA slowdown. */
+    wake_word_suspend();
+
     esp_http_client_config_t http_cfg = {
         .url                   = url,
         .timeout_ms            = 120000,
@@ -133,6 +138,7 @@ esp_err_t ota_update_from_url(const char *url)
         ws_server_broadcast_monitor("ota", msg);
         status_set(OTA_STATE_ERROR, 0, NULL, msg);
         led_indicator_set(LED_ERROR);
+        wake_word_resume();
         return ret;
     }
 
@@ -147,6 +153,7 @@ esp_err_t ota_update_from_url(const char *url)
         esp_https_ota_abort(ota_handle);
         status_set(OTA_STATE_ERROR, 0, NULL, msg);
         led_indicator_set(LED_ERROR);
+        wake_word_resume();
         return ret;
     }
     {
@@ -202,6 +209,10 @@ esp_err_t ota_update_from_url(const char *url)
             s_status.progress_pct = (uint8_t)pct;
             portEXIT_CRITICAL(&s_status_mux);
         }
+
+        /* Yield to WiFi/lwIP task on Core 0 — without this the tight
+         * perform loop can starve networking and cause download stalls. */
+        vTaskDelay(1);
     }
     if (ret != ESP_OK) {
         char msg[80];
@@ -211,6 +222,7 @@ esp_err_t ota_update_from_url(const char *url)
         esp_https_ota_abort(ota_handle);
         status_set(OTA_STATE_ERROR, 0, NULL, msg);
         led_indicator_set(LED_ERROR);
+        wake_word_resume();
         return ret;
     }
 

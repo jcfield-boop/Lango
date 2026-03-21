@@ -93,11 +93,12 @@ MAX_WAIT=$((BINARY_SIZE / 50000 + 50))   # rough: ~50 KB/s + agent wait + margin
 echo "==> Polling OTA status (up to ${MAX_WAIT}s)..."
 
 REBOOTING=0
-for i in $(seq 1 $((MAX_WAIT / 2))); do
-    STATUS=$(curl -sk --connect-timeout 3 "https://$DEVICE_HOST/api/ota/status" \
-        | python3 -c "import sys,json; print(json.load(sys.stdin).get('state','?'))" 2>/dev/null || echo "unreachable")
-    PCT=$(curl -sk --connect-timeout 3 "https://$DEVICE_HOST/api/ota/status" \
-        | python3 -c "import sys,json; print(json.load(sys.stdin).get('progress_pct',0))" 2>/dev/null || echo "0")
+for i in $(seq 1 $((MAX_WAIT / 4))); do
+    # Single request per poll — avoid duplicate TLS handshakes that steal
+    # CPU from the OTA download on the ESP32's Core 0.
+    POLL_JSON=$(curl -sk --connect-timeout 3 "https://$DEVICE_HOST/api/ota/status" 2>/dev/null || echo '{}')
+    STATUS=$(echo "$POLL_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('state','?'))" 2>/dev/null || echo "unreachable")
+    PCT=$(echo "$POLL_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('progress_pct',0))" 2>/dev/null || echo "0")
     printf "\r    status=%-12s pct=%3s%%  " "$STATUS" "$PCT"
     if [ "$STATUS" = "rebooting" ]; then
         REBOOTING=1
@@ -106,13 +107,13 @@ for i in $(seq 1 $((MAX_WAIT / 2))); do
         break
     fi
     if [ "$STATUS" = "error" ]; then
-        ERR=$(curl -sk --connect-timeout 3 "https://$DEVICE_HOST/api/ota/status" \
+        ERR=$(echo "$POLL_JSON" \
             | python3 -c "import sys,json; print(json.load(sys.stdin).get('error_msg','unknown'))" 2>/dev/null || echo "unknown")
         echo ""
         echo "ERROR: OTA failed on device: $ERR" >&2
         exit 1
     fi
-    sleep 2
+    sleep 4
 done
 echo ""
 
