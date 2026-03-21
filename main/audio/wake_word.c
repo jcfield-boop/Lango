@@ -54,7 +54,7 @@ static const char *TAG = "wake_word";
 
 /* Default tuning values (can be overridden via NVS) */
 #define WW_DEFAULT_GAIN       3.0f
-#define WW_DEFAULT_THRESHOLD  0.5f
+#define WW_DEFAULT_THRESHOLD  0.85f
 #define WW_AFE_GAIN           1.0f   /* AFE's own gain — keep at 1.0, we apply software gain */
 
 /* NVS namespace and keys for persistent wake word config */

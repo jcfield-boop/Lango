@@ -1,5 +1,6 @@
 #include "i2s_audio.h"
 #include "langoustine_config.h"
+#include "audio/wake_word.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -478,6 +479,10 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
             return ESP_ERR_INVALID_ARG;
     }
 
+    /* Suspend wake word during playback — speaker output feeds back into
+     * the INMP441 mic and can trigger false "Hi ESP" detections. */
+    wake_word_suspend();
+
     /* Take over TX from silence pump */
     s_playback_active = true;
 
@@ -570,6 +575,9 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
 
     /* Release TX back to silence pump */
     s_playback_active = false;
+
+    /* Resume wake word detection now that speaker is silent */
+    wake_word_resume();
 
     ESP_LOGI(TAG, "Playback complete");
     return ESP_OK;
