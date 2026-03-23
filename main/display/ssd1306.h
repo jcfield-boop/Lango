@@ -43,3 +43,6 @@ void ssd1306_hline(int x, int y, int w, bool on);
 
 /** Set display contrast (0-255). */
 esp_err_t ssd1306_set_contrast(uint8_t val);
+
+/** Fill entire screen white for visual test — call after init. */
+esp_err_t ssd1306_test_pattern(void);

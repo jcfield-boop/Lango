@@ -19,3 +19,12 @@ esp_err_t agent_loop_start(void);
  * Safe to call from any task — uses atomic load.
  */
 bool agent_loop_is_busy(void);
+
+/** Set LLM API rate limit (max requests per hour). */
+void agent_set_rate_limit(int max_per_hour);
+
+/** Get current rate limit setting (requests per hour). */
+int agent_get_rate_limit(void);
+
+/** Get number of LLM requests in current rate window. */
+int agent_get_rate_count(void);

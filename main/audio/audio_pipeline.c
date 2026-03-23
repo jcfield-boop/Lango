@@ -30,6 +30,8 @@ typedef struct {
 static audio_ring_t s_ring = {0};
 static TaskHandle_t s_stt_task_handle = NULL;
 
+#include "audio/opus_encode.h"
+
 /* ── Rate limiting ───────────────────────────────────────────── */
 
 static int64_t s_last_stt_req_us = 0;
@@ -80,8 +82,43 @@ static void audio_stt_task(void *arg)
 
         ws_server_send_status(chat_id, "stt_processing");
 
+        /* For local mic audio (WAV), compress to Opus/OGG before STT upload.
+         * This reduces upload size by ~10-15x (e.g. 160KB WAV → 12KB OGG).
+         * Browser audio is already WebM/Opus — skip encoding for that path. */
+        uint8_t *stt_buf = s_ring.buf;
+        size_t   stt_len = audio_len;
+        char     stt_mime[64];
+        strncpy(stt_mime, mime, sizeof(stt_mime) - 1);
+        stt_mime[sizeof(stt_mime) - 1] = '\0';
+        uint8_t *opus_buf = NULL;
+
+        if (strcmp(mime, "audio/wav") == 0 && audio_len > 44) {
+            /* WAV: skip 44-byte header to get raw PCM */
+            const int16_t *pcm = (const int16_t *)(s_ring.buf + 44);
+            size_t pcm_bytes = audio_len - 44;
+            size_t opus_size = 0;
+
+            esp_err_t enc_ret = opus_encode_pcm_to_ogg(pcm, pcm_bytes,
+                                                        LANG_MIC_SAMPLE_RATE,
+                                                        &opus_buf, &opus_size);
+            if (enc_ret == ESP_OK && opus_buf && opus_size > 0) {
+                stt_buf = opus_buf;
+                stt_len = opus_size;
+                strncpy(stt_mime, "audio/ogg", sizeof(stt_mime) - 1);
+                ESP_LOGI(TAG, "Opus encoding: %u → %u bytes (%.0f%% reduction)",
+                         (unsigned)audio_len, (unsigned)opus_size,
+                         (double)(100.0f - (float)opus_size / audio_len * 100.0f));
+            } else {
+                ESP_LOGW(TAG, "Opus encode failed (%s), sending raw WAV",
+                         esp_err_to_name(enc_ret));
+            }
+        }
+
         stt_result_t result = {0};
-        esp_err_t ret = stt_transcribe(s_ring.buf, audio_len, mime, &result);
+        esp_err_t ret = stt_transcribe(stt_buf, stt_len, stt_mime, &result);
+
+        /* Free Opus buffer if we allocated one */
+        if (opus_buf) free(opus_buf);
 
         if (ret == ESP_OK && result.text[0] != '\0') {
             ESP_LOGI(TAG, "STT result: %s", result.text);

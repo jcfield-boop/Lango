@@ -19,6 +19,9 @@ Talk to it through a browser, a Telegram bot, or a serial terminal. It thinks wi
 | Module | Purpose |
 |--------|---------|
 | USB webcam (UVC + UAC) | Vision input + microphone via USB-A port |
+| SSD1306 OLED (128×64) | Ambient status dashboard — IP, uptime, heap, agent state |
+| MAX98357A + speaker | I2S audio output *(optional — enable with `LANG_I2S_AUDIO_ENABLED`)* |
+| INMP441 microphone | I2S audio input + wake word *(optional — fallback when no UAC mic)* |
 
 ### Voice input options
 
@@ -36,14 +39,16 @@ Talk to it through a browser, a Telegram bot, or a serial terminal. It thinks wi
 | GPIO | Signal | Connected to |
 |------|--------|-------------|
 | 0 | PTT button | BOOT button (active low, built-in pull-up) |
-| 15 | I2S BCLK | MAX98357A BCLK + INMP441 SCK *(not currently wired)* |
-| 16 | I2S LRCLK | MAX98357A LRC + INMP441 WS *(not currently wired)* |
-| 17 | I2S DOUT | MAX98357A DIN (speaker) *(not currently wired)* |
-| 18 | I2S DIN | INMP441 SD (mic) *(not currently wired)* |
+| 3 | I2S BCLK | MAX98357A BCLK + INMP441 SCK (shared bus) |
+| 4 | I2S LRCLK | MAX98357A LRC + INMP441 WS (shared bus) |
+| 5 | I2S DIN (RX) | INMP441 SD (microphone) |
+| 6 | I2S DOUT (TX) | MAX98357A DIN (speaker) |
+| 9 | I2C SDA | SSD1306 OLED + future peripherals |
+| 10 | I2C SCL | SSD1306 OLED + future peripherals |
 | 19 | USB D− | USB OTG host (webcam) |
 | 20 | USB D+ | USB OTG host (webcam) |
 | 38 | LED | WS2812 NeoPixel status indicator |
-| 42 | AMP_SD | MAX98357A shutdown *(not currently wired)* |
+| 42 | AMP_SD | MAX98357A shutdown/enable |
 | 43 | UART0 TX | Serial CLI |
 | 44 | UART0 RX | Serial CLI |
 
@@ -60,28 +65,39 @@ Talk to it through a browser, a Telegram bot, or a serial terminal. It thinks wi
 | White (flash → fade) | Camera capture flash |
 | Red (fast flash) | Error |
 
-### Wiring — MAX98357A (speaker amp) *(not currently wired)*
+### Wiring — SSD1306 OLED (128×64, I2C)
+
+```
+VCC → 3.3 V
+GND → GND
+SDA → GPIO 9
+SCL → GPIO 10
+```
+
+Address auto-detected at boot (0x3C or 0x3D). I2C bus runs at 100 kHz (safe for dupont wires). The display shows IP address, uptime, SRAM/PSRAM free, agent state, and tool calls in real time.
+
+### Wiring — MAX98357A (speaker amp)
 
 ```
 VIN  → 5 V (USB rail — keeps amp peak current off the 3.3 V rail)
 GND  → GND
-DIN  → GPIO 17
-BCLK → GPIO 15
-LRC  → GPIO 16
+DIN  → GPIO 6
+BCLK → GPIO 3
+LRC  → GPIO 4
 SD   → GPIO 42
 GAIN → GND (3 dB; floating = 12 dB)
 ```
 
 Speaker wires: red → + terminal, black → − terminal. **Do not** connect the speaker's − to system GND (bridge-tied output).
 
-### Wiring — INMP441 (microphone) *(not currently wired)*
+### Wiring — INMP441 (microphone)
 
 ```
 VDD → 3.3 V  (max 3.6 V — never 5 V)
 GND → GND
-SD  → GPIO 18
-SCK → GPIO 15 (shared with MAX98357A)
-WS  → GPIO 16 (shared with MAX98357A)
+SD  → GPIO 5
+SCK → GPIO 3 (shared with MAX98357A)
+WS  → GPIO 4 (shared with MAX98357A)
 L/R → GND (left channel)
 ```
 
@@ -99,10 +115,11 @@ Most cheap UVC-compatible webcams work. For PTT mic, the webcam must also expose
 
 | Feature | Details |
 |---------|---------|
-| **LLM** | Claude (Anthropic), OpenAI, or any OpenRouter model — token-by-token streaming to browser; 4096 max output tokens; 64 KB context buffer |
-| **Wake word** | "Hi ESP" via WakeNet9 + AFE — supported in firmware, requires INMP441 (not currently wired) |
-| **STT** | Groq Whisper — browser WebM audio or webcam UAC PCM |
-| **TTS** | Groq PlayAI — WAV cached in PSRAM, served to browser at `/tts/<id>` (local speaker not currently wired) |
+| **LLM** | Claude (Anthropic), OpenAI, OpenRouter, or local Ollama — token-by-token streaming to browser; 4096 max output tokens; 64 KB context buffer |
+| **Wake word** | "Hi ESP" via WakeNet9 + AFE — requires INMP441 mic |
+| **STT** | Groq Whisper — browser WebM audio or webcam UAC PCM; local mic audio Opus-compressed before upload |
+| **TTS** | Groq PlayAI — WAV cached in PSRAM, served to browser at `/tts/<id>`; optional local I2S speaker playback |
+| **OLED display** | SSD1306 128×64 I2C — ambient dashboard showing IP, uptime, heap, agent state, tool calls |
 | **Vision** | USB webcam → MJPEG frame → Claude vision API → spoken description |
 | **Webcam PTT** | Hold BOOT button → speak into webcam mic → release → agent responds |
 | **Telegram** | Long-poll bot — full conversation with the same agent |
@@ -115,6 +132,8 @@ Most cheap UVC-compatible webcams work. For PTT mic, the webcam must also expose
 | **OTA** | Firmware update over WiFi via CLI or HTTP |
 | **mDNS** | Reachable as `langoustine.local` |
 | **Serial CLI** | Full REPL on UART0 (115200 baud) |
+| **Rate limiting** | Configurable LLM API rate limit (default 60/hour); `rate_limit` CLI command |
+| **WiFi onboarding** | Captive portal on first boot (no credentials) — SoftAP with setup page |
 | **Monitor panel** | Real-time event stream (LLM provider/model, tool calls, search provider) |
 
 ### Built-in agent tools
@@ -229,6 +248,28 @@ lango> set_api_key <key>        # sets provider to "anthropic" (default)
 ```
 
 To switch providers, `POST /api/config` with `{"provider":"openai"}` or `{"provider":"openrouter"}`. OpenRouter gives access to hundreds of models with a single key.
+
+### Local model (Ollama)
+
+Run a local LLM on your network for free, zero-latency inference. Add to `/lfs/config/SERVICES.md`:
+
+```markdown
+## Local Model
+base_url: http://192.168.0.25:11434/v1
+api_key: ollama
+model: qwen2.5:14b
+```
+
+Then switch to it:
+
+```
+lango> set_model_provider ollama
+lango> set_model qwen2.5:14b
+```
+
+Or set the URL directly: `lango> set_local_url http://192.168.0.25:11434/v1`
+
+The Ollama provider uses the OpenAI-compatible `/v1/chat/completions` endpoint over plain HTTP (no TLS overhead). Any model served by Ollama works — tool calling support depends on the model.
 
 ---
 
@@ -428,6 +469,7 @@ Edit `SOUL.md` to change personality. Edit `USER.md` to set your name and timezo
 | Tavily *(optional)* | Web search tool | [tavily.com](https://tavily.com) |
 | Brave Search *(optional)* | Web search tool (alternative) | [brave.com/search/api](https://brave.com/search/api/) |
 | OpenRouter *(optional)* | Alternative LLM provider | [openrouter.ai](https://openrouter.ai) |
+| Ollama *(optional)* | Free local LLM inference | [ollama.com](https://ollama.com) |
 
 Groq offers a generous free tier that covers typical personal-assistant usage.
 The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a Brave key — the provider is detected automatically from the key prefix.
@@ -435,6 +477,15 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 ---
 
 ## Changelog
+
+### 2026-03-23 — OLED display, Ollama, Opus encoding, rate limiting, WiFi onboarding
+- **SSD1306 OLED display** — 128×64 I2C dashboard showing IP, uptime, heap stats, agent state, and active tool calls. Auto-probes 0x3C/0x3D at boot; I2C bus scan logged. White test pattern on first init. Auto-clears stale messages after 30s.
+- **Local LLM via Ollama** — New `ollama` provider for free, local inference. Configure base URL in SERVICES.md `## Local Model` section. Uses OpenAI-compatible `/v1/chat/completions` over plain HTTP (no TLS). CLI: `set_model_provider ollama`, `set_local_url <url>`.
+- **Opus encoding for local mic** — WAV audio from INMP441/UAC mic compressed to Opus/OGG before STT upload (~10–15× size reduction). Browser WebM/Opus audio passed through as-is.
+- **LLM rate limiting** — 60 requests/hour default (configurable via `rate_limit` CLI command). System channel messages (cron, heartbeat) exempt. Returns user-facing message when limit reached.
+- **WiFi onboarding captive portal** — On first boot with no stored credentials, starts a SoftAP "Langoustine-XXXX" with a web form for WiFi SSID/password, API key, and Telegram token. Saves to NVS and reboots.
+- **I2C bus scan** — Full 7-bit address scan at boot with diagnostic logging; results written to `/lfs/i2c_diag.txt`.
+- **I2C clock reduced** — 400 kHz → 100 kHz (safer with dupont jumper wires).
 
 ### 2026-03-16 — Hardening: naming cleanup, auth guards, shared SERVICES.md parser
 - **`main/bus/message_bus.h`** — Renamed `mimi_msg_t` → `lang_msg_t` and `MIMI_CHAN_*` → `LANG_CHAN_*` across the entire codebase (compat aliases retained in `langoustine_config.h`).

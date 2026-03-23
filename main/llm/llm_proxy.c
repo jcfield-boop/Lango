@@ -25,6 +25,10 @@ static char s_api_key[LLM_API_KEY_MAX_LEN] = {0};
 static char s_model[LLM_MODEL_MAX_LEN] = MIMI_LLM_DEFAULT_MODEL;
 static char s_provider[16] = MIMI_LLM_PROVIDER_DEFAULT;
 
+/* Local/Ollama model: full base URL e.g. "http://192.168.0.25:11434/v1" */
+#define LLM_LOCAL_URL_MAX 128
+static char s_local_url[LLM_LOCAL_URL_MAX] = {0};
+
 static uint32_t s_total_input_tokens    = 0;
 static uint32_t s_total_output_tokens   = 0;
 static uint32_t s_total_cost_millicents = 0;
@@ -156,14 +160,34 @@ static bool provider_is_openrouter(void)
     return strcmp(s_provider, "openrouter") == 0;
 }
 
+static bool provider_is_ollama(void)
+{
+    return strcmp(s_provider, "ollama") == 0;
+}
+
 /* Returns true for any provider that uses OpenAI-compatible message/tool format */
 static bool provider_uses_openai_format(void)
 {
-    return provider_is_openai() || provider_is_openrouter();
+    return provider_is_openai() || provider_is_openrouter() || provider_is_ollama();
+}
+
+/* Returns true when the target is plain HTTP (no TLS) — e.g. local Ollama */
+static bool provider_is_plaintext(void)
+{
+    if (provider_is_ollama() && s_local_url[0]) {
+        return strncmp(s_local_url, "http://", 7) == 0;
+    }
+    return false;
 }
 
 static const char *llm_api_url(void)
 {
+    if (provider_is_ollama() && s_local_url[0]) {
+        /* s_local_url already contains full URL like "http://192.168.0.25:11434/v1" */
+        static char url_buf[LLM_LOCAL_URL_MAX + 32];
+        snprintf(url_buf, sizeof(url_buf), "%s/chat/completions", s_local_url);
+        return url_buf;
+    }
     if (provider_is_openrouter()) return MIMI_OPENROUTER_API_URL;
     if (provider_is_openai())     return MIMI_OPENAI_API_URL;
     return MIMI_LLM_API_URL;
@@ -171,6 +195,19 @@ static const char *llm_api_url(void)
 
 static const char *llm_api_host(void)
 {
+    if (provider_is_ollama() && s_local_url[0]) {
+        /* Extract host from URL like "http://192.168.0.25:11434/v1" */
+        static char host_buf[64];
+        const char *p = s_local_url;
+        if (strncmp(p, "http://", 7) == 0) p += 7;
+        else if (strncmp(p, "https://", 8) == 0) p += 8;
+        const char *end = strchr(p, '/');
+        size_t len = end ? (size_t)(end - p) : strlen(p);
+        if (len >= sizeof(host_buf)) len = sizeof(host_buf) - 1;
+        memcpy(host_buf, p, len);
+        host_buf[len] = '\0';
+        return host_buf;
+    }
     if (provider_is_openrouter()) return "openrouter.ai";
     if (provider_is_openai())     return "api.openai.com";
     return "api.anthropic.com";
@@ -178,6 +215,7 @@ static const char *llm_api_host(void)
 
 static const char *llm_api_path(void)
 {
+    if (provider_is_ollama()) return "/v1/chat/completions";
     if (provider_is_openrouter()) return "/api/v1/chat/completions";
     if (provider_is_openai())     return "/v1/chat/completions";
     return "/v1/messages";
@@ -238,7 +276,7 @@ static esp_err_t llm_http_direct(const char *post_data, resp_buf_t *rb, int *out
         .timeout_ms = 120 * 1000,
         .buffer_size = 4096,
         .buffer_size_tx = 4096,
-        .crt_bundle_attach = esp_crt_bundle_attach,
+        .crt_bundle_attach = provider_is_plaintext() ? NULL : esp_crt_bundle_attach,
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -549,7 +587,7 @@ esp_err_t llm_chat_tools(const char *system_prompt,
 {
     memset(resp, 0, sizeof(*resp));
 
-    if (s_api_key[0] == '\0') return ESP_ERR_INVALID_STATE;
+    if (s_api_key[0] == '\0' && !provider_is_ollama()) return ESP_ERR_INVALID_STATE;
 
     {
         char llm_info[96];
@@ -1278,7 +1316,7 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
     }
 
     memset(resp, 0, sizeof(*resp));
-    if (s_api_key[0] == '\0') return ESP_ERR_INVALID_STATE;
+    if (s_api_key[0] == '\0' && !provider_is_ollama()) return ESP_ERR_INVALID_STATE;
 
     {
         char llm_info[96];
@@ -1353,7 +1391,7 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
         .timeout_ms       = 120 * 1000,
         .buffer_size      = 4096,
         .buffer_size_tx   = 4096,
-        .crt_bundle_attach = esp_crt_bundle_attach,
+        .crt_bundle_attach = provider_is_plaintext() ? NULL : esp_crt_bundle_attach,
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -1450,9 +1488,20 @@ void llm_get_session_stats(uint32_t *in, uint32_t *out, uint32_t *cost_millicent
     if (cost_millicents) *cost_millicents = s_total_cost_millicents;
 }
 
-const char *llm_get_provider(void) { return s_provider; }
+const char *llm_get_provider(void)  { return s_provider; }
 const char *llm_get_model(void)    { return s_model; }
 const char *llm_get_api_key(void)  { return s_api_key; }
+const char *llm_get_local_url(void) { return s_local_url; }
+
+void llm_set_local_url(const char *url)
+{
+    if (url) {
+        safe_copy(s_local_url, sizeof(s_local_url), url);
+        ESP_LOGI(TAG, "Local model URL set to: %s", s_local_url);
+    } else {
+        s_local_url[0] = '\0';
+    }
+}
 
 /* ── NVS helpers ──────────────────────────────────────────────── */
 

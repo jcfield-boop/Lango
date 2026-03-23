@@ -46,6 +46,7 @@
 #include "config/services_config.h"
 #include "diag/log_buffer.h"
 #include "driver/i2c_master.h"
+#include "wifi/wifi_onboard.h"
 #include "mdns.h"
 #include "esp_ota_ops.h"
 
@@ -315,8 +316,16 @@ void app_main(void)
     /* LED: init early so it shows booting state immediately */
     led_indicator_init();
 
+    /* Log ring buffer: init early so I2C scan results are captured */
+    log_buffer_init();
+
     /* I2C bus + OLED display: init early for boot status visibility */
 #if LANG_OLED_ENABLED
+    static i2c_master_bus_handle_t s_i2c_bus = NULL;
+    static uint8_t  s_oled_addr = LANG_OLED_ADDR;
+    static esp_err_t s_i2c_probe_3c = ESP_FAIL;
+    static esp_err_t s_i2c_probe_3d = ESP_FAIL;
+    static esp_err_t s_oled_ret = ESP_FAIL;
     {
         i2c_master_bus_config_t i2c_cfg = {
             .i2c_port     = I2C_NUM_0,
@@ -326,14 +335,42 @@ void app_main(void)
             .glitch_ignore_cnt = 7,
             .flags.enable_internal_pullup = true,
         };
-        i2c_master_bus_handle_t i2c_bus = NULL;
-        esp_err_t i2c_ret = i2c_new_master_bus(&i2c_cfg, &i2c_bus);
+        esp_err_t i2c_ret = i2c_new_master_bus(&i2c_cfg, &s_i2c_bus);
         if (i2c_ret == ESP_OK) {
             ESP_LOGI(TAG, "I2C bus ready (SDA=%d, SCL=%d)", LANG_I2C_SDA, LANG_I2C_SCL);
-            esp_err_t oled_ret = oled_display_init(i2c_bus);
-            if (oled_ret != ESP_OK) {
+
+            /* Full I2C bus scan: check all valid 7-bit addresses (0x08–0x77) */
+            ESP_LOGI(TAG, "I2C bus scan starting...");
+            int found_count = 0;
+            for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+                esp_err_t p = i2c_master_probe(s_i2c_bus, addr, 50);
+                if (p == ESP_OK) {
+                    ESP_LOGW(TAG, "I2C device found at 0x%02X", addr);
+                    found_count++;
+                }
+            }
+            ESP_LOGI(TAG, "I2C bus scan complete: %d device(s) found", found_count);
+
+            s_i2c_probe_3c = i2c_master_probe(s_i2c_bus, 0x3C, 100);
+            s_i2c_probe_3d = i2c_master_probe(s_i2c_bus, 0x3D, 100);
+
+            if (s_i2c_probe_3c == ESP_OK) {
+                s_oled_addr = 0x3C;
+            } else if (s_i2c_probe_3d == ESP_OK) {
+                s_oled_addr = 0x3D;
+            }
+
+            if (s_i2c_probe_3c == ESP_OK || s_i2c_probe_3d == ESP_OK) {
+                s_oled_ret = oled_display_init(s_i2c_bus);
+                ESP_LOGI(TAG, "OLED init (addr 0x%02X): %s",
+                         s_oled_addr, esp_err_to_name(s_oled_ret));
+            } else {
+                ESP_LOGW(TAG, "No OLED found at 0x3C or 0x3D — display disabled");
+            }
+
+            if (s_oled_ret != ESP_OK) {
                 ESP_LOGW(TAG, "OLED display init failed: %s (continuing without display)",
-                         esp_err_to_name(oled_ret));
+                         esp_err_to_name(s_oled_ret));
             }
         } else {
             ESP_LOGW(TAG, "I2C bus init failed: %s (OLED disabled)", esp_err_to_name(i2c_ret));
@@ -341,13 +378,26 @@ void app_main(void)
     }
 #endif
 
-    /* Log ring buffer: captures ESP_LOG output for remote retrieval via /api/logs */
-    log_buffer_init();
-
     ESP_ERROR_CHECK(init_littlefs());
     bootstrap_dirs();
     log_crash_if_needed();  /* Must run after LittleFS mount + dirs exist */
     bootstrap_defaults();
+
+    /* Write I2C diagnostic results to LittleFS (now that it's mounted) */
+#if LANG_OLED_ENABLED
+    {
+        FILE *f = fopen("/lfs/i2c_diag.txt", "w");
+        if (f) {
+            fprintf(f, "I2C SDA=GPIO%d SCL=GPIO%d\n", LANG_I2C_SDA, LANG_I2C_SCL);
+            fprintf(f, "Probe 0x3C: %s\n", esp_err_to_name(s_i2c_probe_3c));
+            fprintf(f, "Probe 0x3D: %s\n", esp_err_to_name(s_i2c_probe_3d));
+            fprintf(f, "OLED init (addr 0x%02X): %s\n", s_oled_addr,
+                esp_err_to_name(s_oled_ret));
+            fclose(f);
+            ESP_LOGI(TAG, "I2C diag written to /lfs/i2c_diag.txt");
+        }
+    }
+#endif
 
     /* Audio pipeline (STT/TTS via Groq) — always required */
     ESP_ERROR_CHECK(audio_pipeline_init());
@@ -408,8 +458,14 @@ void app_main(void)
     /* Start Serial CLI first (works without WiFi) */
     ESP_ERROR_CHECK(serial_cli_init());
 
-    /* Start WiFi */
+    /* Start WiFi — or onboarding if no credentials stored */
     led_indicator_set(LED_WIFI);
+    if (!wifi_onboard_has_credentials()) {
+        ESP_LOGW(TAG, "No WiFi credentials found — starting onboarding captive portal");
+        wifi_onboard_start();  /* blocks until user configures, then reboots */
+        return;  /* unreachable — onboarding reboots */
+    }
+
     esp_err_t wifi_err = wifi_manager_start();
     if (wifi_err == ESP_OK) {
         ESP_LOGI(TAG, "Scanning nearby APs on boot...");

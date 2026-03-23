@@ -144,7 +144,7 @@
 /* I2C bus (OLED display + BME280 sensor + future peripherals) */
 #define LANG_I2C_SDA        9
 #define LANG_I2C_SCL       10
-#define LANG_I2C_FREQ_HZ   400000   /* 400 kHz fast mode */
+#define LANG_I2C_FREQ_HZ   100000   /* 100 kHz standard mode — safer with dupont wires */
 
 /* SSD1306 OLED display */
 #define LANG_OLED_ADDR      0x3C    /* default I2C address */

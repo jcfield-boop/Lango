@@ -32,6 +32,53 @@
 static const char *TAG = "agent";
 static _Atomic bool s_agent_busy = false;
 
+/* ── LLM API rate limiting ────────────────────────────────────── */
+/* Tracks hourly request count. Resets every hour.
+ * Default: 60/hour. Configurable via CLI: rate_limit <n>  */
+#define RATE_LIMIT_DEFAULT_PER_HOUR  60
+#define RATE_LIMIT_WINDOW_US         (3600LL * 1000000LL)  /* 1 hour */
+
+static int      s_rate_limit_max  = RATE_LIMIT_DEFAULT_PER_HOUR;
+static int      s_rate_limit_count = 0;
+static int64_t  s_rate_limit_window_start = 0;
+
+static bool agent_rate_limit_ok(void)
+{
+    int64_t now = esp_timer_get_time();
+    /* Reset window if expired */
+    if (now - s_rate_limit_window_start > RATE_LIMIT_WINDOW_US) {
+        s_rate_limit_count = 0;
+        s_rate_limit_window_start = now;
+    }
+    if (s_rate_limit_count >= s_rate_limit_max) {
+        return false;
+    }
+    s_rate_limit_count++;
+    return true;
+}
+
+void agent_set_rate_limit(int max_per_hour)
+{
+    if (max_per_hour < 1) max_per_hour = 1;
+    if (max_per_hour > 999) max_per_hour = 999;
+    s_rate_limit_max = max_per_hour;
+    ESP_LOGI(TAG, "LLM rate limit set to %d/hour", max_per_hour);
+}
+
+int agent_get_rate_limit(void)
+{
+    return s_rate_limit_max;
+}
+
+int agent_get_rate_count(void)
+{
+    /* If window expired, return 0 */
+    if (esp_timer_get_time() - s_rate_limit_window_start > RATE_LIMIT_WINDOW_US) {
+        return 0;
+    }
+    return s_rate_limit_count;
+}
+
 #define TOOL_OUTPUT_SIZE      (32 * 1024)
 #define WS_TOKEN_MIN_CHARS    8
 #define WS_TOKEN_MIN_US       150000
@@ -234,6 +281,10 @@ static cJSON *build_tool_results(const llm_response_t *resp, const lang_msg_t *m
                     snprintf(mon, sizeof(mon), "%s %.80s", call->name, ctxs[i].input);
                     for (char *p = mon; *p; p++) if (*p == '\n' || *p == '\r') *p = ' ';
                     ws_server_broadcast_monitor("tool", mon);
+                    /* OLED: show tool being called */
+                    char oled_tool[64];
+                    snprintf(oled_tool, sizeof(oled_tool), "Tool: %s", call->name);
+                    oled_display_set_message(oled_tool);
                 }
 
                 if (xTaskCreate(tool_exec_task, "tool_par", 16384,
@@ -303,6 +354,10 @@ static cJSON *build_tool_results(const llm_response_t *resp, const lang_msg_t *m
             snprintf(tool_mon, sizeof(tool_mon), "%s %.80s", call->name, tool_input);
             for (char *p = tool_mon; *p; p++) if (*p == '\n' || *p == '\r') *p = ' ';
             ws_server_broadcast_monitor("tool", tool_mon);
+            /* OLED: show tool being called */
+            char oled_tool[64];
+            snprintf(oled_tool, sizeof(oled_tool), "Tool: %s", call->name);
+            oled_display_set_message(oled_tool);
         }
         tool_registry_execute(call->name, tool_input, tool_output, tool_output_size);
         free(patched_input);
@@ -401,11 +456,43 @@ static void agent_loop_task(void *arg)
             }
         }
 
+        /* LLM API rate limiting — skip system messages (cron, heartbeat) which
+         * are self-limiting by their own schedules. Only limit user-initiated. */
+        if (strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0 && !agent_rate_limit_ok()) {
+            ESP_LOGW(TAG, "LLM rate limit reached (%d/%d per hour) for %s",
+                     s_rate_limit_count, s_rate_limit_max, msg.chat_id);
+            ws_server_broadcast_monitor("system", "LLM rate limit reached");
+
+            /* Send a response instead of calling the LLM */
+            char rate_msg[128];
+            snprintf(rate_msg, sizeof(rate_msg),
+                     "Rate limit reached (%d requests/hour). Try again in a few minutes.",
+                     s_rate_limit_max);
+
+            lang_msg_t out = {0};
+            strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
+            strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
+            out.content = strdup(rate_msg);
+            if (out.content) {
+                message_bus_push_outbound(&out);
+            }
+            free(msg.content);
+            atomic_store(&s_agent_busy, false);
+            continue;
+        }
+
         ESP_LOGI(TAG, "Processing message from %s:%s", msg.channel, msg.chat_id);
         {
             char mon[64];
             snprintf(mon, sizeof(mon), "from %s:%s", msg.channel, msg.chat_id);
             ws_server_broadcast_monitor("task", mon);
+        }
+
+        /* OLED: show incoming message preview */
+        {
+            char oled_msg[64];
+            snprintf(oled_msg, sizeof(oled_msg), "> %.58s", msg.content ? msg.content : "");
+            oled_display_set_message(oled_msg);
         }
 
         /* 1. Build system prompt in PSRAM buffer */
@@ -580,6 +667,13 @@ static void agent_loop_task(void *arg)
             }
 
             ESP_LOGI(TAG, "Tool use iteration %d: %d calls", iteration + 1, resp.call_count);
+            /* OLED: show tool iteration info */
+            {
+                char oled_iter[64];
+                snprintf(oled_iter, sizeof(oled_iter), "Iter %d: %d tool%s",
+                         iteration + 1, resp.call_count, resp.call_count > 1 ? "s" : "");
+                oled_display_set_message(oled_iter);
+            }
 
             cJSON *asst_msg = cJSON_CreateObject();
             cJSON_AddStringToObject(asst_msg, "role", "assistant");

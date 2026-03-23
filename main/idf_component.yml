@@ -21,3 +21,6 @@ dependencies:
   ## Wake word (WakeNet9 "Hi ESP") + VAD via Audio Front End
   espressif/esp-sr:
     version: ">=1.0.0"
+  ## Opus audio codec — encode local mic PCM for smaller STT uploads
+  78/esp-opus:
+    version: ">=1.0.4"

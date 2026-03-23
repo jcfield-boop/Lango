@@ -3,6 +3,7 @@ idf_component_register(
         "langoustine.c"
         "bus/message_bus.c"
         "wifi/wifi_manager.c"
+        "wifi/wifi_onboard.c"
         "llm/llm_proxy.c"
         "agent/agent_loop.c"
         "agent/context_builder.c"
@@ -48,6 +49,7 @@ idf_component_register(
         "audio/audio_pipeline.c"
         "audio/uac_microphone.c"
         "llm/http_session.c"
+        "audio/opus_encode.c"
         "audio/stt_client.c"
         "audio/tts_client.c"
         "telegram/telegram_bot.c"
@@ -69,4 +71,5 @@ idf_component_register(
         esp_https_ota esp_https_server esp_event json console vfs app_update esp-tls
         driver esp_timer esp_driver_tsens espressif__mdns joltwallet__littlefs
         mbedtls usb espressif__usb_host_uvc usb_host_uac espressif__esp-sr
+        78__esp-opus
 )

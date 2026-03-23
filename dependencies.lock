@@ -1,4 +1,14 @@
 dependencies:
+  78/esp-opus:
+    component_hash: 8182b733f071d7bfe1e837f4c9f8649a63e4c937177f089e65772880c02f2e17
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.5
   espressif/dl_fft:
     component_hash: 7dadbd644c0d7ba4733cc3726ec4cff6edf27b043725e1115861dec1609a3d28
     dependencies:
@@ -20,7 +30,7 @@ dependencies:
       type: service
     version: 1.7.0
   espressif/esp-sr:
-    component_hash: 46b1f70f8b561714b958d1c455213cca07162755d1b8df53498081199f15136f
+    component_hash: c518b25995cf03021a09442feedb7e40acba9f15d6aa903ebdfe0f657b08197b
     dependencies:
     - name: espressif/dl_fft
       registry_url: https://components.espressif.com
@@ -36,7 +46,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 2.3.1
+    version: 2.4.0
   espressif/mdns:
     component_hash: 7c0fa01a1cd0e72a87ec1928c3b661c0a3a9034a6d3a69dcf4850db8c6f272db
     dependencies:
@@ -101,12 +111,13 @@ dependencies:
       type: service
     version: 1.20.4
 direct_dependencies:
+- 78/esp-opus
 - espressif/esp-sr
 - espressif/mdns
 - espressif/usb
 - espressif/usb_host_uvc
 - idf
 - joltwallet/littlefs
-manifest_hash: b9944ae8ad8a0a0be7ae0adbd0dc045702293b8a76fea430253a156c078e4854
+manifest_hash: 88ec124edf00308cfb9a9d94762b9ac0dab6b627490df2fe44ebcf2485277807
 target: esp32s3
 version: 3.0.0

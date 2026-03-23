@@ -8,6 +8,8 @@
 #include <time.h>
 #include "esp_log.h"
 #include "esp_wifi.h"
+#include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -17,6 +19,8 @@ static const char *TAG = "oled";
 
 static char s_status[32]  = "Booting";
 static char s_message[128] = "";
+static TickType_t s_message_set_at = 0;
+#define MSG_AUTO_CLEAR_TICKS  pdMS_TO_TICKS(30000)  /* auto-clear after 30s */
 static char s_alert1[32]  = "";
 static char s_alert2[32]  = "";
 static TickType_t s_alert_until = 0;
@@ -140,6 +144,22 @@ static void draw_idle_screen(void)
         if (strlen(msg_copy) > 42) {
             ssd1306_str(0, 56, "...");
         }
+    } else {
+        /* No message — show system stats */
+        uint32_t sram = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        uint32_t psram = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        char stat_line[32];
+        snprintf(stat_line, sizeof(stat_line), "S:%luK P:%luM",
+                 (unsigned long)(sram / 1024), (unsigned long)(psram / (1024*1024)));
+        ssd1306_str(0, 40, stat_line);
+
+        /* Uptime */
+        int64_t uptime_s = esp_timer_get_time() / 1000000LL;
+        int hrs = (int)(uptime_s / 3600);
+        int mins = (int)((uptime_s % 3600) / 60);
+        char up_line[22];
+        snprintf(up_line, sizeof(up_line), "Up: %dh%02dm", hrs, mins);
+        ssd1306_str(0, 48, up_line);
     }
 }
 
@@ -168,6 +188,14 @@ static void oled_task(void *arg)
 
     while (1) {
         ssd1306_clear();
+
+        /* Auto-clear stale messages after 30s */
+        portENTER_CRITICAL(&s_mux);
+        if (s_message[0] && s_message_set_at &&
+            (xTaskGetTickCount() - s_message_set_at) > MSG_AUTO_CLEAR_TICKS) {
+            s_message[0] = '\0';
+        }
+        portEXIT_CRITICAL(&s_mux);
 
         /* Check if alert is active */
         bool alert_active = false;
@@ -205,6 +233,10 @@ esp_err_t oled_display_init(i2c_master_bus_handle_t bus)
         return ret;
     }
 
+    /* Boot test: fill screen white for 1 second so user can see it works */
+    ssd1306_test_pattern();
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
     BaseType_t ok = xTaskCreatePinnedToCore(
         oled_task, "oled", 3072, NULL, 2, NULL, 0);
     if (ok != pdPASS) {
@@ -231,6 +263,7 @@ void oled_display_set_message(const char *msg)
     portENTER_CRITICAL(&s_mux);
     strncpy(s_message, msg, sizeof(s_message) - 1);
     s_message[sizeof(s_message) - 1] = '\0';
+    s_message_set_at = xTaskGetTickCount();
     portEXIT_CRITICAL(&s_mux);
 }
 

@@ -4,6 +4,8 @@
 
 #include <string.h>
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "ssd1306";
 
@@ -156,35 +158,62 @@ esp_err_t ssd1306_init(i2c_master_bus_handle_t bus, uint8_t addr)
         return ret;
     }
 
-    /* Init sequence for 128x64 SSD1306 */
-    static const uint8_t init_cmds[] = {
+    /* Init sequence for 128x64 SSD1306/SSD1315.
+     * SSD1315 is register-compatible but needs different contrast/precharge/VCOMH.
+     * Send all commands in one I2C transaction for reliability. */
+
+    /* Phase 1: Display OFF + basic config + charge pump */
+    static const uint8_t init1[] = {
         0xAE,       /* Display OFF */
         0xD5, 0x80, /* Clock divide ratio / oscillator frequency */
         0xA8, 0x3F, /* Multiplex ratio: 64 */
         0xD3, 0x00, /* Display offset: 0 */
         0x40,       /* Start line: 0 */
         0x8D, 0x14, /* Charge pump: enable (internal VCC) */
+    };
+    ret = cmd_bytes(init1, sizeof(init1));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SSD1306 init phase 1 failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    ESP_LOGI(TAG, "SSD1306 init phase 1 OK (display off, charge pump)");
+
+    /* Let charge pump stabilise — SSD1315 datasheet recommends 100ms */
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    /* Phase 2: Memory mode, scan direction, contrast, timings */
+    static const uint8_t init2[] = {
         0x20, 0x00, /* Memory addressing: horizontal */
         0xA1,       /* Segment re-map: column 127 = SEG0 */
         0xC8,       /* COM scan direction: remapped */
         0xDA, 0x12, /* COM pins config: alternative, no L/R remap */
-        0x81, 0xCF, /* Contrast: 207 */
-        0xD9, 0xF1, /* Pre-charge period */
-        0xDB, 0x40, /* VCOMH deselect level */
+        0x81, 0x7F, /* Contrast: 127 (works for both SSD1306 and SSD1315) */
+        0xD9, 0x22, /* Pre-charge period: phase1=2, phase2=2 (SSD1315 compatible) */
+        0xDB, 0x20, /* VCOMH deselect level: 0.77×Vcc (SSD1315 compatible) */
         0xA4,       /* Resume from GDDRAM */
         0xA6,       /* Normal display (not inverted) */
-        0xAF,       /* Display ON */
     };
-
-    ret = cmd_bytes(init_cmds, sizeof(init_cmds));
+    ret = cmd_bytes(init2, sizeof(init2));
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SSD1306 init commands failed: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "SSD1306 init phase 2 failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    ESP_LOGI(TAG, "SSD1306 init phase 2 OK (config + contrast)");
+
+    /* Clear GDDRAM before turning display on */
+    ssd1306_clear();
+    ret = ssd1306_refresh();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SSD1306 initial refresh failed: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    /* Clear display */
-    ssd1306_clear();
-    ssd1306_refresh();
+    /* Phase 3: Display ON */
+    ret = cmd_byte(0xAF);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SSD1306 display ON failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
 
     ESP_LOGI(TAG, "SSD1306 %dx%d OLED ready (I2C addr 0x%02X)", W, H, addr);
     return ESP_OK;
@@ -207,8 +236,9 @@ esp_err_t ssd1306_refresh(void)
     esp_err_t ret = cmd_bytes(addr_cmds, sizeof(addr_cmds));
     if (ret != ESP_OK) return ret;
 
-    /* Send framebuffer as data (Co=0, D/C#=1 = 0x40 prefix) */
-    uint8_t *tx = ps_malloc(FB_SIZE + 1);
+    /* Send framebuffer as data (Co=0, D/C#=1 = 0x40 prefix).
+     * Buffer MUST be in SRAM — I2C DMA cannot source from PSRAM. */
+    uint8_t *tx = malloc(FB_SIZE + 1);
     if (!tx) return ESP_ERR_NO_MEM;
     tx[0] = 0x40;  /* data mode */
     memcpy(tx + 1, s_fb, FB_SIZE);
@@ -289,4 +319,14 @@ esp_err_t ssd1306_set_contrast(uint8_t val)
 {
     uint8_t cmds[] = { 0x81, val };
     return cmd_bytes(cmds, 2);
+}
+
+esp_err_t ssd1306_test_pattern(void)
+{
+    if (!s_fb) return ESP_ERR_INVALID_STATE;
+    /* Fill entire framebuffer with 0xFF (all pixels on) */
+    memset(s_fb, 0xFF, FB_SIZE);
+    esp_err_t ret = ssd1306_refresh();
+    ESP_LOGI(TAG, "Test pattern (all white): %s", esp_err_to_name(ret));
+    return ret;
 }

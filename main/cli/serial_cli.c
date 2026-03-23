@@ -19,6 +19,7 @@
 #include "camera/uvc_camera.h"
 #include "memory/psram_alloc.h"
 #include "gateway/ws_server.h"
+#include "agent/agent_loop.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -124,6 +125,19 @@ static int cmd_set_model_provider(int argc, char **argv)
     }
     llm_set_provider(provider_args.provider->sval[0]);
     printf("Model provider set.\n");
+    return 0;
+}
+
+/* --- set_local_url command --- */
+static int cmd_set_local_url(int argc, char **argv)
+{
+    if (argc >= 2) {
+        llm_set_local_url(argv[1]);
+        printf("Local model URL set to: %s\n", argv[1]);
+    } else {
+        const char *url = llm_get_local_url();
+        printf("Local model URL: %s\n", (url && url[0]) ? url : "(not set)");
+    }
     return 0;
 }
 
@@ -1315,6 +1329,24 @@ static int cmd_ww_test(int argc, char **argv)
     return 0;
 }
 
+/* rate_limit — get/set LLM API rate limit */
+static int cmd_rate_limit(int argc, char **argv)
+{
+    if (argc >= 2) {
+        int val = atoi(argv[1]);
+        if (val < 1 || val > 999) {
+            printf("Invalid: must be 1-999\n");
+            return 1;
+        }
+        agent_set_rate_limit(val);
+        printf("LLM rate limit set to %d/hour\n", val);
+    } else {
+        printf("LLM rate limit: %d/hour (used %d in current window)\n",
+               agent_get_rate_limit(), agent_get_rate_count());
+    }
+    return 0;
+}
+
 /* ── Init ──────────────────────────────────────────────────────── */
 
 esp_err_t serial_cli_init(void)
@@ -1385,13 +1417,21 @@ esp_err_t serial_cli_init(void)
     esp_console_cmd_register(&model_cmd);
 
     /* set_model_provider */
-    provider_args.provider = arg_str1(NULL, NULL, "<provider>", "anthropic|openai|openrouter");
+    provider_args.provider = arg_str1(NULL, NULL, "<provider>", "anthropic|openai|openrouter|ollama");
     provider_args.end      = arg_end(1);
     esp_console_cmd_t provider_cmd = {
         .command = "set_model_provider", .help = "Set LLM provider",
         .func = &cmd_set_model_provider, .argtable = &provider_args,
     };
     esp_console_cmd_register(&provider_cmd);
+
+    /* set_local_url */
+    esp_console_cmd_t local_url_cmd = {
+        .command = "set_local_url",
+        .help    = "Get/set local model base URL: set_local_url [url]",
+        .func    = &cmd_set_local_url,
+    };
+    esp_console_cmd_register(&local_url_cmd);
 
     /* set_tg_token */
     tg_token_args.token = arg_str1(NULL, NULL, "<token>", "Telegram bot token");
@@ -1776,6 +1816,14 @@ esp_err_t serial_cli_init(void)
         .func    = &cmd_ww_test,
     };
     esp_console_cmd_register(&ww_test_cmd);
+
+    /* rate_limit */
+    esp_console_cmd_t rate_limit_cmd = {
+        .command = "rate_limit",
+        .help    = "Get/set LLM API rate limit: rate_limit [max_per_hour]",
+        .func    = &cmd_rate_limit,
+    };
+    esp_console_cmd_register(&rate_limit_cmd);
 
     ESP_ERROR_CHECK(esp_console_start_repl(repl));
     ESP_LOGI(TAG, "Serial CLI started");

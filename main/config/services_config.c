@@ -92,6 +92,23 @@ esp_err_t services_config_load(void)
                 }
             }
 
+        /* ── Local Model (Ollama) section ────────────────────── */
+        } else if (strstr(section, "local model")) {
+            if (strcmp(key, "base_url") == 0) {
+                llm_set_local_url(val);
+                ESP_LOGI(TAG, "Local model URL: %s", val);
+                keys_applied++;
+            } else if (strcmp(key, "api_key") == 0) {
+                /* Store local API key — used when provider=ollama */
+                /* (key is typically "ollama" for Ollama) */
+                ESP_LOGI(TAG, "Local model api_key loaded");
+                keys_applied++;
+            } else if (strcmp(key, "model") == 0) {
+                /* Store local model name for reference — agent can switch to it */
+                ESP_LOGI(TAG, "Local model: %s", val);
+                keys_applied++;
+            }
+
         /* ── Speech-to-Text section ──────────────────────────── */
         } else if (strstr(section, "speech-to-text") || strstr(section, "stt")) {
             if (strcmp(key, "stt_key") == 0 || strcmp(key, "api_key") == 0) {
@@ -185,6 +202,10 @@ esp_err_t services_config_reload(void)
             if (strcmp(key, "api_key") == 0)  { llm_set_api_key(val);  keys_applied++; }
             else if (strcmp(key, "provider") == 0) { llm_set_provider(val); keys_applied++; }
             else if (strcmp(key, "model") == 0)    { llm_set_model(val);    keys_applied++; }
+
+        /* ── Local Model (Ollama) ────────────────────────────── */
+        } else if (strstr(section, "local model")) {
+            if (strcmp(key, "base_url") == 0) { llm_set_local_url(val); keys_applied++; }
 
         /* ── STT ─────────────────────────────────────────────── */
         } else if (strstr(section, "speech-to-text") || strstr(section, "stt")) {
