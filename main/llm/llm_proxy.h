@@ -62,6 +62,27 @@ const char *llm_get_local_url(void);
  */
 void llm_get_session_stats(uint32_t *in, uint32_t *out, uint32_t *cost_millicents);
 
+/* ── Per-request override (for smart local/cloud routing) ─────── */
+
+/** Override provider and model for the current request only.
+ *  Call llm_clear_request_override() after the agent loop finishes. */
+void llm_set_request_override(const char *provider, const char *model);
+
+/** Clear per-request override, reverting to global provider/model. */
+void llm_clear_request_override(void);
+
+/** Set the local model name (e.g. "qwen2.5:14b"). */
+void llm_set_local_model(const char *model);
+
+/** Get the configured local model name. */
+const char *llm_get_local_model(void);
+
+/** Check if the local Ollama instance is reachable (cached 60s). */
+bool llm_local_health_check(void);
+
+/** Returns true if smart routing is possible (cloud global + local configured). */
+bool llm_smart_routing_available(void);
+
 /* ── Tool Use Support ──────────────────────────────────────────── */
 
 typedef struct {

@@ -104,7 +104,7 @@ esp_err_t services_config_load(void)
                 ESP_LOGI(TAG, "Local model api_key loaded");
                 keys_applied++;
             } else if (strcmp(key, "model") == 0) {
-                /* Store local model name for reference — agent can switch to it */
+                llm_set_local_model(val);
                 ESP_LOGI(TAG, "Local model: %s", val);
                 keys_applied++;
             }
@@ -150,6 +150,15 @@ esp_err_t services_config_load(void)
                     ESP_LOGI(TAG, "Web search api_key loaded from SERVICES.md");
                     keys_applied++;
                 }
+            }
+
+        /* ── Local Audio (mlx-audio / Piper / whisper.cpp) ────── */
+        } else if (strstr(section, "local audio")) {
+            if (strcmp(key, "base_url") == 0) {
+                tts_set_local_url(val);
+                stt_set_local_url(val);
+                ESP_LOGI(TAG, "Local audio URL: %s (TTS+STT)", val);
+                keys_applied++;
             }
         }
 
@@ -206,6 +215,7 @@ esp_err_t services_config_reload(void)
         /* ── Local Model (Ollama) ────────────────────────────── */
         } else if (strstr(section, "local model")) {
             if (strcmp(key, "base_url") == 0) { llm_set_local_url(val); keys_applied++; }
+            else if (strcmp(key, "model") == 0) { llm_set_local_model(val); keys_applied++; }
 
         /* ── STT ─────────────────────────────────────────────── */
         } else if (strstr(section, "speech-to-text") || strstr(section, "stt")) {
@@ -225,6 +235,14 @@ esp_err_t services_config_reload(void)
         } else if (strstr(section, "web search") || strstr(section, "search")) {
             if (strcmp(key, "search_key") == 0 || strcmp(key, "api_key") == 0) {
                 tool_web_search_set_key(val); keys_applied++;
+            }
+
+        /* ── Local Audio ─────────────────────────────────────── */
+        } else if (strstr(section, "local audio")) {
+            if (strcmp(key, "base_url") == 0) {
+                tts_set_local_url(val);
+                stt_set_local_url(val);
+                keys_applied++;
             }
         }
     }

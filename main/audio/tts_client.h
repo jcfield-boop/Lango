@@ -45,3 +45,10 @@ void tts_get_api_key_masked(char *buf, size_t buf_len);
 
 /** Copy current voice into buf. */
 void tts_get_voice(char *buf, size_t buf_len);
+
+/** Set local TTS base URL (e.g. "http://192.168.0.25:8000").
+ *  When set, tts_generate() tries local first, falls back to cloud. */
+void tts_set_local_url(const char *url);
+
+/** Get local TTS base URL (empty string if not set). */
+const char *tts_get_local_url(void);

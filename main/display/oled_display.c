@@ -24,27 +24,11 @@ static TickType_t s_message_set_at = 0;
 static char s_alert1[32]  = "";
 static char s_alert2[32]  = "";
 static TickType_t s_alert_until = 0;
+static char s_provider_info[32] = "";
+static char s_token_info[32]    = "";
+static char s_ip_addr[20]       = "";
 
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
-
-/* ── State label from LED state ──────────────────────────────────── */
-
-static const char *state_label(led_state_t st)
-{
-    switch (st) {
-        case LED_BOOTING:    return "Booting...";
-        case LED_WIFI:       return "WiFi...";
-        case LED_READY:      return "";   /* idle — show clock instead */
-        case LED_THINKING:   return "Thinking...";
-        case LED_SPEAKING:   return "Speaking...";
-        case LED_LISTENING:  return "Listening...";
-        case LED_ERROR:      return "Error";
-        case LED_OTA:        return "OTA Update...";
-        case LED_CAPTURING:  return "Capturing...";
-        case LED_FLASH_FADE: return "Processing...";
-        default:             return "";
-    }
-}
 
 /* ── WiFi RSSI helper ────────────────────────────────────────────── */
 
@@ -77,19 +61,36 @@ static void draw_rssi(int x, int y, int rssi)
 
 static void draw_idle_screen(void)
 {
-    /* Row 0-15: Large time (HH:MM) */
     time_t now = time(NULL);
     struct tm tm;
     localtime_r(&now, &tm);
+    int rssi = get_rssi();
 
+    /* ── Row 0: IP address (right-aligned) + RSSI bar below ─────── */
+    portENTER_CRITICAL(&s_mux);
+    char ip_copy[20];
+    strncpy(ip_copy, s_ip_addr, sizeof(ip_copy) - 1);
+    ip_copy[sizeof(ip_copy) - 1] = '\0';
+    portEXIT_CRITICAL(&s_mux);
+
+    if (ip_copy[0]) {
+        int ip_len = (int)strlen(ip_copy);
+        int ip_x = 128 - ip_len * 6;
+        if (ip_x < 0) ip_x = 0;
+        ssd1306_str(ip_x, 0, ip_copy);
+    } else if (tm.tm_sec % 2 == 0) {
+        ssd1306_str(92, 0, "WiFi..");
+    }
+
+    /* RSSI bar graph right-aligned below IP (row 10) */
+    draw_rssi(106, 10, rssi);
+
+    /* ── Row 0-15: Large time (HH:MM) on left ──────────────────── */
     char time_str[8];
     snprintf(time_str, sizeof(time_str), "%02d:%02d", tm.tm_hour, tm.tm_min);
     ssd1306_str_2x(0, 0, time_str);
 
-    /* RSSI bars in top-right */
-    draw_rssi(106, 0, get_rssi());
-
-    /* Row 18: Date line */
+    /* ── Row 18: date ───────────────────────────────────────────── */
     char date_str[22];
     static const char *days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
     static const char *months[] = {"Jan","Feb","Mar","Apr","May","Jun",
@@ -98,69 +99,127 @@ static void draw_idle_screen(void)
              days[tm.tm_wday], months[tm.tm_mon], tm.tm_mday);
     ssd1306_str(0, 18, date_str);
 
-    /* Row 18 right: seconds indicator (dot blinks) */
-    if (tm.tm_sec % 2 == 0) {
-        ssd1306_fill_rect(100, 20, 2, 2, true);
-    }
-
     /* Separator line */
     ssd1306_hline(0, 28, 128, true);
 
-    /* Row 30-37: status or "Ready" */
+    /* ── Row 30: provider/model info ────────────────────────────── */
     portENTER_CRITICAL(&s_mux);
-    char status_copy[32];
-    strncpy(status_copy, s_status, sizeof(status_copy) - 1);
-    status_copy[sizeof(status_copy) - 1] = '\0';
+    char prov_copy[32];
+    strncpy(prov_copy, s_provider_info, sizeof(prov_copy) - 1);
+    prov_copy[sizeof(prov_copy) - 1] = '\0';
     portEXIT_CRITICAL(&s_mux);
-
-    if (status_copy[0]) {
-        ssd1306_str(0, 30, status_copy);
+    if (prov_copy[0]) {
+        ssd1306_str(0, 30, prov_copy);
     } else {
         ssd1306_str(0, 30, "Ready");
     }
 
-    /* Row 40-55: message preview (up to 2 lines of 21 chars) */
+    /* ── Row 40-48: message preview or token counts ─────────────── */
     portENTER_CRITICAL(&s_mux);
     char msg_copy[128];
     strncpy(msg_copy, s_message, sizeof(msg_copy) - 1);
     msg_copy[sizeof(msg_copy) - 1] = '\0';
+    char tok_copy[32];
+    strncpy(tok_copy, s_token_info, sizeof(tok_copy) - 1);
+    tok_copy[sizeof(tok_copy) - 1] = '\0';
     portEXIT_CRITICAL(&s_mux);
 
     if (msg_copy[0]) {
-        /* Line 1: first 21 chars */
         char line[22];
         strncpy(line, msg_copy, 21);
         line[21] = '\0';
         ssd1306_str(0, 40, line);
 
-        /* Line 2: next 21 chars if available */
         if (strlen(msg_copy) > 21) {
             strncpy(line, msg_copy + 21, 21);
             line[21] = '\0';
             ssd1306_str(0, 48, line);
         }
-
-        /* Line 3: overflow indicator */
-        if (strlen(msg_copy) > 42) {
-            ssd1306_str(0, 56, "...");
-        }
     } else {
-        /* No message — show system stats */
+        if (tok_copy[0]) {
+            ssd1306_str(0, 40, tok_copy);
+        }
+
+        /* System stats */
         uint32_t sram = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         uint32_t psram = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
         char stat_line[32];
         snprintf(stat_line, sizeof(stat_line), "S:%luK P:%luM",
                  (unsigned long)(sram / 1024), (unsigned long)(psram / (1024*1024)));
-        ssd1306_str(0, 40, stat_line);
-
-        /* Uptime */
-        int64_t uptime_s = esp_timer_get_time() / 1000000LL;
-        int hrs = (int)(uptime_s / 3600);
-        int mins = (int)((uptime_s % 3600) / 60);
-        char up_line[22];
-        snprintf(up_line, sizeof(up_line), "Up: %dh%02dm", hrs, mins);
-        ssd1306_str(0, 48, up_line);
+        ssd1306_str(0, tok_copy[0] ? 48 : 40, stat_line);
     }
+
+    /* ── Row 56: uptime ─────────────────────────────────────────── */
+    int64_t uptime_s = esp_timer_get_time() / 1000000LL;
+    int hrs = (int)(uptime_s / 3600);
+    int mins = (int)((uptime_s % 3600) / 60);
+    char up_line[22];
+    snprintf(up_line, sizeof(up_line), "Up:%dh%02dm", hrs, mins);
+    ssd1306_str(0, 56, up_line);
+}
+
+static void draw_active_screen(void)
+{
+    /* Snapshot all state under lock */
+    portENTER_CRITICAL(&s_mux);
+    char prov_copy[32], status_copy[32], msg_copy[128], tok_copy[32];
+    strncpy(prov_copy, s_provider_info, sizeof(prov_copy) - 1);
+    prov_copy[sizeof(prov_copy) - 1] = '\0';
+    strncpy(status_copy, s_status, sizeof(status_copy) - 1);
+    status_copy[sizeof(status_copy) - 1] = '\0';
+    strncpy(msg_copy, s_message, sizeof(msg_copy) - 1);
+    msg_copy[sizeof(msg_copy) - 1] = '\0';
+    strncpy(tok_copy, s_token_info, sizeof(tok_copy) - 1);
+    tok_copy[sizeof(tok_copy) - 1] = '\0';
+    portEXIT_CRITICAL(&s_mux);
+
+    /* Row 0: Provider/model */
+    if (prov_copy[0]) {
+        ssd1306_str(0, 0, prov_copy);
+    }
+
+    /* Separator */
+    ssd1306_hline(0, 10, 128, true);
+
+    /* Row 12-20: Status (e.g. "Thinking...", "Tool: web_search") */
+    ssd1306_str(0, 12, status_copy);
+
+    /* Separator */
+    ssd1306_hline(0, 22, 128, true);
+
+    /* Row 24-44: Message preview (up to 3 lines) */
+    if (msg_copy[0]) {
+        char line[22];
+        strncpy(line, msg_copy, 21);
+        line[21] = '\0';
+        ssd1306_str(0, 24, line);
+
+        if (strlen(msg_copy) > 21) {
+            strncpy(line, msg_copy + 21, 21);
+            line[21] = '\0';
+            ssd1306_str(0, 32, line);
+        }
+
+        if (strlen(msg_copy) > 42) {
+            strncpy(line, msg_copy + 42, 21);
+            line[21] = '\0';
+            ssd1306_str(0, 40, line);
+        }
+    }
+
+    /* Row 48: Token counts */
+    if (tok_copy[0]) {
+        ssd1306_str(0, 48, tok_copy);
+    }
+
+    /* Row 56: RSSI bars + uptime */
+    draw_rssi(0, 56, get_rssi());
+    int64_t uptime_s = esp_timer_get_time() / 1000000LL;
+    int hrs = (int)(uptime_s / 3600);
+    int mins = (int)((uptime_s % 3600) / 60);
+    char up_line[22];
+    snprintf(up_line, sizeof(up_line), "Up:%dh%02dm", hrs, mins);
+    ssd1306_str(24, 56, up_line);
 }
 
 static void draw_alert_screen(void)
@@ -210,7 +269,16 @@ static void oled_task(void *arg)
         if (alert_active) {
             draw_alert_screen();
         } else {
-            draw_idle_screen();
+            /* Use LED state to decide idle vs active screen */
+            led_state_t led = led_indicator_get_state();
+            bool active = (led == LED_THINKING || led == LED_SPEAKING ||
+                           led == LED_LISTENING || led == LED_CAPTURING ||
+                           led == LED_FLASH_FADE);
+            if (active) {
+                draw_active_screen();
+            } else {
+                draw_idle_screen();
+            }
         }
 
         ssd1306_refresh();
@@ -264,6 +332,32 @@ void oled_display_set_message(const char *msg)
     strncpy(s_message, msg, sizeof(s_message) - 1);
     s_message[sizeof(s_message) - 1] = '\0';
     s_message_set_at = xTaskGetTickCount();
+    portEXIT_CRITICAL(&s_mux);
+}
+
+void oled_display_set_provider(const char *info)
+{
+    if (!info) return;
+    portENTER_CRITICAL(&s_mux);
+    strncpy(s_provider_info, info, sizeof(s_provider_info) - 1);
+    s_provider_info[sizeof(s_provider_info) - 1] = '\0';
+    portEXIT_CRITICAL(&s_mux);
+}
+
+void oled_display_set_tokens(uint32_t in_tokens, uint32_t out_tokens)
+{
+    portENTER_CRITICAL(&s_mux);
+    snprintf(s_token_info, sizeof(s_token_info), "In:%lu Out:%lu",
+             (unsigned long)in_tokens, (unsigned long)out_tokens);
+    portEXIT_CRITICAL(&s_mux);
+}
+
+void oled_display_set_ip(const char *ip)
+{
+    if (!ip) return;
+    portENTER_CRITICAL(&s_mux);
+    strncpy(s_ip_addr, ip, sizeof(s_ip_addr) - 1);
+    s_ip_addr[sizeof(s_ip_addr) - 1] = '\0';
     portEXIT_CRITICAL(&s_mux);
 }
 

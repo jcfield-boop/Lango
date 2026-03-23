@@ -26,6 +26,16 @@ void oled_display_set_status(const char *status);
  *  Thread-safe. Shown below the status on the active screen. */
 void oled_display_set_message(const char *msg);
 
+/** Set the LLM provider/model info line (e.g. "qwen2.5:14b (local)").
+ *  Thread-safe. Shown on both idle and active screens. */
+void oled_display_set_provider(const char *info);
+
+/** Update session token counts. Thread-safe. */
+void oled_display_set_tokens(uint32_t in_tokens, uint32_t out_tokens);
+
+/** Set the device IP address for display. Thread-safe. */
+void oled_display_set_ip(const char *ip);
+
 /** Temporarily show an alert for `duration_ms` (e.g. cron fire, OTA).
  *  After the duration, reverts to normal display. Thread-safe. */
 void oled_display_alert(const char *line1, const char *line2, int duration_ms);

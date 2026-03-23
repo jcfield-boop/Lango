@@ -41,3 +41,8 @@ void led_indicator_init(void);
  * Set the current LED state (thread-safe, callable from any task/ISR).
  */
 void led_indicator_set(led_state_t state);
+
+/**
+ * Get the current LED state (thread-safe).
+ */
+led_state_t led_indicator_get_state(void);

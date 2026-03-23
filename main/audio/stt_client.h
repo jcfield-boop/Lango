@@ -28,3 +28,10 @@ void stt_set_api_key(const char *key);
 
 /** Copy masked API key into buf (first 4 chars + "****"). */
 void stt_get_api_key_masked(char *buf, size_t buf_len);
+
+/** Set local STT base URL (e.g. "http://192.168.0.25:8000").
+ *  When set, stt_transcribe() tries local first, falls back to cloud. */
+void stt_set_local_url(const char *url);
+
+/** Get local STT base URL (empty string if not set). */
+const char *stt_get_local_url(void);

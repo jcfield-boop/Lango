@@ -117,8 +117,8 @@ Most cheap UVC-compatible webcams work. For PTT mic, the webcam must also expose
 |---------|---------|
 | **LLM** | Claude (Anthropic), OpenAI, OpenRouter, or local Ollama — token-by-token streaming to browser; 4096 max output tokens; 64 KB context buffer |
 | **Wake word** | "Hi ESP" via WakeNet9 + AFE — requires INMP441 mic |
-| **STT** | Groq Whisper — browser WebM audio or webcam UAC PCM; local mic audio Opus-compressed before upload |
-| **TTS** | Groq PlayAI — WAV cached in PSRAM, served to browser at `/tts/<id>`; optional local I2S speaker playback |
+| **STT** | Local-first via mlx-audio (or any OpenAI-compatible server), falls back to Groq Whisper; browser WebM audio or webcam UAC PCM; local mic audio Opus-compressed before upload |
+| **TTS** | Local-first via mlx-audio (Kokoro, etc.), falls back to Groq PlayAI; WAV cached in PSRAM, served to browser at `/tts/<id>`; optional local I2S speaker playback |
 | **OLED display** | SSD1306 128×64 I2C — ambient dashboard showing IP, uptime, heap, agent state, tool calls |
 | **Vision** | USB webcam → MJPEG frame → Claude vision API → spoken description |
 | **Webcam PTT** | Hold BOOT button → speak into webcam mic → release → agent responds |
@@ -270,6 +270,25 @@ lango> set_model qwen2.5:14b
 Or set the URL directly: `lango> set_local_url http://192.168.0.25:11434/v1`
 
 The Ollama provider uses the OpenAI-compatible `/v1/chat/completions` endpoint over plain HTTP (no TLS overhead). Any model served by Ollama works — tool calling support depends on the model.
+
+### Local audio (mlx-audio / Piper / whisper.cpp)
+
+Run TTS and STT on your local network for near-zero latency and no per-request cost. Add to `/lfs/config/SERVICES.md`:
+
+```markdown
+## Local Audio (mlx-audio)
+base_url: http://192.168.0.25:8000
+```
+
+Any server exposing OpenAI-compatible `/v1/audio/speech` (TTS) and `/v1/audio/transcriptions` (STT) endpoints works:
+
+| Server | TTS | STT | Notes |
+|--------|-----|-----|-------|
+| [mlx-audio](https://github.com/Blaizzy/mlx-audio) | ✅ Kokoro, Qwen3-TTS | ✅ Whisper, Parakeet | Apple Silicon optimized; `pip install mlx-audio && python -m mlx_audio.server` |
+| [Piper](https://github.com/rhasspy/piper) | ✅ | ❌ | Blazing fast CPU TTS (~200ms); needs a wrapper for OpenAI API |
+| [whisper.cpp](https://github.com/ggerganov/whisper.cpp) | ❌ | ✅ | `whisper-server --port 8080` |
+
+The device tries local first over plain HTTP (no TLS overhead), then falls back to Groq cloud if the local server is unreachable. After a failure, local is skipped for 60 seconds before retrying.
 
 ---
 
@@ -470,6 +489,7 @@ Edit `SOUL.md` to change personality. Edit `USER.md` to set your name and timezo
 | Brave Search *(optional)* | Web search tool (alternative) | [brave.com/search/api](https://brave.com/search/api/) |
 | OpenRouter *(optional)* | Alternative LLM provider | [openrouter.ai](https://openrouter.ai) |
 | Ollama *(optional)* | Free local LLM inference | [ollama.com](https://ollama.com) |
+| mlx-audio *(optional)* | Free local TTS + STT (Apple Silicon) | [github.com/Blaizzy/mlx-audio](https://github.com/Blaizzy/mlx-audio) |
 
 Groq offers a generous free tier that covers typical personal-assistant usage.
 The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a Brave key — the provider is detected automatically from the key prefix.
@@ -478,9 +498,12 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 
 ## Changelog
 
-### 2026-03-23 — OLED display, Ollama, Opus encoding, rate limiting, WiFi onboarding
+### 2026-03-23 — Local-first audio, OLED dashboard, Ollama, Opus, rate limiting, WiFi onboarding
+- **Local-first TTS/STT** — New `## Local Audio` section in SERVICES.md. Device tries local server (mlx-audio, Piper, whisper.cpp — any OpenAI-compatible `/v1/audio/speech` and `/v1/audio/transcriptions`) over plain HTTP first, falls back to Groq cloud on failure. 60s backoff after local failure. Eliminates TLS overhead and cloud latency for voice pipeline.
+- **OLED dashboard overhaul** — IP address at top of display with RSSI signal bar below; date on its own row (no overlap). Active screen shows provider/model, status, message preview, and token counts. Idle screen shows time, date, provider, stats, uptime.
 - **SSD1306 OLED display** — 128×64 I2C dashboard showing IP, uptime, heap stats, agent state, and active tool calls. Auto-probes 0x3C/0x3D at boot; I2C bus scan logged. White test pattern on first init. Auto-clears stale messages after 30s.
-- **Local LLM via Ollama** — New `ollama` provider for free, local inference. Configure base URL in SERVICES.md `## Local Model` section. Uses OpenAI-compatible `/v1/chat/completions` over plain HTTP (no TLS). CLI: `set_model_provider ollama`, `set_local_url <url>`.
+- **Local LLM via Ollama** — New `ollama` provider for free, local inference. Configure base URL in SERVICES.md `## Local Model` section. Uses OpenAI-compatible `/v1/chat/completions` over plain HTTP (no TLS). Smart routing: tries local Ollama first, falls back to cloud if offline. CLI: `set_model_provider ollama`, `set_local_url <url>`.
+- **TTS text limit raised** — `TTS_MAX_CHARS` increased from 500 to 1500 to prevent truncation of longer spoken responses.
 - **Opus encoding for local mic** — WAV audio from INMP441/UAC mic compressed to Opus/OGG before STT upload (~10–15× size reduction). Browser WebM/Opus audio passed through as-is.
 - **LLM rate limiting** — 60 requests/hour default (configurable via `rate_limit` CLI command). System channel messages (cron, heartbeat) exempt. Returns user-facing message when limit reached.
 - **WiFi onboarding captive portal** — On first boot with no stored credentials, starts a SoftAP "Langoustine-XXXX" with a web form for WiFi SSID/password, API key, and Telegram token. Saves to NVS and reboots.

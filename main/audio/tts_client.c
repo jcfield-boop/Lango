@@ -43,6 +43,13 @@ static char s_endpoint[TTS_ENDPOINT_MAX] = LANG_DEFAULT_TTS_ENDPOINT;
 static char s_model[TTS_MODEL_MAX]       = LANG_DEFAULT_TTS_MODEL;
 static char s_voice[TTS_VOICE_MAX]       = LANG_DEFAULT_TTS_VOICE;
 
+/* Local TTS (mlx-audio / Piper / etc.) — plain HTTP, no TLS */
+#define TTS_LOCAL_URL_MAX  192
+static char s_local_url[TTS_LOCAL_URL_MAX] = {0};
+static bool s_local_offline = false;
+static int64_t s_local_fail_us = 0;
+#define LOCAL_BACKOFF_US   (60 * 1000000LL)  /* skip local for 60s after failure */
+
 /* Persistent HTTP session — created once in tts_client_init() */
 static http_session_t s_session = {0};
 
@@ -190,12 +197,82 @@ esp_err_t tts_client_init(void)
     return ESP_OK;
 }
 
+/* ── Local TTS (plain HTTP, no TLS) ────────────────────────────── */
+
+static bool local_tts_available(void)
+{
+    if (!s_local_url[0]) return false;
+    if (s_local_offline) {
+        if ((esp_timer_get_time() - s_local_fail_us) < LOCAL_BACKOFF_US) return false;
+        s_local_offline = false;  /* retry after backoff */
+    }
+    return true;
+}
+
+/**
+ * Try generating TTS via local server (mlx-audio compatible).
+ * Returns ESP_OK + fills bb on success, ESP_FAIL on any error.
+ */
+static esp_err_t tts_generate_local(const char *text, bin_buf_t *bb)
+{
+    char url[TTS_LOCAL_URL_MAX + 32];
+    snprintf(url, sizeof(url), "%s/v1/audio/speech", s_local_url);
+
+    cJSON *req = cJSON_CreateObject();
+    if (!req) return ESP_ERR_NO_MEM;
+    cJSON_AddStringToObject(req, "model", s_model[0] ? s_model : "kokoro");
+    cJSON_AddStringToObject(req, "input", text);
+    cJSON_AddStringToObject(req, "voice", s_voice[0] ? s_voice : "af_heart");
+    cJSON_AddStringToObject(req, "response_format", "wav");
+
+    char *body = cJSON_PrintUnformatted(req);
+    cJSON_Delete(req);
+    if (!body) return ESP_ERR_NO_MEM;
+
+    esp_http_client_config_t cfg = {
+        .url            = url,
+        .event_handler  = http_event_cb,
+        .user_data      = bb,
+        .timeout_ms     = 30000,  /* local TTS may need time for long text */
+        .buffer_size    = 8192,
+        .buffer_size_tx = 4096,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) { free(body); return ESP_FAIL; }
+
+    esp_http_client_set_method(client, HTTP_METHOD_POST);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, body, (int)strlen(body));
+
+    ESP_LOGI(TAG, "TTS local: POST %s (%u chars)", url, (unsigned)strlen(text));
+    ws_server_broadcast_monitor_verbose("tts", "Trying local TTS (mlx-audio)...");
+
+    esp_err_t ret = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    free(body);
+
+    if (ret != ESP_OK || status != 200 || bb->len == 0) {
+        ESP_LOGW(TAG, "Local TTS failed: %s (HTTP %d, %u bytes)",
+                 esp_err_to_name(ret), status, (unsigned)bb->len);
+        s_local_offline = true;
+        s_local_fail_us = esp_timer_get_time();
+        ws_server_broadcast_monitor_verbose("tts", "Local TTS offline, falling back to cloud");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Local TTS OK: %u bytes", (unsigned)bb->len);
+    ws_server_broadcast_monitor_verbose("tts", "Local TTS success");
+    return ESP_OK;
+}
+
 esp_err_t tts_generate(const char *text, char *id_out)
 {
     if (!text || !text[0] || !id_out) return ESP_ERR_INVALID_ARG;
 
-    if (!s_api_key[0]) {
-        ESP_LOGW(TAG, "No TTS API key — skipping TTS");
+    /* Allow TTS if we have either a cloud API key or a local URL */
+    if (!s_api_key[0] && !s_local_url[0]) {
+        ESP_LOGW(TAG, "No TTS API key and no local URL — skipping TTS");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -228,66 +305,90 @@ esp_err_t tts_generate(const char *text, char *id_out)
     }
     bb.cap = TTS_GROW_STEP;
 
-    char auth[TTS_API_KEY_MAX + 16];
-    snprintf(auth, sizeof(auth), "Bearer %s", s_api_key);
+    bool got_audio = false;
+    esp_err_t ret;
 
-    /* Reuse persistent session (lazy init fallback if init was skipped) */
-    if (!s_session.valid) {
-        http_session_init(&s_session, s_endpoint, http_event_cb,
-                          60 * 1000, 8192, 4096);
-    }
-    if (!s_session.valid) {
-        free(body);
-        free(bb.data);
-        return ESP_FAIL;
-    }
-
-    /* Point session at this call's response buffer */
-    http_session_set_ctx(&s_session, &bb);
-
-    esp_http_client_set_method(s_session.handle, HTTP_METHOD_POST);
-    esp_http_client_set_header(s_session.handle, "Authorization", auth);
-    esp_http_client_set_header(s_session.handle, "Content-Type", "application/json");
-    esp_http_client_set_post_field(s_session.handle, body, (int)strlen(body));
-
-    esp_err_t ret = esp_http_client_perform(s_session.handle);
-
-    /* If connection was stale, reset session and retry with headers re-applied.
-     * http_session_reset() creates a fresh handle — old headers/body are lost. */
-    if (ret == ESP_ERR_HTTP_CONNECT || ret == ESP_ERR_HTTP_CONNECTION_CLOSED) {
-        ESP_LOGW(TAG, "TTS connection lost (%s), resetting and retrying", esp_err_to_name(ret));
-        ws_server_broadcast_monitor_verbose("tts", "Connection lost, retrying...");
-        http_session_reset(&s_session);
-        if (s_session.valid) {
-            http_session_set_ctx(&s_session, &bb);
-            esp_http_client_set_method(s_session.handle, HTTP_METHOD_POST);
-            esp_http_client_set_header(s_session.handle, "Authorization", auth);
-            esp_http_client_set_header(s_session.handle, "Content-Type", "application/json");
-            esp_http_client_set_post_field(s_session.handle, body, (int)strlen(body));
-            bb.len = 0;  /* reset response buffer for retry */
-            ret = esp_http_client_perform(s_session.handle);
-        }
-    }
-
-    int status = esp_http_client_get_status_code(s_session.handle);
-    /* Do NOT cleanup — keep handle alive for TLS session reuse */
-    free(body);
-
-    if (ret != ESP_OK || status != 200) {
-        char tts_err[80];
-        if (bb.data && bb.len > 0) {
-            size_t print_len = bb.len < 255 ? bb.len : 255;
-            bb.data[print_len] = '\0';
-            ESP_LOGE(TAG, "TTS HTTP %d body: %s", status, (char *)bb.data);
-            snprintf(tts_err, sizeof(tts_err), "TTS failed: HTTP %d", status);
+    /* ── Try local TTS first (plain HTTP, no TLS) ─────────────── */
+    if (local_tts_available()) {
+        ret = tts_generate_local(text, &bb);
+        if (ret == ESP_OK && bb.len > 0 && !bb.oom) {
+            got_audio = true;
         } else {
-            ESP_LOGE(TAG, "TTS HTTP %d (no body): %s", status, esp_err_to_name(ret));
-            snprintf(tts_err, sizeof(tts_err), "TTS failed: %s", esp_err_to_name(ret));
+            /* Reset buffer for cloud fallback */
+            bb.len = 0;
+            bb.oom = false;
         }
-        ws_server_broadcast_monitor_verbose("tts", tts_err);
-        free(bb.data);
-        return (ret != ESP_OK) ? ret : ESP_FAIL;
     }
+
+    /* ── Cloud TTS (Groq) ──────────────────────────────────────── */
+    if (!got_audio) {
+        if (!s_api_key[0]) {
+            ESP_LOGW(TAG, "No TTS API key — skipping cloud TTS");
+            free(body);
+            free(bb.data);
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        char auth[TTS_API_KEY_MAX + 16];
+        snprintf(auth, sizeof(auth), "Bearer %s", s_api_key);
+
+        /* Reuse persistent session (lazy init fallback if init was skipped) */
+        if (!s_session.valid) {
+            http_session_init(&s_session, s_endpoint, http_event_cb,
+                              60 * 1000, 8192, 4096);
+        }
+        if (!s_session.valid) {
+            free(body);
+            free(bb.data);
+            return ESP_FAIL;
+        }
+
+        http_session_set_ctx(&s_session, &bb);
+        esp_http_client_set_method(s_session.handle, HTTP_METHOD_POST);
+        esp_http_client_set_header(s_session.handle, "Authorization", auth);
+        esp_http_client_set_header(s_session.handle, "Content-Type", "application/json");
+        esp_http_client_set_post_field(s_session.handle, body, (int)strlen(body));
+
+        ret = esp_http_client_perform(s_session.handle);
+
+        if (ret == ESP_ERR_HTTP_CONNECT || ret == ESP_ERR_HTTP_CONNECTION_CLOSED) {
+            ESP_LOGW(TAG, "TTS connection lost (%s), resetting and retrying", esp_err_to_name(ret));
+            ws_server_broadcast_monitor_verbose("tts", "Connection lost, retrying...");
+            http_session_reset(&s_session);
+            if (s_session.valid) {
+                http_session_set_ctx(&s_session, &bb);
+                esp_http_client_set_method(s_session.handle, HTTP_METHOD_POST);
+                esp_http_client_set_header(s_session.handle, "Authorization", auth);
+                esp_http_client_set_header(s_session.handle, "Content-Type", "application/json");
+                esp_http_client_set_post_field(s_session.handle, body, (int)strlen(body));
+                bb.len = 0;
+                ret = esp_http_client_perform(s_session.handle);
+            }
+        }
+
+        int status = esp_http_client_get_status_code(s_session.handle);
+        free(body);
+        body = NULL;
+
+        if (ret != ESP_OK || status != 200) {
+            char tts_err[80];
+            if (bb.data && bb.len > 0) {
+                size_t print_len = bb.len < 255 ? bb.len : 255;
+                bb.data[print_len] = '\0';
+                ESP_LOGE(TAG, "TTS HTTP %d body: %s", status, (char *)bb.data);
+                snprintf(tts_err, sizeof(tts_err), "TTS failed: HTTP %d", status);
+            } else {
+                ESP_LOGE(TAG, "TTS HTTP %d (no body): %s", status, esp_err_to_name(ret));
+                snprintf(tts_err, sizeof(tts_err), "TTS failed: %s", esp_err_to_name(ret));
+            }
+            ws_server_broadcast_monitor_verbose("tts", tts_err);
+            free(bb.data);
+            return (ret != ESP_OK) ? ret : ESP_FAIL;
+        }
+
+        got_audio = true;
+    }
+    free(body);  /* safe if already NULL */
 
     if (bb.oom || bb.len == 0) {
         ESP_LOGE(TAG, "TTS response buffer error (len=%u, oom=%d)", (unsigned)bb.len, bb.oom);
@@ -295,10 +396,10 @@ esp_err_t tts_generate(const char *text, char *id_out)
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG, "TTS received: %u bytes WAV", (unsigned)bb.len);
+    ESP_LOGI(TAG, "TTS received: %u bytes audio", (unsigned)bb.len);
     {
         char tts_ok[48];
-        snprintf(tts_ok, sizeof(tts_ok), "Received %uKB WAV", (unsigned)(bb.len / 1024));
+        snprintf(tts_ok, sizeof(tts_ok), "Received %uKB audio", (unsigned)(bb.len / 1024));
         ws_server_broadcast_monitor_verbose("tts", tts_ok);
     }
 
@@ -432,4 +533,21 @@ void tts_get_voice(char *buf, size_t buf_len)
     if (!buf || buf_len == 0) return;
     strncpy(buf, s_voice[0] ? s_voice : LANG_DEFAULT_TTS_VOICE, buf_len - 1);
     buf[buf_len - 1] = '\0';
+}
+
+void tts_set_local_url(const char *url)
+{
+    if (!url) { s_local_url[0] = '\0'; return; }
+    strncpy(s_local_url, url, sizeof(s_local_url) - 1);
+    s_local_url[sizeof(s_local_url) - 1] = '\0';
+    /* Strip trailing slash */
+    size_t len = strlen(s_local_url);
+    if (len > 0 && s_local_url[len - 1] == '/') s_local_url[len - 1] = '\0';
+    s_local_offline = false;
+    ESP_LOGI(TAG, "Local TTS URL: %s", s_local_url);
+}
+
+const char *tts_get_local_url(void)
+{
+    return s_local_url;
 }

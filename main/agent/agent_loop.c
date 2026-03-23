@@ -546,6 +546,7 @@ static void agent_loop_task(void *arg)
         bool retry_done = false;
         bool oom_restart = false;
         bool capture_image_called = false;
+        esp_err_t last_err = ESP_OK;
         bool is_telegram = (strcmp(msg.channel, LANG_CHAN_TELEGRAM) == 0);
         int32_t tg_placeholder_id = -1;
 
@@ -577,6 +578,21 @@ static void agent_loop_task(void *arg)
         ws_stream_ctx_t stream_ctx = { .last_sent_len = 0, .last_sent_us = 0 };
         strncpy(stream_ctx.chat_id, msg.chat_id, sizeof(stream_ctx.chat_id) - 1);
         strncpy(stream_ctx.channel, msg.channel, sizeof(stream_ctx.channel) - 1);
+
+        /* Smart routing: prefer local Ollama when available */
+        bool using_local = false;
+        if (llm_smart_routing_available()) {
+            bool local_ok = llm_local_health_check();
+            if (local_ok) {
+                llm_set_request_override("ollama", llm_get_local_model());
+                using_local = true;
+                ESP_LOGI(TAG, "Smart routing: using local %s", llm_get_local_model());
+                ws_server_broadcast_monitor("llm", "routing: local (ollama)");
+            } else {
+                ESP_LOGI(TAG, "Smart routing: local offline, using cloud");
+                ws_server_broadcast_monitor("llm", "routing: cloud (local offline)");
+            }
+        }
 
         while (iteration < LANG_AGENT_MAX_TOOL_ITER) {
             /* Soft per-turn timeout: 180s. Daily briefing heartbeats need 4-6 LLM
@@ -614,6 +630,13 @@ static void agent_loop_task(void *arg)
                 ws_server_broadcast_monitor("llm", itermsg);
             }
             led_indicator_set(LED_THINKING);
+            /* Show provider/model on OLED before LLM call */
+            {
+                char prov_line[32];
+                snprintf(prov_line, sizeof(prov_line), "%.15s/%.14s",
+                         llm_get_provider(), llm_get_model());
+                oled_display_set_provider(prov_line);
+            }
             llm_response_t resp;
             bool force_this_iter = (force_memory_tool && iteration == 0);
             err = llm_chat_tools_streaming(system_prompt, messages, tools_json,
@@ -631,13 +654,36 @@ static void agent_loop_task(void *arg)
                                                &resp);
             }
 
+            /* Cloud fallback: if local failed, try cloud provider */
+            if (err != ESP_OK && using_local) {
+                ESP_LOGW(TAG, "Local LLM failed (%s), falling back to cloud", esp_err_to_name(err));
+                ws_server_broadcast_monitor("llm", "local failed — falling back to cloud");
+                oled_display_set_message("Fallback: cloud");
+                llm_clear_request_override();
+                using_local = false;
+                retry_done = false;
+                err = llm_chat_tools_streaming(system_prompt, messages, tools_json,
+                                               force_this_iter,
+                                               ws_stream_progress, &stream_ctx,
+                                               &resp);
+            }
+
             if (err != ESP_OK) {
                 char emsg[80];
-                snprintf(emsg, sizeof(emsg), "LLM call failed: %s", esp_err_to_name(err));
+                snprintf(emsg, sizeof(emsg), "LLM failed: %s", esp_err_to_name(err));
                 ESP_LOGE(TAG, "%s", emsg);
                 ws_server_broadcast_monitor("error", emsg);
+                oled_display_set_message(emsg);
+                last_err = err;
                 if (err == ESP_ERR_NO_MEM) { oom_restart = true; }
                 break;
+            }
+
+            /* Update OLED with session token counts */
+            {
+                uint32_t in_tok, out_tok;
+                llm_get_session_stats(&in_tok, &out_tok, NULL);
+                oled_display_set_tokens(in_tok, out_tok);
             }
 
             if (!resp.tool_use) {
@@ -667,12 +713,23 @@ static void agent_loop_task(void *arg)
             }
 
             ESP_LOGI(TAG, "Tool use iteration %d: %d calls", iteration + 1, resp.call_count);
-            /* OLED: show tool iteration info */
+            /* OLED: show tool name(s) being called */
             {
-                char oled_iter[64];
-                snprintf(oled_iter, sizeof(oled_iter), "Iter %d: %d tool%s",
-                         iteration + 1, resp.call_count, resp.call_count > 1 ? "s" : "");
-                oled_display_set_message(oled_iter);
+                char oled_tool[128];
+                if (resp.call_count == 1) {
+                    snprintf(oled_tool, sizeof(oled_tool), "Tool: %s", resp.calls[0].name);
+                } else {
+                    int off = snprintf(oled_tool, sizeof(oled_tool), "Tools: ");
+                    for (int ti = 0; ti < resp.call_count && off < (int)sizeof(oled_tool) - 2; ti++) {
+                        off += snprintf(oled_tool + off, sizeof(oled_tool) - off, "%s%s",
+                                        ti > 0 ? ", " : "", resp.calls[ti].name);
+                    }
+                }
+                oled_display_set_status(oled_tool);
+                char iter_msg[32];
+                snprintf(iter_msg, sizeof(iter_msg), "Iter %d/%d",
+                         iteration + 1, LANG_AGENT_MAX_TOOL_ITER);
+                oled_display_set_message(iter_msg);
             }
 
             cJSON *asst_msg = cJSON_CreateObject();
@@ -705,6 +762,9 @@ static void agent_loop_task(void *arg)
         }
 
         cJSON_Delete(messages);
+
+        /* Always clear per-request override after the loop */
+        llm_clear_request_override();
 
         if (!final_text && iteration >= LANG_AGENT_MAX_TOOL_ITER) {
             char emsg[64];
@@ -763,7 +823,7 @@ static void agent_loop_task(void *arg)
                 /* Limit TTS input to keep WAV download manageable for browsers.
                  * Truncate at the last sentence boundary (. ! ?) within the limit.
                  * Full text is still sent to the browser for display. */
-                #define TTS_MAX_CHARS 500
+                #define TTS_MAX_CHARS 1500
                 char tts_buf[TTS_MAX_CHARS + 1];
                 const char *tts_text = final_text;
                 if (strlen(final_text) > TTS_MAX_CHARS) {
@@ -864,9 +924,16 @@ static void agent_loop_task(void *arg)
             free(final_text);
             led_indicator_set(LED_ERROR);
             ws_server_broadcast_monitor("error", "agent: LLM returned empty response");
-            const char *err_text = oom_restart
-                ? "Memory exhausted — restarting..."
-                : "Sorry, I encountered an error.";
+            char err_buf[128];
+            const char *err_text;
+            if (oom_restart) {
+                err_text = "Memory exhausted — restarting...";
+            } else if (last_err != ESP_OK) {
+                snprintf(err_buf, sizeof(err_buf), "Error: %s", esp_err_to_name(last_err));
+                err_text = err_buf;
+            } else {
+                err_text = "Sorry, I encountered an error.";
+            }
 
             if (is_telegram && tg_placeholder_id > 0) {
                 telegram_edit_message(msg.chat_id, tg_placeholder_id, err_text);

@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
+#include "esp_timer.h"
 #include "nvs.h"
 #include "cJSON.h"
 
@@ -22,6 +23,13 @@ static const char *TAG = "stt";
 static char s_api_key[STT_API_KEY_MAX]  = {0};
 static char s_endpoint[STT_ENDPOINT_MAX] = LANG_DEFAULT_STT_ENDPOINT;
 static char s_model[STT_MODEL_MAX]       = LANG_DEFAULT_STT_MODEL;
+
+/* Local STT (mlx-audio / whisper.cpp / etc.) — plain HTTP, no TLS */
+#define STT_LOCAL_URL_MAX  192
+static char s_local_url[STT_LOCAL_URL_MAX] = {0};
+static bool s_local_offline = false;
+static int64_t s_local_fail_us = 0;
+#define LOCAL_BACKOFF_US   (60 * 1000000LL)  /* skip local for 60s after failure */
 
 /* Persistent HTTP session — created once in stt_client_init() */
 static http_session_t s_session = {0};
@@ -137,6 +145,107 @@ static uint8_t *build_multipart(const uint8_t *audio, size_t audio_len,
     return body;
 }
 
+/* ── Local STT (plain HTTP, no TLS) ────────────────────────────── */
+
+static bool local_stt_available(void)
+{
+    if (!s_local_url[0]) return false;
+    if (s_local_offline) {
+        if ((esp_timer_get_time() - s_local_fail_us) < LOCAL_BACKOFF_US) return false;
+        s_local_offline = false;
+    }
+    return true;
+}
+
+static esp_err_t stt_transcribe_local(const uint8_t *audio, size_t audio_len,
+                                       const char *mime, stt_result_t *out)
+{
+    char url[STT_LOCAL_URL_MAX + 48];
+    snprintf(url, sizeof(url), "%s/v1/audio/transcriptions", s_local_url);
+
+    const char *use_mime  = (mime && mime[0]) ? mime : "audio/webm;codecs=opus";
+    const char *use_model = s_model[0] ? s_model : "whisper-large-v3-turbo";
+
+    size_t body_len = 0;
+    uint8_t *body = build_multipart(audio, audio_len, use_mime, use_model, &body_len);
+    if (!body) return ESP_ERR_NO_MEM;
+
+    resp_buf_t rb = { .data = ps_malloc(2048), .len = 0, .cap = 2048, .oom = false };
+    if (!rb.data) { free(body); return ESP_ERR_NO_MEM; }
+    rb.data[0] = '\0';
+
+    char ct[64];
+    snprintf(ct, sizeof(ct), "multipart/form-data; boundary=%s", STT_BOUNDARY);
+
+    esp_http_client_config_t cfg = {
+        .url            = url,
+        .event_handler  = http_event_cb,
+        .user_data      = &rb,
+        .timeout_ms     = 30000,
+        .buffer_size    = 4096,
+        .buffer_size_tx = 4096,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) { free(body); free(rb.data); return ESP_FAIL; }
+
+    esp_http_client_set_method(client, HTTP_METHOD_POST);
+    esp_http_client_set_header(client, "Content-Type", ct);
+    esp_http_client_set_post_field(client, (const char *)body, (int)body_len);
+
+    ESP_LOGI(TAG, "STT local: POST %s (%u audio bytes)", url, (unsigned)audio_len);
+    ws_server_broadcast_monitor_verbose("stt", "Trying local STT (mlx-audio)...");
+
+    esp_err_t ret = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    free(body);
+
+    if (ret != ESP_OK || status != 200) {
+        ESP_LOGW(TAG, "Local STT failed: %s (HTTP %d)", esp_err_to_name(ret), status);
+        s_local_offline = true;
+        s_local_fail_us = esp_timer_get_time();
+        ws_server_broadcast_monitor_verbose("stt", "Local STT offline, falling back to cloud");
+        free(rb.data);
+        return ESP_FAIL;
+    }
+
+    /* Parse JSON — may be NDJSON (mlx-audio streams); take last complete JSON */
+    char *json_start = rb.data;
+    /* If NDJSON, find the last line with "text" */
+    char *last_text_line = NULL;
+    char *line = rb.data;
+    while (*line) {
+        if (strstr(line, "\"text\"")) last_text_line = line;
+        char *nl = strchr(line, '\n');
+        if (!nl) break;
+        line = nl + 1;
+    }
+    if (last_text_line) json_start = last_text_line;
+
+    cJSON *root = cJSON_Parse(json_start);
+    free(rb.data);
+
+    if (!root) {
+        strncpy(out->error, "Invalid JSON from local STT", sizeof(out->error) - 1);
+        s_local_offline = true;
+        s_local_fail_us = esp_timer_get_time();
+        return ESP_FAIL;
+    }
+
+    cJSON *text_item = cJSON_GetObjectItem(root, "text");
+    if (cJSON_IsString(text_item) && text_item->valuestring[0]) {
+        strncpy(out->text, text_item->valuestring, sizeof(out->text) - 1);
+        ESP_LOGI(TAG, "Local STT: \"%s\"", out->text);
+        ws_server_broadcast_monitor_verbose("stt", "Local STT success");
+        cJSON_Delete(root);
+        return ESP_OK;
+    }
+
+    cJSON_Delete(root);
+    strncpy(out->error, "Empty local STT result", sizeof(out->error) - 1);
+    return ESP_FAIL;
+}
+
 /* ── Public API ────────────────────────────────────────────────── */
 
 esp_err_t stt_client_init(void)
@@ -185,8 +294,19 @@ esp_err_t stt_transcribe(const uint8_t *audio, size_t audio_len,
     if (!audio || audio_len == 0 || !out) return ESP_ERR_INVALID_ARG;
     memset(out, 0, sizeof(*out));
 
+    /* Try local STT first */
+    if (local_stt_available()) {
+        esp_err_t local_ret = stt_transcribe_local(audio, audio_len, mime, out);
+        if (local_ret == ESP_OK && out->text[0]) {
+            return ESP_OK;
+        }
+        /* Clear error from local attempt before cloud fallback */
+        memset(out, 0, sizeof(*out));
+    }
+
     if (!s_api_key[0]) {
-        strncpy(out->error, "No STT API key configured", sizeof(out->error) - 1);
+        strncpy(out->error, "No STT API key configured and local STT unavailable",
+                sizeof(out->error) - 1);
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -350,4 +470,21 @@ void stt_get_api_key_masked(char *buf, size_t buf_len)
     } else {
         snprintf(buf, buf_len, "%.4s****", s_api_key);
     }
+}
+
+void stt_set_local_url(const char *url)
+{
+    if (!url) { s_local_url[0] = '\0'; return; }
+    strncpy(s_local_url, url, sizeof(s_local_url) - 1);
+    s_local_url[sizeof(s_local_url) - 1] = '\0';
+    /* Strip trailing slash */
+    size_t len = strlen(s_local_url);
+    if (len > 0 && s_local_url[len - 1] == '/') s_local_url[len - 1] = '\0';
+    s_local_offline = false;
+    ESP_LOGI(TAG, "Local STT URL: %s", s_local_url);
+}
+
+const char *stt_get_local_url(void)
+{
+    return s_local_url;
 }

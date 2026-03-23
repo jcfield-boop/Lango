@@ -473,6 +473,7 @@ void app_main(void)
         ESP_LOGI(TAG, "Waiting for WiFi connection...");
         if (wifi_manager_wait_connected(30000) == ESP_OK) {
             ESP_LOGI(TAG, "WiFi connected: %s", wifi_manager_get_ip());
+            oled_display_set_ip(wifi_manager_get_ip());
 
             /* Advertise via mDNS */
             mdns_init();

@@ -243,6 +243,11 @@ void led_indicator_init(void)
     ESP_LOGI(TAG, "LED indicator init on GPIO %d", LANG_LED_GPIO);
 }
 
+led_state_t led_indicator_get_state(void)
+{
+    return atomic_load(&s_state);
+}
+
 void led_indicator_set(led_state_t state)
 {
     atomic_store(&s_state, state);

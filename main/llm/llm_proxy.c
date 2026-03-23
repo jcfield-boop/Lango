@@ -28,6 +28,17 @@ static char s_provider[16] = MIMI_LLM_PROVIDER_DEFAULT;
 /* Local/Ollama model: full base URL e.g. "http://192.168.0.25:11434/v1" */
 #define LLM_LOCAL_URL_MAX 128
 static char s_local_url[LLM_LOCAL_URL_MAX] = {0};
+static char s_local_model[LLM_MODEL_MAX_LEN] = {0};
+
+/* Per-request override (single agent task, no concurrency) */
+static char s_override_provider[16] = {0};
+static char s_override_model[LLM_MODEL_MAX_LEN] = {0};
+static bool s_override_active = false;
+
+/* Cached local health check */
+static bool s_local_online = false;
+static int64_t s_local_check_us = 0;
+#define LOCAL_HEALTH_CACHE_US  (60LL * 1000000LL)  /* 60 seconds */
 
 static uint32_t s_total_input_tokens    = 0;
 static uint32_t s_total_output_tokens   = 0;
@@ -150,19 +161,29 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 
 /* ── Provider helpers ──────────────────────────────────────────── */
 
+static const char *effective_provider(void)
+{
+    return s_override_active ? s_override_provider : s_provider;
+}
+
+static const char *effective_model(void)
+{
+    return s_override_active ? s_override_model : s_model;
+}
+
 static bool provider_is_openai(void)
 {
-    return strcmp(s_provider, "openai") == 0;
+    return strcmp(effective_provider(), "openai") == 0;
 }
 
 static bool provider_is_openrouter(void)
 {
-    return strcmp(s_provider, "openrouter") == 0;
+    return strcmp(effective_provider(), "openrouter") == 0;
 }
 
 static bool provider_is_ollama(void)
 {
-    return strcmp(s_provider, "ollama") == 0;
+    return strcmp(effective_provider(), "ollama") == 0;
 }
 
 /* Returns true for any provider that uses OpenAI-compatible message/tool format */
@@ -591,13 +612,13 @@ esp_err_t llm_chat_tools(const char *system_prompt,
 
     {
         char llm_info[96];
-        snprintf(llm_info, sizeof(llm_info), "provider=%s model=%s", s_provider, s_model);
+        snprintf(llm_info, sizeof(llm_info), "provider=%s model=%s", effective_provider(), effective_model());
         ws_server_broadcast_monitor("llm", llm_info);
     }
 
     /* Build request body (non-streaming) */
     cJSON *body = cJSON_CreateObject();
-    cJSON_AddStringToObject(body, "model", s_model);
+    cJSON_AddStringToObject(body, "model", effective_model());
     if (provider_is_openai()) {
         /* OpenAI uses the newer max_completion_tokens parameter */
         cJSON_AddNumberToObject(body, "max_completion_tokens", MIMI_LLM_MAX_TOKENS);
@@ -647,7 +668,7 @@ esp_err_t llm_chat_tools(const char *system_prompt,
     if (!post_data) return ESP_ERR_NO_MEM;
 
     ESP_LOGI(TAG, "Calling LLM API with tools (provider: %s, model: %s, body: %d bytes)",
-             s_provider, s_model, (int)strlen(post_data));
+             effective_provider(), effective_model(), (int)strlen(post_data));
     llm_log_payload("LLM tools request", post_data);
 
     /* HTTP call */
@@ -1320,13 +1341,13 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
 
     {
         char llm_info[96];
-        snprintf(llm_info, sizeof(llm_info), "provider=%s model=%s", s_provider, s_model);
+        snprintf(llm_info, sizeof(llm_info), "provider=%s model=%s", effective_provider(), effective_model());
         ws_server_broadcast_monitor("llm", llm_info);
     }
 
     /* Build request body (identical to non-streaming + stream:true) */
     cJSON *body = cJSON_CreateObject();
-    cJSON_AddStringToObject(body, "model", s_model);
+    cJSON_AddStringToObject(body, "model", effective_model());
     if (provider_is_openai()) {
         cJSON_AddNumberToObject(body, "max_completion_tokens", MIMI_LLM_MAX_TOKENS);
     } else {
@@ -1372,7 +1393,7 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
     if (!post_data) return ESP_ERR_NO_MEM;
 
     ESP_LOGI(TAG, "Calling LLM streaming (provider: %s, model: %s, body: %d bytes)",
-             s_provider, s_model, (int)strlen(post_data));
+             effective_provider(), effective_model(), (int)strlen(post_data));
 
     /* Allocate SSE state */
     sse_state_t *st = sse_state_alloc();
@@ -1488,8 +1509,8 @@ void llm_get_session_stats(uint32_t *in, uint32_t *out, uint32_t *cost_millicent
     if (cost_millicents) *cost_millicents = s_total_cost_millicents;
 }
 
-const char *llm_get_provider(void)  { return s_provider; }
-const char *llm_get_model(void)    { return s_model; }
+const char *llm_get_provider(void)  { return effective_provider(); }
+const char *llm_get_model(void)    { return effective_model(); }
 const char *llm_get_api_key(void)  { return s_api_key; }
 const char *llm_get_local_url(void) { return s_local_url; }
 
@@ -1548,4 +1569,76 @@ esp_err_t llm_set_provider(const char *provider)
     safe_copy(s_provider, sizeof(s_provider), provider);
     ESP_LOGI(TAG, "Provider set to: %s", s_provider);
     return ESP_OK;
+}
+
+/* ── Per-request override (for smart routing) ─────────────────── */
+
+void llm_set_request_override(const char *provider, const char *model)
+{
+    safe_copy(s_override_provider, sizeof(s_override_provider), provider);
+    safe_copy(s_override_model, sizeof(s_override_model), model);
+    s_override_active = true;
+    ESP_LOGI(TAG, "Request override: provider=%s model=%s", s_override_provider, s_override_model);
+}
+
+void llm_clear_request_override(void)
+{
+    s_override_active = false;
+    s_override_provider[0] = '\0';
+    s_override_model[0] = '\0';
+}
+
+void llm_set_local_model(const char *model)
+{
+    if (model) {
+        safe_copy(s_local_model, sizeof(s_local_model), model);
+        ESP_LOGI(TAG, "Local model set to: %s", s_local_model);
+    } else {
+        s_local_model[0] = '\0';
+    }
+}
+
+const char *llm_get_local_model(void) { return s_local_model; }
+
+bool llm_local_health_check(void)
+{
+    if (!s_local_url[0]) return false;
+
+    /* Use cached result if fresh */
+    int64_t now = esp_timer_get_time();
+    if (s_local_check_us > 0 && (now - s_local_check_us) < LOCAL_HEALTH_CACHE_US) {
+        return s_local_online;
+    }
+
+    /* HTTP GET to /v1/models with short timeout */
+    char url[LLM_LOCAL_URL_MAX + 16];
+    snprintf(url, sizeof(url), "%s/models", s_local_url);
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .timeout_ms = 3000,
+        .method = HTTP_METHOD_GET,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        s_local_online = false;
+        s_local_check_us = now;
+        return false;
+    }
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    s_local_online = (err == ESP_OK && status == 200);
+    s_local_check_us = now;
+    ESP_LOGI(TAG, "Local health check: %s (status=%d)", s_local_online ? "online" : "offline", status);
+    return s_local_online;
+}
+
+bool llm_smart_routing_available(void)
+{
+    /* Smart routing is possible when: global provider is cloud-based AND local URL+model are configured */
+    return (strcmp(s_provider, "openrouter") == 0 || strcmp(s_provider, "anthropic") == 0)
+           && s_local_url[0] && s_local_model[0];
 }
