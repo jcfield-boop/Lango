@@ -181,7 +181,7 @@ static esp_err_t stt_transcribe_local(const uint8_t *audio, size_t audio_len,
         .url            = url,
         .event_handler  = http_event_cb,
         .user_data      = &rb,
-        .timeout_ms     = 30000,
+        .timeout_ms     = 10000,  /* local LAN — generous for transcription */
         .buffer_size    = 4096,
         .buffer_size_tx = 4096,
     };

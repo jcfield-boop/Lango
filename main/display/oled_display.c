@@ -66,7 +66,12 @@ static void draw_idle_screen(void)
     localtime_r(&now, &tm);
     int rssi = get_rssi();
 
-    /* ── Row 0: IP address (right-aligned) + RSSI bar below ─────── */
+    /* ── Row 0-15: Large time (HH:MM) on left, IP on right ──────── */
+    char time_str[8];
+    snprintf(time_str, sizeof(time_str), "%02d:%02d", tm.tm_hour, tm.tm_min);
+    ssd1306_str_2x(0, 0, time_str);
+    /* 5 chars × 12px = 60px for 2x time. IP starts after. */
+
     portENTER_CRITICAL(&s_mux);
     char ip_copy[20];
     strncpy(ip_copy, s_ip_addr, sizeof(ip_copy) - 1);
@@ -74,30 +79,24 @@ static void draw_idle_screen(void)
     portEXIT_CRITICAL(&s_mux);
 
     if (ip_copy[0]) {
+        /* Small 1x font IP right-aligned on row 0 (above the 2x baseline) */
         int ip_len = (int)strlen(ip_copy);
         int ip_x = 128 - ip_len * 6;
-        if (ip_x < 0) ip_x = 0;
+        if (ip_x < 64) ip_x = 64;  /* don't overlap time */
         ssd1306_str(ip_x, 0, ip_copy);
-    } else if (tm.tm_sec % 2 == 0) {
-        ssd1306_str(92, 0, "WiFi..");
     }
 
-    /* RSSI bar graph right-aligned below IP (row 10) */
-    draw_rssi(106, 10, rssi);
-
-    /* ── Row 0-15: Large time (HH:MM) on left ──────────────────── */
-    char time_str[8];
-    snprintf(time_str, sizeof(time_str), "%02d:%02d", tm.tm_hour, tm.tm_min);
-    ssd1306_str_2x(0, 0, time_str);
-
-    /* ── Row 18: date ───────────────────────────────────────────── */
-    char date_str[22];
+    /* ── Row 18: date (left) + RSSI bars (right) ─────────────────── */
     static const char *days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
     static const char *months[] = {"Jan","Feb","Mar","Apr","May","Jun",
                                    "Jul","Aug","Sep","Oct","Nov","Dec"};
+    char date_str[22];
     snprintf(date_str, sizeof(date_str), "%s %s %d",
              days[tm.tm_wday], months[tm.tm_mon], tm.tm_mday);
     ssd1306_str(0, 18, date_str);
+
+    /* RSSI bars right-aligned on the date row */
+    draw_rssi(106, 18, rssi);
 
     /* Separator line */
     ssd1306_hline(0, 28, 128, true);

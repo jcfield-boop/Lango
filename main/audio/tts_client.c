@@ -220,9 +220,9 @@ static esp_err_t tts_generate_local(const char *text, bin_buf_t *bb)
 
     cJSON *req = cJSON_CreateObject();
     if (!req) return ESP_ERR_NO_MEM;
-    cJSON_AddStringToObject(req, "model", s_model[0] ? s_model : "kokoro");
+    cJSON_AddStringToObject(req, "model", "mlx-community/Kokoro-82M-bf16");
     cJSON_AddStringToObject(req, "input", text);
-    cJSON_AddStringToObject(req, "voice", s_voice[0] ? s_voice : "af_heart");
+    cJSON_AddStringToObject(req, "voice", "af_heart");
     cJSON_AddStringToObject(req, "response_format", "wav");
 
     char *body = cJSON_PrintUnformatted(req);
@@ -233,7 +233,7 @@ static esp_err_t tts_generate_local(const char *text, bin_buf_t *bb)
         .url            = url,
         .event_handler  = http_event_cb,
         .user_data      = bb,
-        .timeout_ms     = 30000,  /* local TTS may need time for long text */
+        .timeout_ms     = 15000,  /* local LAN — generous for long text */
         .buffer_size    = 8192,
         .buffer_size_tx = 4096,
     };

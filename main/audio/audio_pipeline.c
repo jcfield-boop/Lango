@@ -175,7 +175,7 @@ esp_err_t audio_pipeline_init(void)
     /* STT task pinned to Core 1 */
     BaseType_t ret = xTaskCreatePinnedToCore(
         audio_stt_task, "stt_task",
-        12 * 1024, NULL,
+        16 * 1024, NULL,
         7,   /* STT_PRIO: higher than agent (6) to prevent starvation */
         &s_stt_task_handle,
         LANG_STT_CORE);
