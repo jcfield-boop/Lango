@@ -10,8 +10,8 @@ static QueueHandle_t s_outbound_queue;
 
 esp_err_t message_bus_init(void)
 {
-    s_inbound_queue = xQueueCreate(MIMI_BUS_QUEUE_LEN, sizeof(mimi_msg_t));
-    s_outbound_queue = xQueueCreate(MIMI_BUS_QUEUE_LEN, sizeof(mimi_msg_t));
+    s_inbound_queue = xQueueCreate(MIMI_BUS_QUEUE_LEN, sizeof(lang_msg_t));
+    s_outbound_queue = xQueueCreate(MIMI_BUS_QUEUE_LEN, sizeof(lang_msg_t));
 
     if (!s_inbound_queue || !s_outbound_queue) {
         ESP_LOGE(TAG, "Failed to create message queues");
@@ -22,7 +22,7 @@ esp_err_t message_bus_init(void)
     return ESP_OK;
 }
 
-esp_err_t message_bus_push_inbound(const mimi_msg_t *msg)
+esp_err_t message_bus_push_inbound(const lang_msg_t *msg)
 {
     if (xQueueSend(s_inbound_queue, msg, pdMS_TO_TICKS(1000)) != pdTRUE) {
         ESP_LOGW(TAG, "Inbound queue full, dropping message");
@@ -31,7 +31,7 @@ esp_err_t message_bus_push_inbound(const mimi_msg_t *msg)
     return ESP_OK;
 }
 
-esp_err_t message_bus_pop_inbound(mimi_msg_t *msg, uint32_t timeout_ms)
+esp_err_t message_bus_pop_inbound(lang_msg_t *msg, uint32_t timeout_ms)
 {
     TickType_t ticks = (timeout_ms == UINT32_MAX) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
     if (xQueueReceive(s_inbound_queue, msg, ticks) != pdTRUE) {
@@ -40,7 +40,7 @@ esp_err_t message_bus_pop_inbound(mimi_msg_t *msg, uint32_t timeout_ms)
     return ESP_OK;
 }
 
-esp_err_t message_bus_push_outbound(const mimi_msg_t *msg)
+esp_err_t message_bus_push_outbound(const lang_msg_t *msg)
 {
     if (xQueueSend(s_outbound_queue, msg, pdMS_TO_TICKS(1000)) != pdTRUE) {
         ESP_LOGW(TAG, "Outbound queue full, dropping message");
@@ -49,7 +49,7 @@ esp_err_t message_bus_push_outbound(const mimi_msg_t *msg)
     return ESP_OK;
 }
 
-esp_err_t message_bus_pop_outbound(mimi_msg_t *msg, uint32_t timeout_ms)
+esp_err_t message_bus_pop_outbound(lang_msg_t *msg, uint32_t timeout_ms)
 {
     TickType_t ticks = (timeout_ms == UINT32_MAX) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
     if (xQueueReceive(s_outbound_queue, msg, ticks) != pdTRUE) {

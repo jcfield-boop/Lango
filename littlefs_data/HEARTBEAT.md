@@ -1,6 +1,9 @@
 # Heartbeat Tasks
 
-Runs every 30 minutes. Keep tasks fast and cheap — no web_search, no email.
+Markers: `[30m]` = every cycle, `[daily HH:MM]` = once/day (Pacific time), `[ ]` = one-shot, `[x]` = done.
+Keep tasks fast and cheap — no web_search, no long LLM chains.
 
-- [x] Call get_current_time, then write a one-line status entry to today's daily note at /lfs/memory/<YYYY-MM-DD>.md (append=true): "HH:MM PST — Lango heartbeat OK. Heap: X KB."
-- [x] Call system_info. If heap_free < 18000 (18 KB), send a Telegram alert: "⚠️ Lango heap low: X KB free. May need restart." (Normal idle range is 24–35 KB; only alert at true danger threshold.)
+- [30m] Call system_info and get_current_time. Append ONE line to /lfs/memory/soak.md (append=true, create if missing): "HH:MM — heap=Xk min=Xk psram=XMB rssi=XdBm up=Xm" (use KB for heap, MB for PSRAM, minutes for uptime, dBm for WiFi RSSI). Nothing else.
+- [30m] After system_info: if heap_free < 20000, send Telegram: "⚠️ Lango heap: [heap_free]B free (min: [heap_min]B). Uptime: [uptime]s. Consider restart." If heap is fine, do nothing.
+- [daily 06:05] Morning briefing! Call system_info and get_current_time. Read /lfs/memory/soak.md (last ~20 lines). Send an EMAIL using send_email with subject "☀️ Lango Morning Briefing" and body: "Good morning James! Lango status: uptime [X]h, heap [X]KB (overnight min: [X]KB), PSRAM [X]MB free, WiFi [X]dBm. [Trend notes from soak.md — e.g. 'heap stable overnight' or 'heap trending down from X to Y', 'WiFi signal steady/degrading']. All systems nominal." Keep it concise.
+- [daily 22:00] Nightly soak summary. Call system_info. Read /lfs/memory/soak.md. Send Telegram: "🌙 Nightly check: uptime [X]h, heap [X]KB (day min: [X]KB), [X] heartbeats logged today. [Any concerns or all-clear]." Then truncate soak.md to last 48 entries using edit_file (replace full content with just the last 48 lines) to prevent unbounded growth.

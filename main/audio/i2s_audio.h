@@ -49,6 +49,24 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len);
 esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint32_t timeout_ms);
 
 /**
+ * @brief Play a WAV file asynchronously through the I2S speaker.
+ *
+ * Starts playback in a background task and returns immediately.
+ * If already playing, the current playback is cancelled and the new WAV starts.
+ * The WAV data must remain valid (in PSRAM cache) for the duration of playback.
+ *
+ * @param wav_data  Pointer to WAV file data (RIFF header + PCM payload).
+ * @param len       Total byte length of the WAV buffer.
+ * @return ESP_OK on success.
+ */
+esp_err_t i2s_audio_play_wav_async(const uint8_t *wav_data, size_t len);
+
+/**
+ * @brief Stop any in-progress async playback.
+ */
+void i2s_audio_stop(void);
+
+/**
  * @brief Set playback volume (0=mute, 128=50%, 255=full). Persisted to NVS.
  */
 void i2s_audio_set_volume(uint8_t vol);
@@ -57,3 +75,31 @@ void i2s_audio_set_volume(uint8_t vol);
  * @brief Get current playback volume (0–255).
  */
 uint8_t i2s_audio_get_volume(void);
+
+/**
+ * @brief Restart the I2S RX channel (disable + enable).
+ *
+ * Call after suspending the wake word feed task to clear any pending
+ * i2s_channel_read that was holding the DMA semaphore.
+ *
+ * @return ESP_OK on success.
+ */
+esp_err_t i2s_audio_rx_restart(void);
+
+/**
+ * @brief Play a test tone (440 Hz sine wave, ~2 seconds) through the speaker.
+ *
+ * Generates PCM samples in-memory — no TTS API call needed.
+ * Useful for verifying the I2S → amp → speaker hardware path.
+ *
+ * @return ESP_OK on success.
+ */
+esp_err_t i2s_audio_test_tone(void);
+
+/**
+ * @brief Run I2S RX diagnostics — register dump, raw DMA read, wiring checklist.
+ *
+ * Prints results directly to stdout (serial console).
+ * Suspends wake word before calling if needed.
+ */
+void i2s_audio_diag(void);

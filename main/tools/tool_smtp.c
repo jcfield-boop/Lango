@@ -1,4 +1,5 @@
 #include "tool_smtp.h"
+#include "config/services_parser.h"
 #include "gateway/ws_server.h"
 
 #include <string.h>
@@ -8,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_tls.h"
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "cJSON.h"
 
 static const char *TAG = "tool_smtp";
@@ -53,46 +55,28 @@ static bool parse_email_creds(smtp_creds_t *c)
     memset(c, 0, sizeof(*c));
     c->port = 465;  /* Gmail SMTPS default */
 
-    FILE *f = fopen("/lfs/config/SERVICES.md", "r");
-    if (!f) return false;
+    char port_str[8] = {0};
+    services_kv_t kvs[] = {
+        { "smtp_host",    c->smtp_host, sizeof(c->smtp_host) },
+        { "smtp_port",    port_str,     sizeof(port_str)     },
+        { "username",     c->username,  sizeof(c->username)  },
+        { "password",     c->password,  sizeof(c->password)  },
+        { "from_address", c->from_addr, sizeof(c->from_addr) },
+        { "to_address",   c->to_addr,   sizeof(c->to_addr)  },
+    };
+    services_parse_section("## Email", kvs, 6);
 
-    char line[256];
-    bool in_section = false;
+    if (port_str[0]) c->port = atoi(port_str);
 
-    while (fgets(line, sizeof(line), f)) {
-        /* Trim trailing whitespace */
-        int len = (int)strlen(line);
-        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r' ||
-                           line[len-1] == ' '))
-            line[--len] = '\0';
-
-        if (strcmp(line, "## Email") == 0) { in_section = true;  continue; }
-        if (in_section && len > 1 && line[0] == '#') break;
-        if (!in_section || len == 0) continue;
-
-        char *colon = strchr(line, ':');
-        if (!colon) continue;
-        *colon = '\0';
-        const char *key = line;
-        const char *val = colon + 1;
-        while (*val == ' ') val++;
-
-        if      (strcmp(key, "smtp_host")    == 0) strncpy(c->smtp_host,  val, sizeof(c->smtp_host)  - 1);
-        else if (strcmp(key, "smtp_port")    == 0) c->port = atoi(val);
-        else if (strcmp(key, "username")     == 0) strncpy(c->username,   val, sizeof(c->username)   - 1);
-        else if (strcmp(key, "from_address") == 0) strncpy(c->from_addr,  val, sizeof(c->from_addr)  - 1);
-        else if (strcmp(key, "to_address")   == 0) strncpy(c->to_addr,    val, sizeof(c->to_addr)    - 1);
-        else if (strcmp(key, "password")     == 0) {
-            /* Strip spaces from app password (Gmail shows it as "xxxx xxxx xxxx xxxx") */
-            int p = 0;
-            for (int i = 0; val[i] && p < (int)sizeof(c->password) - 1; i++) {
-                if (val[i] != ' ') c->password[p++] = val[i];
-            }
-            c->password[p] = '\0';
+    /* Strip spaces from app password (Gmail shows it as "xxxx xxxx xxxx xxxx") */
+    {
+        int p = 0;
+        for (int i = 0; c->password[i]; i++) {
+            if (c->password[i] != ' ') c->password[p++] = c->password[i];
         }
+        c->password[p] = '\0';
     }
 
-    fclose(f);
     return (c->username[0] && c->password[0] && c->to_addr[0]);
 }
 
@@ -182,10 +166,36 @@ esp_err_t tool_smtp_execute(const char *input_json, char *output, size_t output_
     /* Default from_address to username if not set */
     if (!creds.from_addr[0]) strncpy(creds.from_addr, creds.username, sizeof(creds.from_addr) - 1);
 
+    /* Extract bare email for SMTP envelope (MAIL FROM needs just the email,
+     * not "Display Name <email>" format which goes in the From: header). */
+    char envelope_from[128];
+    const char *lt = strchr(creds.from_addr, '<');
+    const char *gt = lt ? strchr(lt, '>') : NULL;
+    if (lt && gt && gt > lt + 1) {
+        size_t elen = (size_t)(gt - lt - 1);
+        if (elen >= sizeof(envelope_from)) elen = sizeof(envelope_from) - 1;
+        memcpy(envelope_from, lt + 1, elen);
+        envelope_from[elen] = '\0';
+    } else {
+        strncpy(envelope_from, creds.from_addr, sizeof(envelope_from) - 1);
+        envelope_from[sizeof(envelope_from) - 1] = '\0';
+    }
+
     /* NOTE: cJSON_Delete(input) deferred to smtp_done — subject/body pointers
      * alias into the cJSON tree and must stay valid until after smtp_write. */
 
+    /* Port 587 uses STARTTLS (plain TCP → upgrade), which esp_tls doesn't
+     * support.  Port 465 uses implicit TLS and works with esp_tls_conn_new_sync.
+     * Gmail supports both, so auto-correct if the user configured 587. */
+    if (creds.port == 587) {
+        ESP_LOGW(TAG, "Port 587 (STARTTLS) not supported — using 465 (SMTPS)");
+        creds.port = 465;
+    }
+
     ESP_LOGI(TAG, "Sending email to %s via %s:%d", creds.to_addr, creds.smtp_host, creds.port);
+    ESP_LOGI(TAG, "SRAM before TLS: free=%lu min=%lu",
+             (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned long)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
     ws_server_broadcast_monitor_verbose("email", "Connecting to SMTP...");
 
     /* TLS connect */
@@ -244,7 +254,7 @@ esp_err_t tool_smtp_execute(const char *input_json, char *output, size_t output_
     SMTP_CHECK(334, "username");
     SMTP_SEND("%s", b64p);
     SMTP_CHECK(235, "password");
-    SMTP_SEND("MAIL FROM:<%s>", creds.from_addr);
+    SMTP_SEND("MAIL FROM:<%s>", envelope_from);
     SMTP_CHECK(250, "MAIL FROM");
     SMTP_SEND("RCPT TO:<%s>", creds.to_addr);
     SMTP_CHECK(250, "RCPT TO");
@@ -284,5 +294,8 @@ smtp_done:
     memset(&creds, 0, sizeof(creds));
 
     esp_tls_conn_destroy(tls);
+    ESP_LOGI(TAG, "SRAM after TLS: free=%lu min=%lu",
+             (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned long)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
     return err;
 }

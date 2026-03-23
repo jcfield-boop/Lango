@@ -3,6 +3,7 @@ idf_component_register(
         "langoustine.c"
         "bus/message_bus.c"
         "wifi/wifi_manager.c"
+        "wifi/wifi_onboard.c"
         "llm/llm_proxy.c"
         "agent/agent_loop.c"
         "agent/context_builder.c"
@@ -38,6 +39,7 @@ idf_component_register(
         "tools/tool_memory_read.c"
         "tools/tool_session.c"
         "tools/tool_noaa_buoy.c"
+        "tools/tool_say.c"
         "rules/rule_engine.c"
         "skills/skill_loader.c"
         "ota/ota_manager.c"
@@ -47,12 +49,17 @@ idf_component_register(
         "audio/audio_pipeline.c"
         "audio/uac_microphone.c"
         "llm/http_session.c"
+        "audio/opus_encode.c"
         "audio/stt_client.c"
         "audio/tts_client.c"
         "telegram/telegram_bot.c"
         "camera/uvc_camera.c"
         "tools/tool_capture_image.c"
         "led/led_indicator.c"
+        "display/ssd1306.c"
+        "display/oled_display.c"
+        "config/services_config.c"
+        "config/services_parser.c"
         "diag/log_buffer.c"
     EMBED_TXTFILES
         "certs/server_cert.pem"
@@ -63,5 +70,6 @@ idf_component_register(
         nvs_flash esp_wifi esp_netif esp_http_client esp_http_server
         esp_https_ota esp_https_server esp_event json console vfs app_update esp-tls
         driver esp_timer esp_driver_tsens espressif__mdns joltwallet__littlefs
-        mbedtls usb espressif__usb_host_uvc espressif__usb_host_uac espressif__esp-sr
+        mbedtls usb espressif__usb_host_uvc usb_host_uac espressif__esp-sr
+        78__esp-opus
 )

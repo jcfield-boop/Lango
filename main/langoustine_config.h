@@ -47,17 +47,17 @@
 #define LANG_AGENT_STACK             (40 * 1024)
 #define LANG_AGENT_PRIO              6
 #define LANG_AGENT_CORE              1
-#define LANG_AGENT_MAX_HISTORY       30
+#define LANG_AGENT_MAX_HISTORY       60
 #define LANG_AGENT_MAX_TOOL_ITER     10
-#define LANG_MAX_TOOL_CALLS          4
+#define LANG_MAX_TOOL_CALLS          2
 #define LANG_AGENT_SEND_WORKING_STATUS 1
 
 /* Timezone (POSIX TZ format) */
 #define LANG_TIMEZONE                "PST8PDT,M3.2.0,M11.1.0"
 
 /* LLM */
-#define LANG_LLM_DEFAULT_MODEL       "claude-opus-4-5"
-#define LANG_LLM_PROVIDER_DEFAULT    "anthropic"
+#define LANG_LLM_DEFAULT_MODEL       "openrouter/auto"
+#define LANG_LLM_PROVIDER_DEFAULT    "openrouter"
 #define LANG_LLM_MAX_TOKENS          4096
 #define LANG_LLM_API_URL             "https://api.anthropic.com/v1/messages"
 #define LANG_OPENAI_API_URL          "https://api.openai.com/v1/chat/completions"
@@ -90,21 +90,25 @@
 /* TTS defaults (Groq Orpheus) */
 #define LANG_DEFAULT_TTS_ENDPOINT    "https://api.groq.com/openai/v1/audio/speech"
 #define LANG_DEFAULT_TTS_MODEL       "canopylabs/orpheus-v1-english"
-#define LANG_DEFAULT_TTS_VOICE       "tara"
+#define LANG_DEFAULT_TTS_VOICE       "autumn"  /* valid Groq Orpheus voices: autumn diana hannah austin daniel troy */
 
 /* RGB Status LED — WS2812/NeoPixel on dev board via RMT */
 #define LANG_LED_GPIO    38   /* GPIO38 = onboard NeoPixel on ESP32-S3-DevKitC-1 */
 
-/* I2S Audio — shared BCLK/LRCLK for speaker + mic */
-#define LANG_I2S_BCLK    15   /* to MAX98357A BCLK + INMP441 SCK  */
-#define LANG_I2S_LRCLK   16   /* to MAX98357A LRC  + INMP441 WS   */
-#define LANG_I2S_DOUT    17   /* to MAX98357A DIN                  */
-#define LANG_I2S_DIN     18   /* from INMP441 SD                   */
+/* I2S Audio — full-duplex on I2S_NUM_0 (shared bus for speaker + mic).
+ * MAX98357A and INMP441 share BCLK/WS on GPIO 3/4.
+ * TX is master (generates clocks), RX is slave (sig_loopback).
+ * Silence pump keeps TX DMA active so BCLK runs continuously for mic.
+ * Amp gated by GPIO 42 — silence writes produce no audible output. */
+#define LANG_I2S_BCLK     3   /* shared: MAX98357A BCLK + INMP441 SCK */
+#define LANG_I2S_LRCLK    4   /* shared: MAX98357A LRC  + INMP441 WS  */
+#define LANG_I2S_DOUT     6   /* TX: to MAX98357A DIN                 */
+#define LANG_I2S_DIN      5   /* RX: from INMP441 SD                  */
 
 /* Software volume scale: 0–256, where 256 = 100% (0 dB), 128 = 50% (−6 dB).
  * Lower values reduce peak amp current and prevent brownouts on weak PSUs. */
 #ifndef LANG_AUDIO_VOLUME
-#define LANG_AUDIO_VOLUME  128
+#define LANG_AUDIO_VOLUME  64
 #endif
 
 /* MAX98357A SD (shutdown) pin — optional amp power gating.
@@ -113,8 +117,19 @@
  * Set to -1 (default) if the SD pin is floating / not connected to a GPIO.
  * Example: wire SD to GPIO 45 and set LANG_AMP_SD_GPIO 45 here. */
 #ifndef LANG_AMP_SD_GPIO
-#define LANG_AMP_SD_GPIO  42
+#define LANG_AMP_SD_GPIO  42   /* MAX98357A shutdown: HIGH=on, LOW=off */
 #endif
+
+/* I2S DMA buffer tuning for gapless speaker playback.
+ * Each DMA buffer holds dma_frame_num frames of (data_bit_width/8 * slots) bytes.
+ * At 24kHz mono 16-bit: 480 frames × 2 bytes = 960 B/buf, 8 bufs = 7.7KB TX.
+ * Provides ~160ms buffering at 24kHz — survives WiFi TX bursts (10-50ms). */
+#define LANG_I2S_DMA_DESC_NUM    8    /* number of DMA descriptors (was 6 default) */
+#define LANG_I2S_DMA_FRAME_NUM   480  /* frames per DMA buffer (was 240 default) */
+
+/* Software fade duration (ms) applied at start/end of WAV playback.
+ * Eliminates pop/click from abrupt amp enable/disable transitions. */
+#define LANG_I2S_FADE_MS         15
 
 /* PTT button — BOOT button, active low, internal pull-up */
 #define LANG_PTT_GPIO              0
@@ -123,15 +138,22 @@
 #define LANG_MIC_SAMPLE_RATE    16000
 #define LANG_MIC_BITS              16
 #define LANG_MIC_READ_CHUNK_BYTES 512   /* ~16 ms of audio per I2S read */
-#define LANG_MIC_STACK_SIZE      8192
+#define LANG_MIC_STACK_SIZE      12288  /* 12KB: UAC ctrl xfers need headroom, 8KB caused StoreProhibited */
 #define LANG_MIC_TASK_PRIO          5
 
-/* I2C bus (camera SCCB + future PCA9685 servos) */
-#define LANG_I2C_SDA      9
-#define LANG_I2C_SCL     10
+/* I2C bus (OLED display + BME280 sensor + future peripherals) */
+#define LANG_I2C_SDA        9
+#define LANG_I2C_SCL       10
+#define LANG_I2C_FREQ_HZ   100000   /* 100 kHz standard mode — safer with dupont wires */
+
+/* SSD1306 OLED display */
+#define LANG_OLED_ADDR      0x3C    /* default I2C address */
+#define LANG_OLED_WIDTH     128
+#define LANG_OLED_HEIGHT    64
+#define LANG_OLED_ENABLED   1
 
 /* Enable local speaker playback via MAX98357A after TTS generation */
-#define LANG_I2S_AUDIO_ENABLED  0
+#define LANG_I2S_AUDIO_ENABLED  1
 
 /* Message Bus */
 #define LANG_BUS_QUEUE_LEN           48
@@ -150,8 +172,8 @@
 #define LANG_MEMORY_MAX_BYTES        (16 * 1024)
 #define LANG_SOUL_FILE               "/lfs/config/SOUL.md"
 #define LANG_USER_FILE               "/lfs/config/USER.md"
-#define LANG_SESSION_MAX_MSGS        50
-#define LANG_SESSION_HISTORY_MAX_BYTES (24 * 1024)
+#define LANG_SESSION_MAX_MSGS        200
+#define LANG_SESSION_HISTORY_MAX_BYTES (64 * 1024)
 
 /* Cron / Heartbeat */
 #define LANG_CRON_FILE               "/lfs/cron.json"

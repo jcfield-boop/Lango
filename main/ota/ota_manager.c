@@ -3,6 +3,7 @@
 #include "gateway/ws_server.h"
 #include "led/led_indicator.h"
 #include "agent/agent_loop.h"
+#include "audio/wake_word.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -110,6 +111,10 @@ esp_err_t ota_update_from_url(const char *url)
     led_indicator_set(LED_OTA);
     status_set(OTA_STATE_DOWNLOADING, 0, NULL, NULL);
 
+    /* Suspend wake word feed task — it competes for Core 0 CPU and SPI bus
+     * during flash erase/write cycles, causing progressive OTA slowdown. */
+    wake_word_suspend();
+
     esp_http_client_config_t http_cfg = {
         .url                   = url,
         .timeout_ms            = 120000,
@@ -133,6 +138,7 @@ esp_err_t ota_update_from_url(const char *url)
         ws_server_broadcast_monitor("ota", msg);
         status_set(OTA_STATE_ERROR, 0, NULL, msg);
         led_indicator_set(LED_ERROR);
+        wake_word_resume();
         return ret;
     }
 
@@ -147,6 +153,7 @@ esp_err_t ota_update_from_url(const char *url)
         esp_https_ota_abort(ota_handle);
         status_set(OTA_STATE_ERROR, 0, NULL, msg);
         led_indicator_set(LED_ERROR);
+        wake_word_resume();
         return ret;
     }
     {
@@ -159,14 +166,34 @@ esp_err_t ota_update_from_url(const char *url)
         status_set(OTA_STATE_DOWNLOADING, 0, new_desc.version, NULL);
     }
 
-    /* Step 5: Stream and write with per-decile progress broadcasts */
+    /* Step 5: Stream and write with per-decile progress broadcasts.
+     * Stall watchdog: if no new bytes arrive for 30s, abort the OTA.
+     * This prevents the device from hanging forever when the serving
+     * HTTP server dies mid-download (e.g. OTA script timeout). */
     int img_size = esp_https_ota_get_image_size(ota_handle);
     int last_pct = -1;
+    int last_read_bytes = 0;
+    TickType_t last_progress_tick = xTaskGetTickCount();
+    #define OTA_STALL_TIMEOUT_MS  30000
+
     while (1) {
         ret = esp_https_ota_perform(ota_handle);
         if (ret != ESP_ERR_HTTPS_OTA_IN_PROGRESS) break;
+
+        int read = esp_https_ota_get_image_len_read(ota_handle);
+
+        /* Stall detection */
+        if (read > last_read_bytes) {
+            last_read_bytes = read;
+            last_progress_tick = xTaskGetTickCount();
+        } else if ((xTaskGetTickCount() - last_progress_tick) > pdMS_TO_TICKS(OTA_STALL_TIMEOUT_MS)) {
+            ESP_LOGE(TAG, "OTA stalled at %d bytes for %ds — aborting",
+                     read, OTA_STALL_TIMEOUT_MS / 1000);
+            ret = ESP_ERR_TIMEOUT;
+            break;
+        }
+
         if (img_size > 0) {
-            int read = esp_https_ota_get_image_len_read(ota_handle);
             int pct  = (int)((int64_t)read * 100 / img_size);
             if (pct < 0) pct = 0;
             if (pct > 100) pct = 100;
@@ -182,6 +209,10 @@ esp_err_t ota_update_from_url(const char *url)
             s_status.progress_pct = (uint8_t)pct;
             portEXIT_CRITICAL(&s_status_mux);
         }
+
+        /* Yield to WiFi/lwIP task on Core 0 — without this the tight
+         * perform loop can starve networking and cause download stalls. */
+        vTaskDelay(1);
     }
     if (ret != ESP_OK) {
         char msg[80];
@@ -191,6 +222,7 @@ esp_err_t ota_update_from_url(const char *url)
         esp_https_ota_abort(ota_handle);
         status_set(OTA_STATE_ERROR, 0, NULL, msg);
         led_indicator_set(LED_ERROR);
+        wake_word_resume();
         return ret;
     }
 

@@ -10,8 +10,10 @@
 #include "tools/tool_memory.h"
 #include "tools/tool_web_search.h"
 #include "audio/tts_client.h"
+#include "audio/i2s_audio.h"
 #include "telegram/telegram_bot.h"
 #include "led/led_indicator.h"
+#include "display/oled_display.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -29,6 +31,53 @@
 
 static const char *TAG = "agent";
 static _Atomic bool s_agent_busy = false;
+
+/* ── LLM API rate limiting ────────────────────────────────────── */
+/* Tracks hourly request count. Resets every hour.
+ * Default: 60/hour. Configurable via CLI: rate_limit <n>  */
+#define RATE_LIMIT_DEFAULT_PER_HOUR  60
+#define RATE_LIMIT_WINDOW_US         (3600LL * 1000000LL)  /* 1 hour */
+
+static int      s_rate_limit_max  = RATE_LIMIT_DEFAULT_PER_HOUR;
+static int      s_rate_limit_count = 0;
+static int64_t  s_rate_limit_window_start = 0;
+
+static bool agent_rate_limit_ok(void)
+{
+    int64_t now = esp_timer_get_time();
+    /* Reset window if expired */
+    if (now - s_rate_limit_window_start > RATE_LIMIT_WINDOW_US) {
+        s_rate_limit_count = 0;
+        s_rate_limit_window_start = now;
+    }
+    if (s_rate_limit_count >= s_rate_limit_max) {
+        return false;
+    }
+    s_rate_limit_count++;
+    return true;
+}
+
+void agent_set_rate_limit(int max_per_hour)
+{
+    if (max_per_hour < 1) max_per_hour = 1;
+    if (max_per_hour > 999) max_per_hour = 999;
+    s_rate_limit_max = max_per_hour;
+    ESP_LOGI(TAG, "LLM rate limit set to %d/hour", max_per_hour);
+}
+
+int agent_get_rate_limit(void)
+{
+    return s_rate_limit_max;
+}
+
+int agent_get_rate_count(void)
+{
+    /* If window expired, return 0 */
+    if (esp_timer_get_time() - s_rate_limit_window_start > RATE_LIMIT_WINDOW_US) {
+        return 0;
+    }
+    return s_rate_limit_count;
+}
 
 #define TOOL_OUTPUT_SIZE      (32 * 1024)
 #define WS_TOKEN_MIN_CHARS    8
@@ -106,7 +155,7 @@ static void json_set_string(cJSON *obj, const char *key, const char *value)
     cJSON_AddStringToObject(obj, key, value);
 }
 
-static void append_turn_context_prompt(char *prompt, size_t size, const mimi_msg_t *msg)
+static void append_turn_context_prompt(char *prompt, size_t size, const lang_msg_t *msg)
 {
     if (!prompt || size == 0 || !msg) return;
 
@@ -126,7 +175,7 @@ static void append_turn_context_prompt(char *prompt, size_t size, const mimi_msg
     }
 }
 
-static char *patch_tool_input_with_context(const llm_tool_call_t *call, const mimi_msg_t *msg)
+static char *patch_tool_input_with_context(const llm_tool_call_t *call, const lang_msg_t *msg)
 {
     if (!call || !msg || strcmp(call->name, "cron_add") != 0) return NULL;
 
@@ -176,7 +225,7 @@ static void tool_exec_task(void *arg)
     vTaskDelete(NULL);
 }
 
-static cJSON *build_tool_results(const llm_response_t *resp, const mimi_msg_t *msg,
+static cJSON *build_tool_results(const llm_response_t *resp, const lang_msg_t *msg,
                                  char *tool_output, size_t tool_output_size)
 {
     cJSON *content = cJSON_CreateArray();
@@ -232,6 +281,10 @@ static cJSON *build_tool_results(const llm_response_t *resp, const mimi_msg_t *m
                     snprintf(mon, sizeof(mon), "%s %.80s", call->name, ctxs[i].input);
                     for (char *p = mon; *p; p++) if (*p == '\n' || *p == '\r') *p = ' ';
                     ws_server_broadcast_monitor("tool", mon);
+                    /* OLED: show tool being called */
+                    char oled_tool[64];
+                    snprintf(oled_tool, sizeof(oled_tool), "Tool: %s", call->name);
+                    oled_display_set_message(oled_tool);
                 }
 
                 if (xTaskCreate(tool_exec_task, "tool_par", 16384,
@@ -301,6 +354,10 @@ static cJSON *build_tool_results(const llm_response_t *resp, const mimi_msg_t *m
             snprintf(tool_mon, sizeof(tool_mon), "%s %.80s", call->name, tool_input);
             for (char *p = tool_mon; *p; p++) if (*p == '\n' || *p == '\r') *p = ' ';
             ws_server_broadcast_monitor("tool", tool_mon);
+            /* OLED: show tool being called */
+            char oled_tool[64];
+            snprintf(oled_tool, sizeof(oled_tool), "Tool: %s", call->name);
+            oled_display_set_message(oled_tool);
         }
         tool_registry_execute(call->name, tool_input, tool_output, tool_output_size);
         free(patched_input);
@@ -350,7 +407,7 @@ static void agent_loop_task(void *arg)
     const char *tools_json = tool_registry_get_tools_json();
 
     while (1) {
-        mimi_msg_t msg;
+        lang_msg_t msg;
         esp_err_t err = message_bus_pop_inbound(&msg, UINT32_MAX);
         if (err != ESP_OK) continue;
 
@@ -359,11 +416,38 @@ static void agent_loop_task(void *arg)
         memory_tool_reset_turn();
         web_search_reset_turn();
 
-        /* Log SRAM headroom at turn start; warn if critically low */
+        /* SRAM guard: if heap is critically low, restart cleanly rather than
+         * letting the LLM call hit malloc(NULL) and cause a hard panic.
+         * Threshold: mbedTLS (~15KB) + HTTP bufs (~8KB) + safety margin = 26KB.
+         * A hard restart shows as ESP_RST_SW (intentional), not ESP_RST_PANIC. */
         {
             uint32_t sram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
             ESP_LOGI(TAG, "Turn start: SRAM free=%lu B", (unsigned long)sram_free);
-            if (sram_free < 28 * 1024) {
+            if (sram_free < 22 * 1024) {
+                /* Try lighter recovery first: trim session to free cJSON memory.
+                 * cJSON trees are in PSRAM, but traversal metadata and the parse
+                 * path use SRAM. Trimming to 10 msgs often frees enough. */
+                ESP_LOGW(TAG, "SRAM critically low (%lu B) — trimming session %s",
+                         (unsigned long)sram_free, msg.chat_id);
+                session_trim(msg.chat_id, 10);
+                session_cache_invalidate(msg.chat_id);
+
+                uint32_t sram_after = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+                ESP_LOGI(TAG, "SRAM after session trim: %lu B (was %lu B)",
+                         (unsigned long)sram_after, (unsigned long)sram_free);
+
+                if (sram_after < 22 * 1024) {
+                    char wmsg[80];
+                    snprintf(wmsg, sizeof(wmsg),
+                             "SRAM still critically low (%lu B) after trim — restarting",
+                             (unsigned long)sram_after);
+                    ESP_LOGW(TAG, "%s", wmsg);
+                    ws_server_broadcast_monitor("system", wmsg);
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+                    esp_restart();
+                }
+                ws_server_broadcast_monitor("system", "SRAM recovered via session trim");
+            } else if (sram_free < 28 * 1024) {
                 char wmsg[72];
                 snprintf(wmsg, sizeof(wmsg), "SRAM low at turn start: %lu B — risk of OOM",
                          (unsigned long)sram_free);
@@ -372,11 +456,43 @@ static void agent_loop_task(void *arg)
             }
         }
 
+        /* LLM API rate limiting — skip system messages (cron, heartbeat) which
+         * are self-limiting by their own schedules. Only limit user-initiated. */
+        if (strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0 && !agent_rate_limit_ok()) {
+            ESP_LOGW(TAG, "LLM rate limit reached (%d/%d per hour) for %s",
+                     s_rate_limit_count, s_rate_limit_max, msg.chat_id);
+            ws_server_broadcast_monitor("system", "LLM rate limit reached");
+
+            /* Send a response instead of calling the LLM */
+            char rate_msg[128];
+            snprintf(rate_msg, sizeof(rate_msg),
+                     "Rate limit reached (%d requests/hour). Try again in a few minutes.",
+                     s_rate_limit_max);
+
+            lang_msg_t out = {0};
+            strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
+            strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
+            out.content = strdup(rate_msg);
+            if (out.content) {
+                message_bus_push_outbound(&out);
+            }
+            free(msg.content);
+            atomic_store(&s_agent_busy, false);
+            continue;
+        }
+
         ESP_LOGI(TAG, "Processing message from %s:%s", msg.channel, msg.chat_id);
         {
             char mon[64];
             snprintf(mon, sizeof(mon), "from %s:%s", msg.channel, msg.chat_id);
             ws_server_broadcast_monitor("task", mon);
+        }
+
+        /* OLED: show incoming message preview */
+        {
+            char oled_msg[64];
+            snprintf(oled_msg, sizeof(oled_msg), "> %.58s", msg.content ? msg.content : "");
+            oled_display_set_message(oled_msg);
         }
 
         /* 1. Build system prompt in PSRAM buffer */
@@ -430,7 +546,7 @@ static void agent_loop_task(void *arg)
         bool retry_done = false;
         bool oom_restart = false;
         bool capture_image_called = false;
-        bool is_telegram = (strcmp(msg.channel, MIMI_CHAN_TELEGRAM) == 0);
+        bool is_telegram = (strcmp(msg.channel, LANG_CHAN_TELEGRAM) == 0);
         int32_t tg_placeholder_id = -1;
 
         /* Telegram: send placeholder before LLM call */
@@ -463,8 +579,10 @@ static void agent_loop_task(void *arg)
         strncpy(stream_ctx.channel, msg.channel, sizeof(stream_ctx.channel) - 1);
 
         while (iteration < LANG_AGENT_MAX_TOOL_ITER) {
-            /* Soft per-turn timeout: 45s. Prevents WDT reboot on slow/hung tool chains. */
-            if ((esp_timer_get_time() - turn_start_us) > 45000000LL) {
+            /* Soft per-turn timeout: 180s. Daily briefing heartbeats need 4-6 LLM
+             * iterations with web_search + RSS + send_email — each round-trip to
+             * OpenRouter takes 5-15s, easily totaling 2-3 minutes. */
+            if ((esp_timer_get_time() - turn_start_us) > 180000000LL) {
                 ESP_LOGW(TAG, "Agent soft timeout at iter %d — abandoning turn", iteration);
                 ws_server_broadcast_monitor("error", "agent turn timeout");
                 final_text = strdup("[Sorry, that took too long. Please retry.]");
@@ -473,7 +591,7 @@ static void agent_loop_task(void *arg)
 
 #if LANG_AGENT_SEND_WORKING_STATUS
             if (!sent_working_status && strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0 && !is_telegram) {
-                mimi_msg_t status = {0};
+                lang_msg_t status = {0};
                 strncpy(status.channel, msg.channel, sizeof(status.channel) - 1);
                 strncpy(status.chat_id, msg.chat_id, sizeof(status.chat_id) - 1);
                 status.content = strdup("Langoustine is thinking...");
@@ -488,8 +606,11 @@ static void agent_loop_task(void *arg)
 #endif
 
             {
-                char itermsg[48];
-                snprintf(itermsg, sizeof(itermsg), "calling LLM streaming (iter %d)...", iteration + 1);
+                uint32_t sram_iter = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+                char itermsg[80];
+                snprintf(itermsg, sizeof(itermsg), "LLM iter %d — SRAM %luKB free",
+                         iteration + 1, (unsigned long)(sram_iter / 1024));
+                ESP_LOGI(TAG, "%s", itermsg);
                 ws_server_broadcast_monitor("llm", itermsg);
             }
             led_indicator_set(LED_THINKING);
@@ -546,6 +667,13 @@ static void agent_loop_task(void *arg)
             }
 
             ESP_LOGI(TAG, "Tool use iteration %d: %d calls", iteration + 1, resp.call_count);
+            /* OLED: show tool iteration info */
+            {
+                char oled_iter[64];
+                snprintf(oled_iter, sizeof(oled_iter), "Iter %d: %d tool%s",
+                         iteration + 1, resp.call_count, resp.call_count > 1 ? "s" : "");
+                oled_display_set_message(oled_iter);
+            }
 
             cJSON *asst_msg = cJSON_CreateObject();
             cJSON_AddStringToObject(asst_msg, "role", "assistant");
@@ -603,7 +731,7 @@ static void agent_loop_task(void *arg)
                 if (tg_placeholder_id > 0) {
                     telegram_edit_message(msg.chat_id, tg_placeholder_id, final_text);
                 } else {
-                    mimi_msg_t out = {0};
+                    lang_msg_t out = {0};
                     strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
                     strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
                     out.content = final_text;
@@ -614,15 +742,28 @@ static void agent_loop_task(void *arg)
                         final_text = NULL;
                     }
                 }
+            } else if (strcmp(msg.channel, LANG_CHAN_SYSTEM) == 0) {
+                /* System/heartbeat: skip TTS entirely — just deliver text.
+                 * TTS + I2S playback causes brownout resets from amp current. */
+                ESP_LOGI(TAG, "System channel — skipping TTS, sending text only");
+                lang_msg_t out = {0};
+                strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
+                strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
+                out.content = final_text;
+                if (message_bus_push_outbound(&out) != ESP_OK) {
+                    free(final_text);
+                } else {
+                    final_text = NULL;
+                }
             } else {
                 /* WebSocket: generate TTS and send */
                 led_indicator_set(LED_SPEAKING);
                 ws_server_send_status(msg.chat_id, "tts_generating");
                 char tts_id[9] = {0};
-                /* Limit TTS to first sentence (or ~200 chars) to keep WAV manageable.
+                /* Limit TTS input to keep WAV download manageable for browsers.
                  * Truncate at the last sentence boundary (. ! ?) within the limit.
                  * Full text is still sent to the browser for display. */
-                #define TTS_MAX_CHARS 200
+                #define TTS_MAX_CHARS 500
                 char tts_buf[TTS_MAX_CHARS + 1];
                 const char *tts_text = final_text;
                 if (strlen(final_text) > TTS_MAX_CHARS) {
@@ -638,6 +779,37 @@ static void agent_loop_task(void *arg)
                     tts_buf[cut] = '\0';
                     tts_text = tts_buf;
                 }
+                /* Strip emoji / non-ASCII symbols that TTS engines can't pronounce.
+                 * UTF-8 4-byte sequences (0xF0...) cover U+10000+ (emoji, symbols).
+                 * Also strip common 3-byte dingbats (U+2600-U+27BF, U+2B50, etc). */
+                {
+                    char *cleaned = tts_buf;
+                    if (tts_text != tts_buf) {
+                        strncpy(tts_buf, tts_text, TTS_MAX_CHARS);
+                        tts_buf[TTS_MAX_CHARS] = '\0';
+                    }
+                    char *dst = cleaned;
+                    const char *src = cleaned;
+                    while (*src) {
+                        unsigned char c = (unsigned char)*src;
+                        if (c >= 0xF0) {
+                            /* Skip 4-byte UTF-8 sequence (emoji) */
+                            int skip = 4;
+                            while (skip > 1 && src[1] && ((unsigned char)src[1] & 0xC0) == 0x80) { src++; skip--; }
+                            src++;
+                        } else if (c == 0xE2 && src[1] && src[2] && (unsigned char)src[1] >= 0x98) {
+                            /* Skip 3-byte dingbats/symbols (U+2600+) */
+                            src += 3;
+                        } else {
+                            *dst++ = *src++;
+                        }
+                    }
+                    *dst = '\0';
+                    tts_text = cleaned;
+                }
+                /* Push response preview to OLED display */
+                oled_display_set_message(tts_text ? tts_text : final_text);
+
                 esp_err_t tts_err = tts_generate(tts_text, tts_id);
 
                 /* Only include image URL if a capture actually succeeded (file exists) */
@@ -651,12 +823,27 @@ static void agent_loop_task(void *arg)
                 if (tts_err == ESP_OK && tts_id[0]) {
                     /* Send message with tts_id so browser auto-plays */
                     ws_server_send_with_tts(msg.chat_id, final_text, tts_id, img_url);
+
+#if LANG_I2S_AUDIO_ENABLED
+                    /* Play TTS audio through local MAX98357A speaker.
+                     * Skip for system/heartbeat — amp current causes brownout resets. */
+                    if (strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0) {
+                        const uint8_t *wav_buf = NULL;
+                        size_t wav_len = 0;
+                        if (tts_cache_get(tts_id, &wav_buf, &wav_len) == ESP_OK) {
+                            ESP_LOGI(TAG, "Playing TTS via I2S speaker (%u bytes, async)", (unsigned)wav_len);
+                            i2s_audio_play_wav_async(wav_buf, wav_len);
+                        }
+                    } else {
+                        ESP_LOGI(TAG, "Skipping I2S playback for system channel");
+                    }
+#endif
                 } else if (img_url && strcmp(msg.channel, "websocket") == 0) {
                     /* No TTS but have an image — send directly so image_url is included */
                     ws_server_send_with_tts(msg.chat_id, final_text, NULL, img_url);
                 } else {
                     /* No TTS, no image — send via outbound queue (handles Telegram etc.) */
-                    mimi_msg_t out = {0};
+                    lang_msg_t out = {0};
                     strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
                     strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
                     out.content = final_text;
@@ -684,7 +871,7 @@ static void agent_loop_task(void *arg)
             if (is_telegram && tg_placeholder_id > 0) {
                 telegram_edit_message(msg.chat_id, tg_placeholder_id, err_text);
             } else {
-                mimi_msg_t out = {0};
+                lang_msg_t out = {0};
                 strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
                 strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
                 out.content = strdup(err_text);

@@ -23,11 +23,14 @@ typedef struct {
     bool      committed;   /* handed to STT task, buffer must not be touched */
     char      chat_id[32];
     char      mime[64];
+    char      channel[16]; /* message bus channel for STT result */
     SemaphoreHandle_t lock;  /* SRAM mutex */
 } audio_ring_t;
 
 static audio_ring_t s_ring = {0};
 static TaskHandle_t s_stt_task_handle = NULL;
+
+#include "audio/opus_encode.h"
 
 /* ── Rate limiting ───────────────────────────────────────────── */
 
@@ -58,8 +61,10 @@ static void audio_stt_task(void *arg)
         size_t audio_len = s_ring.write_pos;
         char   chat_id[32];
         char   mime[64];
+        char   channel[16];
         strncpy(chat_id, s_ring.chat_id, sizeof(chat_id) - 1);
         strncpy(mime, s_ring.mime, sizeof(mime) - 1);
+        strncpy(channel, s_ring.channel, sizeof(channel) - 1);
         xSemaphoreGive(s_ring.lock);
 
         if (audio_len == 0) {
@@ -77,15 +82,52 @@ static void audio_stt_task(void *arg)
 
         ws_server_send_status(chat_id, "stt_processing");
 
+        /* For local mic audio (WAV), compress to Opus/OGG before STT upload.
+         * This reduces upload size by ~10-15x (e.g. 160KB WAV → 12KB OGG).
+         * Browser audio is already WebM/Opus — skip encoding for that path. */
+        uint8_t *stt_buf = s_ring.buf;
+        size_t   stt_len = audio_len;
+        char     stt_mime[64];
+        strncpy(stt_mime, mime, sizeof(stt_mime) - 1);
+        stt_mime[sizeof(stt_mime) - 1] = '\0';
+        uint8_t *opus_buf = NULL;
+
+        if (strcmp(mime, "audio/wav") == 0 && audio_len > 44) {
+            /* WAV: skip 44-byte header to get raw PCM */
+            const int16_t *pcm = (const int16_t *)(s_ring.buf + 44);
+            size_t pcm_bytes = audio_len - 44;
+            size_t opus_size = 0;
+
+            esp_err_t enc_ret = opus_encode_pcm_to_ogg(pcm, pcm_bytes,
+                                                        LANG_MIC_SAMPLE_RATE,
+                                                        &opus_buf, &opus_size);
+            if (enc_ret == ESP_OK && opus_buf && opus_size > 0) {
+                stt_buf = opus_buf;
+                stt_len = opus_size;
+                strncpy(stt_mime, "audio/ogg", sizeof(stt_mime) - 1);
+                ESP_LOGI(TAG, "Opus encoding: %u → %u bytes (%.0f%% reduction)",
+                         (unsigned)audio_len, (unsigned)opus_size,
+                         (double)(100.0f - (float)opus_size / audio_len * 100.0f));
+            } else {
+                ESP_LOGW(TAG, "Opus encode failed (%s), sending raw WAV",
+                         esp_err_to_name(enc_ret));
+            }
+        }
+
         stt_result_t result = {0};
-        esp_err_t ret = stt_transcribe(s_ring.buf, audio_len, mime, &result);
+        esp_err_t ret = stt_transcribe(stt_buf, stt_len, stt_mime, &result);
+
+        /* Free Opus buffer if we allocated one */
+        if (opus_buf) free(opus_buf);
 
         if (ret == ESP_OK && result.text[0] != '\0') {
             ESP_LOGI(TAG, "STT result: %s", result.text);
+            ws_server_broadcast_monitor("stt_result", result.text);
 
-            /* Push transcribed text to message bus as inbound WS prompt */
-            mimi_msg_t msg = {0};
-            strncpy(msg.channel, LANG_CHAN_WEBSOCKET, sizeof(msg.channel) - 1);
+            /* Push transcribed text to message bus using originating channel */
+            lang_msg_t msg = {0};
+            strncpy(msg.channel, channel[0] ? channel : LANG_CHAN_WEBSOCKET,
+                    sizeof(msg.channel) - 1);
             strncpy(msg.chat_id, chat_id, sizeof(msg.chat_id) - 1);
             msg.content = strdup(result.text);
             if (msg.content) {
@@ -151,7 +193,7 @@ esp_err_t audio_pipeline_init(void)
     return ESP_OK;
 }
 
-esp_err_t audio_ring_open(const char *chat_id, const char *mime)
+esp_err_t audio_ring_open(const char *chat_id, const char *mime, const char *channel)
 {
     if (!s_ring.buf) return ESP_ERR_INVALID_STATE;
 
@@ -172,9 +214,11 @@ esp_err_t audio_ring_open(const char *chat_id, const char *mime)
     s_ring.committed = false;
     strncpy(s_ring.chat_id, chat_id ? chat_id : "", sizeof(s_ring.chat_id) - 1);
     strncpy(s_ring.mime, mime ? mime : "audio/webm;codecs=opus", sizeof(s_ring.mime) - 1);
+    strncpy(s_ring.channel, channel ? channel : LANG_CHAN_WEBSOCKET, sizeof(s_ring.channel) - 1);
 
     xSemaphoreGive(s_ring.lock);
-    ESP_LOGI(TAG, "Audio ring opened: chat_id=%s mime=%s", s_ring.chat_id, s_ring.mime);
+    ESP_LOGI(TAG, "Audio ring opened: chat_id=%s mime=%s channel=%s",
+             s_ring.chat_id, s_ring.mime, s_ring.channel);
     return ESP_OK;
 }
 
@@ -268,10 +312,11 @@ esp_err_t audio_ring_reset_for_client(const char *chat_id)
 }
 
 esp_err_t audio_ring_open_wav(const char *chat_id, uint32_t sample_rate,
-                               uint16_t channels, uint16_t bits)
+                               uint16_t channels, uint16_t bits,
+                               const char *channel)
 {
     /* Open the ring, then write a 44-byte WAV header with placeholder sizes */
-    esp_err_t ret = audio_ring_open(chat_id, "audio/wav");
+    esp_err_t ret = audio_ring_open(chat_id, "audio/wav", channel);
     if (ret != ESP_OK) return ret;
 
     /* Standard 44-byte PCM WAV header; data chunk size is 0 (patched at commit) */

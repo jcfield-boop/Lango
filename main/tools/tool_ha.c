@@ -1,5 +1,6 @@
 #include "tool_ha.h"
 #include "lan_request.h"
+#include "config/services_parser.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -14,7 +15,7 @@ static const char *TAG = "tool_ha";
 /* Max bytes of HA response body returned to the model */
 #define HA_BODY_MAX     2048
 
-/* ── SERVICES.md parser ──────────────────────────────────────── */
+/* ── SERVICES.md credentials ─────────────────────────────────── */
 
 typedef struct {
     char url[128];    /* e.g. "http://192.168.0.50:8123" */
@@ -24,36 +25,11 @@ typedef struct {
 static bool parse_ha_creds(ha_creds_t *c)
 {
     memset(c, 0, sizeof(*c));
-
-    FILE *f = fopen("/lfs/config/SERVICES.md", "r");
-    if (!f) return false;
-
-    char line[320];
-    bool in_section = false;
-
-    while (fgets(line, sizeof(line), f)) {
-        int len = (int)strlen(line);
-        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r' ||
-                           line[len-1] == ' '))
-            line[--len] = '\0';
-
-        if (strcmp(line, "## Home Assistant") == 0) { in_section = true;  continue; }
-        if (in_section && len > 1 && line[0] == '#') break;
-        if (!in_section || len == 0 || line[0] == '#') continue;
-
-        char *colon = strchr(line, ':');
-        if (!colon) continue;
-        /* ha_token contains colons — only split on the first one */
-        *colon = '\0';
-        const char *key = line;
-        const char *val = colon + 1;
-        while (*val == ' ') val++;
-
-        if      (strcmp(key, "ha_url")   == 0) strncpy(c->url,   val, sizeof(c->url)   - 1);
-        else if (strcmp(key, "ha_token") == 0) strncpy(c->token, val, sizeof(c->token) - 1);
-    }
-
-    fclose(f);
+    services_kv_t kvs[] = {
+        { "ha_url",   c->url,   sizeof(c->url)   },
+        { "ha_token", c->token, sizeof(c->token) },
+    };
+    services_parse_section("## Home Assistant", kvs, 2);
     return c->url[0] != '\0' && c->token[0] != '\0';
 }
 

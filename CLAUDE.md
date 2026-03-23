@@ -66,8 +66,16 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 4. STT task POSTs to Groq Whisper API → pushes transcript as inbound message
 5. Agent processes transcript → generates response → calls `tts_generate()`
 6. TTS client POSTs to Groq PlayAI API → WAV cached in PSRAM (up to 4 entries, 512KB each, 5-min TTL)
-7. If `LANG_I2S_AUDIO_ENABLED`: WAV is played immediately via MAX98357A on GPIO 15/16/17
+7. If `LANG_I2S_AUDIO_ENABLED`: WAV is played immediately via MAX98357A on GPIO 3/4/6
 8. `{"type":"message","tts_id":"<8hex>"}` sent to browser → browser fetches `GET /tts/<id>`
+
+### I2S Bus Architecture
+
+Simplex mode: TX on I2S_NUM_0 (master), RX on I2S_NUM_1 (slave). BCLK/WS shared physically on GPIO 3/4. Full-duplex `sig_loopback` mode caused permanent RX DMA stalls on ESP32-S3 — simplex avoids this entirely.
+
+- **TX (I2S_NUM_0, master)**: drives BCLK/WS, feeds MAX98357A speaker via DOUT (GPIO 6). Silence pump task keeps BCLK alive when no audio is playing.
+- **RX (I2S_NUM_1, slave)**: reads BCLK/WS as inputs, captures INMP441 mic via DIN (GPIO 5). `data_bit_width=32` matches INMP441's 24-bit-in-32-bit-slot format.
+- **DMA workaround**: slave RX DMA only fills the ring buffer once after `i2s_channel_enable`. Each `i2s_audio_read()` call does disable+enable+30ms delay to restart DMA before reading.
 
 ## Configuration & Secrets
 
@@ -124,13 +132,13 @@ Available GPIOs: 0–21, 38–48. GPIO 22–37 used internally for Flash/PSRAM.
 
 | GPIO | Function | Connected to |
 |------|----------|-------------|
-| 15 | I2S_BCLK | MAX98357A BCLK + INMP441 SCK |
-| 16 | I2S_LRCLK | MAX98357A LRC + INMP441 WS |
-| 17 | I2S_DOUT | MAX98357A DIN (speaker) |
-| 18 | I2S_DIN | INMP441 SD (microphone) |
+| 3 | I2S_BCLK | MAX98357A BCLK + INMP441 SCK (shared bus) |
+| 4 | I2S_LRCLK | MAX98357A LRC + INMP441 WS (shared bus) |
+| 6 | I2S_DOUT (TX) | MAX98357A DIN (speaker) |
+| 5 | I2S_DIN (RX) | INMP441 SD (microphone) |
 | 9 | I2C_SDA | Camera SCCB + PCA9685 |
 | 10 | I2C_SCL | Camera SCCB + PCA9685 |
-| 1–8, 21 | Cam D0–D7 | OV2640 parallel data (future) |
+| 1–2, 11–18, 21 | Cam D0–D7 | OV2640 parallel data (future) |
 | 38–41 | Cam XCLK/PCLK/VSYNC/HREF | OV2640 timing (future) |
 | 42 | AMP_SD | MAX98357A SD (amp shutdown/enable) |
 | 43 | UART0 TX | Serial CLI |
@@ -144,9 +152,9 @@ Constants in `main/langoustine_config.h` under `LANG_I2S_*` and `LANG_I2C_*`.
 ```
 VIN   → 5V  (USB rail — keeps amp current off the 3.3V/ESP32 rail entirely)
 GND   → GND
-DIN   → GPIO17
-BCLK  → GPIO15
-LRC   → GPIO16
+DIN   → GPIO6
+BCLK  → GPIO3
+LRC   → GPIO4
 SD    → GPIO42  (firmware-controlled: high=enabled, low=shutdown; eliminates idle hiss)
 GAIN  → GND  (3 dB gain; floating = 12 dB default)
 ```
@@ -162,9 +170,9 @@ Black wire→ − terminal
 ```
 VDD  → 3.3V  (max 3.6V — never 5V)
 GND  → GND
-SD   → GPIO18
-SCK  → GPIO15  (shared with MAX98357A BCLK)
-WS   → GPIO16  (shared with MAX98357A LRC)
+SD   → GPIO5
+SCK  → GPIO3   (shared I2S bus — same wire as MAX98357A BCLK)
+WS   → GPIO4   (shared I2S bus — same wire as MAX98357A LRC)
 L/R  → GND  (left channel)
 ```
 
@@ -187,7 +195,7 @@ L/R  → GND  (left channel)
 | `main/audio/audio_pipeline.c` | PSRAM ring buffer + STT task coordination |
 | `main/audio/stt_client.c` | Groq Whisper multipart POST |
 | `main/audio/tts_client.c` | Groq PlayAI POST + PSRAM cache; local I2S playback |
-| `main/audio/i2s_audio.c` | I2S driver init + WAV playback via MAX98357A |
+| `main/audio/i2s_audio.c` | I2S driver: simplex TX (I2S0 master) + RX (I2S1 slave) + WAV playback |
 | `main/telegram/telegram_bot.c` | Long-poll Telegram bot |
 | `main/bus/message_bus.c` | FreeRTOS inbound/outbound queues |
 | `main/memory/psram_alloc.h` | PSRAM/SRAM allocation wrappers |

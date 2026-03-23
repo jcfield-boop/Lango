@@ -18,7 +18,7 @@ typedef struct {
     cron_kind_t kind;
     uint32_t interval_s;   /* For EVERY: interval in seconds */
     int64_t at_epoch;      /* For AT: unix timestamp */
-    char message[256];     /* Message to inject into inbound queue */
+    char message[512];     /* Message to inject into inbound queue */
     char channel[16];      /* Reply channel (default "system") */
     char chat_id[32];      /* Reply chat_id (default "cron") */
     int64_t last_run;      /* Last run epoch */

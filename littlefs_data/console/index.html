@@ -245,6 +245,8 @@ function connect() {
       if (d.type === 'monitor') {
         var cls = d.event === 'error' ? 'err' : (d.event || 'ws');
         addLog(cls, '[' + d.event + '] ' + d.msg);
+        /* Show STT transcript as a user chat bubble */
+        if (d.event === 'stt_result' && d.msg) addUserBubble(d.msg);
         return;
       }
       /* Chat-filtered events */
@@ -371,7 +373,30 @@ function playTTS(ttsId) {
 function sendText() {
   var inp = document.getElementById('text-input');
   var text = inp.value.trim();
-  if (!text || !ws || ws.readyState !== 1) return;
+  if (!text) return;
+
+  /* /say command — direct TTS, no LLM */
+  if (text.toLowerCase().startsWith('/say ')) {
+    var sayText = text.substring(5).trim();
+    if (!sayText) return;
+    addUserBubble(text);
+    inp.value = '';
+    setStatus('tts_generating');
+    fetch('/api/say', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: sayText })
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      addBotBubble(d.ok ? '🔊 Speaking: "' + sayText + '"' : '❌ Say failed: ' + (d.error||'unknown'));
+      setStatus('idle');
+    }).catch(function(e) {
+      addBotBubble('❌ Say error: ' + e.message);
+      setStatus('idle');
+    });
+    return;
+  }
+
+  if (!ws || ws.readyState !== 1) return;
   addUserBubble(text);
   ws.send(JSON.stringify({ type:'prompt', content:text, chat_id:chatId }));
   startStreamBubble();

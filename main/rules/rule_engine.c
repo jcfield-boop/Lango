@@ -274,8 +274,8 @@ static void fire_action(const rule_t *rule)
     switch (rule->action_type) {
         case RULE_ACTION_TELEGRAM: {
             /* Push a message onto the agent inbound queue to deliver via Telegram */
-            mimi_msg_t msg = {0};
-            strncpy(msg.channel, MIMI_CHAN_SYSTEM, sizeof(msg.channel) - 1);
+            lang_msg_t msg = {0};
+            strncpy(msg.channel, LANG_CHAN_SYSTEM, sizeof(msg.channel) - 1);
             strncpy(msg.chat_id, "rule", sizeof(msg.chat_id) - 1);
             /* Format: "send telegram: <params>" for agent to dispatch */
             /* name[32] + action_params[256] + literal overhead ~20 = 308 minimum */

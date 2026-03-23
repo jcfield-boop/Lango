@@ -25,7 +25,16 @@ static uac_host_device_handle_t s_mic_handle   = NULL;
 static volatile bool            s_uac_connected = false;
 static bool                     s_initialized   = false;
 static uint32_t                 s_sample_rate   = 16000;
+static uint8_t                  s_channels      = 1;
 static TaskHandle_t             s_ptt_task      = NULL;
+/* Set when uac_host_device_start() succeeds; cleared when stop is called.
+ * Prevents double-stop of a stream that never started — double-stop corrupts
+ * the UAC internal transfer heap and causes StoreProhibited crashes in the
+ * FreeRTOS context switch path (vPortYieldFromInt). */
+static volatile bool            s_stream_running = false;
+/* Set when all format attempts fail; cleared only on disconnect+reconnect.
+ * Prevents repeated crash loops when the USB device is in a bad state. */
+static volatile bool            s_start_failed  = false;
 
 /* ── UAC device event callback ───────────────────────────────── */
 
@@ -35,8 +44,10 @@ static void uac_device_event_cb(uac_host_device_handle_t dev,
 {
     switch (event) {
     case UAC_HOST_DRIVER_EVENT_DISCONNECTED:
-        s_uac_connected = false;
-        s_mic_handle    = NULL;
+        s_uac_connected  = false;
+        s_mic_handle     = NULL;
+        s_stream_running = false;
+        s_start_failed   = false;   /* allow retry after replug */
         ESP_LOGW(TAG, "UAC mic disconnected");
         break;
     case UAC_HOST_DEVICE_EVENT_TRANSFER_ERROR:
@@ -74,22 +85,35 @@ static void uac_driver_event_cb(uint8_t addr, uint8_t iface_num,
     /* Log available formats */
     uac_host_printf_device_param(s_mic_handle);
 
-    /* Try to detect preferred sample rate from device alt params */
+    /* Detect supported sample rate + channels from device alt params.
+     * Prefer 16 kHz mono (Whisper native); fall back to whatever the device
+     * actually supports — typically 44100 or 48000 Hz mono/stereo. */
     uac_host_dev_alt_param_t alt;
+    bool found = false;
     for (uint8_t i = 1; i <= 8; i++) {
         if (uac_host_get_device_alt_param(s_mic_handle, i, &alt) != ESP_OK) break;
         if (alt.channels > 0 && alt.sample_freq_type > 0) {
             uint32_t freq = alt.sample_freq[0];
-            /* Prefer 16 kHz (Whisper native); accept anything */
-            if (freq == 16000 || s_sample_rate != 16000) {
+            ESP_LOGI(TAG, "  alt %d: %"PRIu32" Hz, %d ch, %d bit",
+                     i, freq, alt.channels, alt.bit_resolution);
+            if (freq == 16000 && alt.channels == 1) {
+                /* Perfect match — use it */
+                s_sample_rate = 16000;
+                s_channels    = 1;
+                found = true;
+                break;
+            }
+            if (!found || s_sample_rate == 16000) {
+                /* Accept first available, or replace a 16kHz guess */
                 s_sample_rate = freq;
-                if (freq == 16000) break;
+                s_channels    = alt.channels;
+                found = true;
             }
         }
     }
 
     s_uac_connected = true;
-    ESP_LOGI(TAG, "UAC mic ready: preferred rate %" PRIu32 " Hz", s_sample_rate);
+    ESP_LOGI(TAG, "UAC mic ready: %"PRIu32" Hz / %d ch", s_sample_rate, s_channels);
 }
 
 /* ── PTT task (Core 0) ───────────────────────────────────────── */
@@ -106,7 +130,7 @@ static void uac_ptt_task(void *arg)
     int        ds_ratio      = 1;  /* downsampling ratio: 1=none, 3=48kHz→16kHz */
 
     while (1) {
-        bool pressed = s_uac_connected && (gpio_get_level(LANG_PTT_GPIO) == 0);
+        bool pressed = s_uac_connected && !s_start_failed && (gpio_get_level(LANG_PTT_GPIO) == 0);
 
         /* Periodic diagnostic: log UAC connection state every 30 s while idle.
          * Kept at DEBUG in normal builds; demoted from INFO to avoid flooding
@@ -121,40 +145,52 @@ static void uac_ptt_task(void *arg)
 
         if (pressed && !was_pressed) {
             /* ── Button just pressed — open stream + WAV ring ── */
-            /* Try formats in preference order: 16kHz → 44.1kHz → 48kHz, mono first */
-            static const uac_host_stream_config_t fmts[] = {
-                { .channels = 1, .bit_resolution = 16, .sample_freq = 16000 },
-                { .channels = 1, .bit_resolution = 16, .sample_freq = 44100 },
-                { .channels = 1, .bit_resolution = 16, .sample_freq = 48000 },
-                { .channels = 2, .bit_resolution = 16, .sample_freq = 44100 },
-                { .channels = 2, .bit_resolution = 16, .sample_freq = 48000 },
-            };
-            esp_err_t sret = ESP_FAIL;
-            uint32_t  rate = 16000;
-            for (size_t i = 0; i < sizeof(fmts)/sizeof(fmts[0]); i++) {
-                sret = uac_host_device_start(s_mic_handle, &fmts[i]);
-                if (sret == ESP_OK) {
-                    rate = fmts[i].sample_freq;
-                    ESP_LOGI(TAG, "UAC stream started: %" PRIu32 " Hz/%d-bit/%dch",
-                             fmts[i].sample_freq, fmts[i].bit_resolution, fmts[i].channels);
-                    break;
-                }
+            /* Only stop a stream that was actually started — calling stop on
+             * an un-started or already-stopped handle corrupts UAC internal
+             * transfer state and causes a StoreProhibited crash in the
+             * FreeRTOS context switch when the USB interrupt next fires. */
+            if (s_stream_running) {
+                uac_host_device_stop(s_mic_handle);
+                s_stream_running = false;
             }
-            if (sret != ESP_OK) {
-                ESP_LOGE(TAG, "uac_host_device_start: no supported format, skipping PTT");
+
+            /* Single format attempt using rate/channels detected at connect time.
+             * Do NOT retry other formats. Each failed uac_host_device_start() leaks
+             * a UAC transfer descriptor ("Unable to release UAC Interface"), and
+             * even 3-5 leaked descriptors corrupt the TLSF heap, causing
+             * LoadProhibited crashes when the heap is next walked (e.g. during
+             * heartbeat LittleFS access). One attempt, one leak max. */
+            uac_host_stream_config_t detected_fmt = {
+                .channels       = s_channels,
+                .bit_resolution = 16,
+                .sample_freq    = s_sample_rate,
+            };
+            uint32_t  rate = s_sample_rate;
+            esp_err_t sret = uac_host_device_start(s_mic_handle, &detected_fmt);
+            if (sret == ESP_OK) {
+                s_stream_running = true;
+                ESP_LOGI(TAG, "UAC stream started: %"PRIu32" Hz/16-bit/%dch",
+                         rate, s_channels);
+            } else {
+                ESP_LOGE(TAG, "uac_host_device_start failed (%s) — marking broken, replug USB to recover",
+                         esp_err_to_name(sret));
+                s_start_failed = true;
+                led_indicator_set(LED_ERROR);
                 while (gpio_get_level(LANG_PTT_GPIO) == 0) vTaskDelay(pdMS_TO_TICKS(20));
                 continue;
             }
 
-            /* Downsample to 16 kHz if camera negotiated a higher rate.
-             * 48 kHz → 16 kHz is exact 3:1; fits 8 s in the 256 KB ring.
-             * Without downsampling, 48 kHz overflows the ring after ~2.7 s. */
-            ds_ratio = (rate % 16000 == 0) ? (int)(rate / 16000) : 1;
+            /* Downsample to ~16 kHz if the device negotiated a higher rate.
+             * 48 kHz → 16 kHz is exact 3:1; 44.1 kHz → 22050 Hz (2:1).
+             * Without downsampling, 48 kHz mono overflows the 256 KB ring
+             * after ~2.7 s; 44.1 kHz after ~3 s.  Ratio >= 2 is essential. */
+            ds_ratio = (rate >= 32000) ? (int)(rate / 16000) : 1;
             uint32_t wav_rate = rate / (uint32_t)ds_ratio;
             ESP_LOGI(TAG, "UAC PTT: raw %"PRIu32" Hz, ds_ratio=%d, WAV rate %"PRIu32" Hz",
                      rate, ds_ratio, wav_rate);
 
-            esp_err_t rret = audio_ring_open_wav(PTT_CHAT_ID, wav_rate, 1, 16);
+            esp_err_t rret = audio_ring_open_wav(PTT_CHAT_ID, wav_rate, 1, 16,
+                                                  LANG_CHAN_WEBSOCKET);
             if (rret != ESP_OK) {
                 ESP_LOGW(TAG, "audio_ring_open_wav failed: %s", esp_err_to_name(rret));
                 uac_host_device_stop(s_mic_handle);
@@ -169,6 +205,7 @@ static void uac_ptt_task(void *arg)
         } else if (!pressed && was_pressed) {
             /* ── Button released — stop stream + commit ── */
             uac_host_device_stop(s_mic_handle);
+            s_stream_running = false;
             audio_ring_patch_wav_sizes();
             audio_ring_commit(PTT_CHAT_ID);
             led_indicator_set(LED_THINKING);
@@ -180,12 +217,16 @@ static void uac_ptt_task(void *arg)
             esp_err_t ret = uac_host_device_read(s_mic_handle, chunk, sizeof(chunk),
                                                   &got, pdMS_TO_TICKS(20));
             if (ret == ESP_OK && got > 0) {
-                /* Downsample if needed — see main/audio/downsample.h */
+                /* Stereo → mono if needed, then rate downsample */
+                if (s_channels == 2) {
+                    got = (uint32_t)pcm16_stereo_to_mono(chunk, (size_t)got);
+                }
                 got = (uint32_t)pcm16_downsample(chunk, (size_t)got, ds_ratio);
                 ret = audio_ring_append(chunk, (size_t)got);
                 if (ret == ESP_ERR_NO_MEM) {
                     ESP_LOGW(TAG, "Audio ring overflow — dropping recording");
                     uac_host_device_stop(s_mic_handle);
+                    s_stream_running = false;
                     led_indicator_set(LED_ERROR);
                     was_pressed = false;
                     while (gpio_get_level(LANG_PTT_GPIO) == 0) vTaskDelay(pdMS_TO_TICKS(20));
@@ -198,6 +239,7 @@ static void uac_ptt_task(void *arg)
                 ESP_LOGW(TAG, "UAC PTT max duration (%d s) — auto-committing",
                          PTT_MAX_MS / 1000);
                 uac_host_device_stop(s_mic_handle);
+                s_stream_running = false;
                 audio_ring_patch_wav_sizes();
                 audio_ring_commit(PTT_CHAT_ID);
                 led_indicator_set(LED_THINKING);

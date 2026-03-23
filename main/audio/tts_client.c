@@ -2,6 +2,7 @@
 #include "langoustine_config.h"
 #include "memory/psram_alloc.h"
 #include "llm/http_session.h"
+#include "gateway/ws_server.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -211,6 +212,12 @@ esp_err_t tts_generate(const char *text, char *id_out)
     if (!body) return ESP_ERR_NO_MEM;
 
     ESP_LOGI(TAG, "TTS generate: %u text chars", (unsigned)strlen(text));
+    {
+        char tts_info[120];
+        snprintf(tts_info, sizeof(tts_info), "Speaking: \"%.100s%s\"",
+                 text, strlen(text) > 100 ? "..." : "");
+        ws_server_broadcast_monitor_verbose("tts", tts_info);
+    }
 
     /* Binary response buffer, starting at 64KB in PSRAM */
     bin_buf_t bb = {0};
@@ -243,19 +250,41 @@ esp_err_t tts_generate(const char *text, char *id_out)
     esp_http_client_set_header(s_session.handle, "Content-Type", "application/json");
     esp_http_client_set_post_field(s_session.handle, body, (int)strlen(body));
 
-    esp_err_t ret = http_session_perform(&s_session);  /* auto-retry on drop */
-    int status    = esp_http_client_get_status_code(s_session.handle);
+    esp_err_t ret = esp_http_client_perform(s_session.handle);
+
+    /* If connection was stale, reset session and retry with headers re-applied.
+     * http_session_reset() creates a fresh handle — old headers/body are lost. */
+    if (ret == ESP_ERR_HTTP_CONNECT || ret == ESP_ERR_HTTP_CONNECTION_CLOSED) {
+        ESP_LOGW(TAG, "TTS connection lost (%s), resetting and retrying", esp_err_to_name(ret));
+        ws_server_broadcast_monitor_verbose("tts", "Connection lost, retrying...");
+        http_session_reset(&s_session);
+        if (s_session.valid) {
+            http_session_set_ctx(&s_session, &bb);
+            esp_http_client_set_method(s_session.handle, HTTP_METHOD_POST);
+            esp_http_client_set_header(s_session.handle, "Authorization", auth);
+            esp_http_client_set_header(s_session.handle, "Content-Type", "application/json");
+            esp_http_client_set_post_field(s_session.handle, body, (int)strlen(body));
+            bb.len = 0;  /* reset response buffer for retry */
+            ret = esp_http_client_perform(s_session.handle);
+        }
+    }
+
+    int status = esp_http_client_get_status_code(s_session.handle);
     /* Do NOT cleanup — keep handle alive for TLS session reuse */
     free(body);
 
     if (ret != ESP_OK || status != 200) {
+        char tts_err[80];
         if (bb.data && bb.len > 0) {
             size_t print_len = bb.len < 255 ? bb.len : 255;
             bb.data[print_len] = '\0';
             ESP_LOGE(TAG, "TTS HTTP %d body: %s", status, (char *)bb.data);
+            snprintf(tts_err, sizeof(tts_err), "TTS failed: HTTP %d", status);
         } else {
             ESP_LOGE(TAG, "TTS HTTP %d (no body): %s", status, esp_err_to_name(ret));
+            snprintf(tts_err, sizeof(tts_err), "TTS failed: %s", esp_err_to_name(ret));
         }
+        ws_server_broadcast_monitor_verbose("tts", tts_err);
         free(bb.data);
         return (ret != ESP_OK) ? ret : ESP_FAIL;
     }
@@ -267,6 +296,11 @@ esp_err_t tts_generate(const char *text, char *id_out)
     }
 
     ESP_LOGI(TAG, "TTS received: %u bytes WAV", (unsigned)bb.len);
+    {
+        char tts_ok[48];
+        snprintf(tts_ok, sizeof(tts_ok), "Received %uKB WAV", (unsigned)(bb.len / 1024));
+        ws_server_broadcast_monitor_verbose("tts", tts_ok);
+    }
 
     /* Store in cache */
     xSemaphoreTake(s_cache_lock, portMAX_DELAY);

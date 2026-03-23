@@ -42,7 +42,11 @@
 #include "audio/uac_microphone.h"
 #include "camera/uvc_camera.h"
 #include "led/led_indicator.h"
+#include "display/oled_display.h"
+#include "config/services_config.h"
 #include "diag/log_buffer.h"
+#include "driver/i2c_master.h"
+#include "wifi/wifi_onboard.h"
 #include "mdns.h"
 #include "esp_ota_ops.h"
 
@@ -233,7 +237,7 @@ static void outbound_dispatch_task(void *arg)
     ESP_LOGI(TAG, "Outbound dispatch started");
 
     while (1) {
-        mimi_msg_t msg;
+        lang_msg_t msg;
         if (message_bus_pop_outbound(&msg, UINT32_MAX) != ESP_OK) continue;
 
         ESP_LOGI(TAG, "Dispatching response to %s:%s", msg.channel, msg.chat_id);
@@ -312,43 +316,128 @@ void app_main(void)
     /* LED: init early so it shows booting state immediately */
     led_indicator_init();
 
-    /* Log ring buffer: captures ESP_LOG output for remote retrieval via /api/logs */
+    /* Log ring buffer: init early so I2C scan results are captured */
     log_buffer_init();
+
+    /* I2C bus + OLED display: init early for boot status visibility */
+#if LANG_OLED_ENABLED
+    static i2c_master_bus_handle_t s_i2c_bus = NULL;
+    static uint8_t  s_oled_addr = LANG_OLED_ADDR;
+    static esp_err_t s_i2c_probe_3c = ESP_FAIL;
+    static esp_err_t s_i2c_probe_3d = ESP_FAIL;
+    static esp_err_t s_oled_ret = ESP_FAIL;
+    {
+        i2c_master_bus_config_t i2c_cfg = {
+            .i2c_port     = I2C_NUM_0,
+            .sda_io_num   = LANG_I2C_SDA,
+            .scl_io_num   = LANG_I2C_SCL,
+            .clk_source   = I2C_CLK_SRC_DEFAULT,
+            .glitch_ignore_cnt = 7,
+            .flags.enable_internal_pullup = true,
+        };
+        esp_err_t i2c_ret = i2c_new_master_bus(&i2c_cfg, &s_i2c_bus);
+        if (i2c_ret == ESP_OK) {
+            ESP_LOGI(TAG, "I2C bus ready (SDA=%d, SCL=%d)", LANG_I2C_SDA, LANG_I2C_SCL);
+
+            /* Full I2C bus scan: check all valid 7-bit addresses (0x08–0x77) */
+            ESP_LOGI(TAG, "I2C bus scan starting...");
+            int found_count = 0;
+            for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+                esp_err_t p = i2c_master_probe(s_i2c_bus, addr, 50);
+                if (p == ESP_OK) {
+                    ESP_LOGW(TAG, "I2C device found at 0x%02X", addr);
+                    found_count++;
+                }
+            }
+            ESP_LOGI(TAG, "I2C bus scan complete: %d device(s) found", found_count);
+
+            s_i2c_probe_3c = i2c_master_probe(s_i2c_bus, 0x3C, 100);
+            s_i2c_probe_3d = i2c_master_probe(s_i2c_bus, 0x3D, 100);
+
+            if (s_i2c_probe_3c == ESP_OK) {
+                s_oled_addr = 0x3C;
+            } else if (s_i2c_probe_3d == ESP_OK) {
+                s_oled_addr = 0x3D;
+            }
+
+            if (s_i2c_probe_3c == ESP_OK || s_i2c_probe_3d == ESP_OK) {
+                s_oled_ret = oled_display_init(s_i2c_bus);
+                ESP_LOGI(TAG, "OLED init (addr 0x%02X): %s",
+                         s_oled_addr, esp_err_to_name(s_oled_ret));
+            } else {
+                ESP_LOGW(TAG, "No OLED found at 0x3C or 0x3D — display disabled");
+            }
+
+            if (s_oled_ret != ESP_OK) {
+                ESP_LOGW(TAG, "OLED display init failed: %s (continuing without display)",
+                         esp_err_to_name(s_oled_ret));
+            }
+        } else {
+            ESP_LOGW(TAG, "I2C bus init failed: %s (OLED disabled)", esp_err_to_name(i2c_ret));
+        }
+    }
+#endif
 
     ESP_ERROR_CHECK(init_littlefs());
     bootstrap_dirs();
     log_crash_if_needed();  /* Must run after LittleFS mount + dirs exist */
     bootstrap_defaults();
 
+    /* Write I2C diagnostic results to LittleFS (now that it's mounted) */
+#if LANG_OLED_ENABLED
+    {
+        FILE *f = fopen("/lfs/i2c_diag.txt", "w");
+        if (f) {
+            fprintf(f, "I2C SDA=GPIO%d SCL=GPIO%d\n", LANG_I2C_SDA, LANG_I2C_SCL);
+            fprintf(f, "Probe 0x3C: %s\n", esp_err_to_name(s_i2c_probe_3c));
+            fprintf(f, "Probe 0x3D: %s\n", esp_err_to_name(s_i2c_probe_3d));
+            fprintf(f, "OLED init (addr 0x%02X): %s\n", s_oled_addr,
+                esp_err_to_name(s_oled_ret));
+            fclose(f);
+            ESP_LOGI(TAG, "I2C diag written to /lfs/i2c_diag.txt");
+        }
+    }
+#endif
+
     /* Audio pipeline (STT/TTS via Groq) — always required */
     ESP_ERROR_CHECK(audio_pipeline_init());
     ESP_ERROR_CHECK(stt_client_init());
     ESP_ERROR_CHECK(tts_client_init());
 
-    /* UVC camera + UAC mic — both use the USB host; register ALL class drivers
-     * BEFORE starting the USB lib task so the webcam enumerates into both drivers
-     * simultaneously.  If UAC is installed after the lib task starts it misses the
-     * device-connected callback and s_uac_connected stays false forever.
-     *
-     * Order is critical:
-     *   1. uvc_camera_init()         — usb_host_install + uvc_host_install (no task)
-     *   2. uac_microphone_init()     — uac_host_install (no delay)
-     *   3. uvc_camera_start_host_task() — usb_lib_task created; daemon fires NEW_DEV
-     *                                     to both UVC and UAC simultaneously */
-    uvc_camera_init();
-    esp_err_t uac_err = uac_microphone_init();
-    uvc_camera_start_host_task();   /* both drivers registered — safe to start now */
+#if LANG_I2S_AUDIO_ENABLED
+    /* I2S speaker output via MAX98357A (GPIO 15/16/17, amp SD on GPIO42).
+     * Also opens I2S RX for INMP441 mic on GPIO18.
+     * Brownout mitigations in place: VIN→5V USB rail, WIFI_PS_NONE, BOD disabled. */
+    {
+        esp_err_t i2s_err = i2s_audio_init();
+        if (i2s_err == ESP_OK) {
+            ESP_LOGI(TAG, "I2S speaker ready (MAX98357A on GPIO%d/%d/%d, amp SD GPIO%d)",
+                     LANG_I2S_BCLK, LANG_I2S_LRCLK, LANG_I2S_DOUT, LANG_AMP_SD_GPIO);
 
-    if (uac_err == ESP_OK) {
-        uac_microphone_start();
-        ESP_LOGI(TAG, "UAC mic: PTT ready (BOOT button) — browser voice also available");
-    } else {
-        /* No UAC mic available. I2S mic (INMP441 on GPIO18) not yet wired.
-         * PTT and wake-word are disabled until hardware is connected. */
-        ESP_LOGW(TAG, "UAC mic unavailable — I2S mic not wired, PTT disabled");
-        /* i2s_audio_init() / microphone_init() / wake_word_init() intentionally
-         * omitted: no INMP441 on GPIO18 yet. Re-enable when mic is installed. */
+            /* INMP441 mic: wake word ("Hi ESP") + PTT (BOOT button). */
+            microphone_init();
+            esp_err_t ww_err = wake_word_init();
+            if (ww_err == ESP_OK) ww_err = wake_word_start();
+            if (ww_err == ESP_OK) {
+                ESP_LOGI(TAG, "INMP441 wake word + PTT ready (say \"Hi ESP\" or press BOOT)");
+            } else {
+                ESP_LOGW(TAG, "Wake word unavailable (%s) — INMP441 PTT-only",
+                         esp_err_to_name(ww_err));
+                microphone_start();
+            }
+        } else {
+            ESP_LOGW(TAG, "I2S init failed: %s — speaker + mic disabled",
+                     esp_err_to_name(i2s_err));
+        }
     }
+#endif
+
+    /* UVC camera + UAC mic — both use the USB host stack.
+     * UAC provides an alternative mic input if a USB audio device is connected.
+     * INMP441 wake word (above) remains active regardless. */
+    uvc_camera_init();
+    uac_microphone_init();
+    uvc_camera_start_host_task();
 
     /* Initialize subsystems */
     ESP_ERROR_CHECK(message_bus_init());
@@ -359,6 +448,7 @@ void app_main(void)
     ESP_ERROR_CHECK(http_proxy_init());
     ESP_ERROR_CHECK(llm_proxy_init());
     ESP_ERROR_CHECK(tool_registry_init());
+    services_config_load();  /* Fill in API keys from SERVICES.md (NVS takes priority) */
     ESP_ERROR_CHECK(cron_service_init());
     ESP_ERROR_CHECK(heartbeat_init());
     ESP_ERROR_CHECK(rule_engine_init());
@@ -368,8 +458,14 @@ void app_main(void)
     /* Start Serial CLI first (works without WiFi) */
     ESP_ERROR_CHECK(serial_cli_init());
 
-    /* Start WiFi */
+    /* Start WiFi — or onboarding if no credentials stored */
     led_indicator_set(LED_WIFI);
+    if (!wifi_onboard_has_credentials()) {
+        ESP_LOGW(TAG, "No WiFi credentials found — starting onboarding captive portal");
+        wifi_onboard_start();  /* blocks until user configures, then reboots */
+        return;  /* unreachable — onboarding reboots */
+    }
+
     esp_err_t wifi_err = wifi_manager_start();
     if (wifi_err == ESP_OK) {
         ESP_LOGI(TAG, "Scanning nearby APs on boot...");
@@ -425,6 +521,10 @@ void app_main(void)
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
             ESP_LOGI(TAG, "SRAM free:  %u bytes",
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+
+            /* Boot greeting removed — TTS HTTPS call + I2S playback during
+             * boot was causing intermittent panics (SRAM pressure + brownout).
+             * Use /api/say or the agent's say tool for on-demand speech. */
         } else {
             led_indicator_set(LED_ERROR);
             ESP_LOGW(TAG, "WiFi connection timeout. Check LANG_SECRET_WIFI_SSID.");

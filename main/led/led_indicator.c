@@ -1,5 +1,6 @@
 #include "led_indicator.h"
 #include "langoustine_config.h"
+#include "display/oled_display.h"
 
 #include <math.h>
 #include <stdatomic.h>
@@ -245,4 +246,21 @@ void led_indicator_init(void)
 void led_indicator_set(led_state_t state)
 {
     atomic_store(&s_state, state);
+
+    /* Mirror state to OLED display */
+    static const char *labels[] = {
+        [LED_BOOTING]    = "Booting...",
+        [LED_WIFI]       = "WiFi...",
+        [LED_READY]      = "",
+        [LED_THINKING]   = "Thinking...",
+        [LED_SPEAKING]   = "Speaking...",
+        [LED_ERROR]      = "Error",
+        [LED_LISTENING]  = "Listening...",
+        [LED_OTA]        = "OTA Update...",
+        [LED_CAPTURING]  = "Capturing...",
+        [LED_FLASH_FADE] = "Processing...",
+    };
+    if ((unsigned)state < sizeof(labels) / sizeof(labels[0]) && labels[state]) {
+        oled_display_set_status(labels[state]);
+    }
 }

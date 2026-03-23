@@ -154,8 +154,20 @@ static esp_err_t fetch_time_direct(char *out, size_t out_size)
 
 esp_err_t tool_get_time_execute(const char *input_json, char *output, size_t output_size)
 {
-    ESP_LOGI(TAG, "Fetching current time...");
+    /* Use NTP-synced system clock if it looks valid (after 2024-01-01) */
+    time_t now = time(NULL);
+    if (now > 1704067200LL) {  /* 2024-01-01 00:00:00 UTC */
+        struct tm local;
+        localtime_r(&now, &local);
+        strftime(output, output_size, "%Y-%m-%d %H:%M:%S %Z (%A)", &local);
+        size_t used = strlen(output);
+        snprintf(output + used, output_size - used, " [unix: %lld]", (long long)now);
+        ESP_LOGI(TAG, "Time (NTP): %s", output);
+        return ESP_OK;
+    }
 
+    /* NTP not yet synced — fall back to HTTP Date header */
+    ESP_LOGW(TAG, "System clock not synced, fetching via HTTP...");
     esp_err_t err;
     if (http_proxy_is_enabled()) {
         err = fetch_time_via_proxy(output, output_size);
@@ -164,7 +176,7 @@ esp_err_t tool_get_time_execute(const char *input_json, char *output, size_t out
     }
 
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "Time: %s", output);
+        ESP_LOGI(TAG, "Time (HTTP): %s", output);
     } else {
         snprintf(output, output_size, "Error: failed to fetch time (%s)", esp_err_to_name(err));
         ESP_LOGE(TAG, "%s", output);

@@ -13,14 +13,19 @@
 #include "ota/ota_manager.h"
 #include "audio/stt_client.h"
 #include "audio/tts_client.h"
+#include "audio/i2s_audio.h"
+#include "audio/wake_word.h"
 #include "telegram/telegram_bot.h"
 #include "camera/uvc_camera.h"
 #include "memory/psram_alloc.h"
 #include "gateway/ws_server.h"
+#include "agent/agent_loop.h"
 
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <math.h>
+#include <inttypes.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include "esp_log.h"
@@ -120,6 +125,19 @@ static int cmd_set_model_provider(int argc, char **argv)
     }
     llm_set_provider(provider_args.provider->sval[0]);
     printf("Model provider set.\n");
+    return 0;
+}
+
+/* --- set_local_url command --- */
+static int cmd_set_local_url(int argc, char **argv)
+{
+    if (argc >= 2) {
+        llm_set_local_url(argv[1]);
+        printf("Local model URL set to: %s\n", argv[1]);
+    } else {
+        const char *url = llm_get_local_url();
+        printf("Local model URL: %s\n", (url && url[0]) ? url : "(not set)");
+    }
     return 0;
 }
 
@@ -238,12 +256,47 @@ static int cmd_say(int argc, char **argv)
     char id_out[9] = {0};
     printf("Generating TTS for: \"%s\"\n", text);
     esp_err_t ret = tts_generate(text, id_out);
-    if (ret == ESP_OK) {
-        printf("Played TTS (id=%s)\n", id_out);
-    } else {
-        printf("TTS failed: %s\n", esp_err_to_name(ret));
+    if (ret != ESP_OK) {
+        printf("TTS generate failed: %s\n", esp_err_to_name(ret));
+        return 1;
     }
-    return (ret == ESP_OK) ? 0 : 1;
+    printf("TTS cached (id=%s), playing via speaker...\n", id_out);
+
+    const uint8_t *wav = NULL;
+    size_t wav_len = 0;
+    ret = tts_cache_get(id_out, &wav, &wav_len);
+    if (ret != ESP_OK || !wav || wav_len == 0) {
+        printf("Failed to retrieve cached WAV: %s\n", esp_err_to_name(ret));
+        return 1;
+    }
+
+    /* i2s_audio_play_wav() handles wake_word_suspend/resume internally
+     * when I2S clock reconfiguration is needed (e.g. 16kHz→24kHz for TTS). */
+    ret = i2s_audio_play_wav(wav, wav_len);
+    if (ret != ESP_OK) {
+        printf("I2S playback failed: %s\n", esp_err_to_name(ret));
+        return 1;
+    }
+    printf("Played TTS (id=%s)\n", id_out);
+    return 0;
+}
+
+/* --- volume command --- */
+static int cmd_volume(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("Volume: %u/255 (%u%%)\n", i2s_audio_get_volume(),
+               (unsigned)(i2s_audio_get_volume() * 100u / 255u));
+        return 0;
+    }
+    int val = atoi(argv[1]);
+    if (val < 0 || val > 255) {
+        printf("Usage: volume [0-255]  (0=mute, 64=25%%, 128=50%%, 255=100%%)\n");
+        return 1;
+    }
+    i2s_audio_set_volume((uint8_t)val);
+    printf("Volume set to %d/255 (%d%%)\n", val, val * 100 / 255);
+    return 0;
 }
 
 /* --- memory_read command --- */
@@ -885,6 +938,415 @@ static int cmd_tg_allowlist(int argc, char **argv)
     return 0;
 }
 
+/* test_tone — play a 440Hz sine wave through the speaker (no network needed) */
+static int cmd_test_tone(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    printf("Playing 440 Hz test tone...\n");
+    esp_err_t ret = i2s_audio_test_tone();
+    if (ret != ESP_OK) {
+        printf("test_tone failed: %s\n", esp_err_to_name(ret));
+        return 1;
+    }
+    printf("Test tone complete.\n");
+    return 0;
+}
+
+/* mic_diag — I2S RX diagnostics: register dump, raw DMA read, wiring guide */
+static int cmd_mic_diag(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    bool ww_active = wake_word_is_running();
+    if (ww_active) { wake_word_suspend(); vTaskDelay(pdMS_TO_TICKS(100)); }
+    i2s_audio_diag();
+    if (ww_active) wake_word_resume();
+    return 0;
+}
+
+/* mic_test — read I2S mic samples and report levels */
+static int cmd_mic_test(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    bool ww_active = wake_word_is_running();
+    if (ww_active) { wake_word_suspend(); vTaskDelay(pdMS_TO_TICKS(100)); }
+    i2s_audio_rx_restart();
+    printf("Reading mic (GPIO %d) for 2 seconds...\n", LANG_I2S_DIN);
+
+    uint8_t *buf = malloc(1024);
+    if (!buf) { if (ww_active) wake_word_resume(); printf("Alloc failed\n"); return 1; }
+
+    int32_t peak_pos = 0, peak_neg = 0;
+    int64_t sum_sq = 0;
+    int     total_samples = 0;
+    int     zero_reads = 0;
+
+    TickType_t start = xTaskGetTickCount();
+    while ((xTaskGetTickCount() - start) < pdMS_TO_TICKS(2000)) {
+        size_t bytes_read = 0;
+        esp_err_t err = i2s_audio_read(buf, 1024, &bytes_read, 200);
+        if (err != ESP_OK) {
+            printf("i2s_audio_read error: %s\n", esp_err_to_name(err));
+            free(buf);
+            if (ww_active) wake_word_resume();
+            return 1;
+        }
+        if (bytes_read == 0) { zero_reads++; continue; }
+
+        int16_t *samples = (int16_t *)buf;
+        int n = bytes_read / 2;
+        for (int i = 0; i < n; i++) {
+            int16_t s = samples[i];
+            if (s > peak_pos) peak_pos = s;
+            if (s < peak_neg) peak_neg = s;
+            sum_sq += (int64_t)s * s;
+        }
+        total_samples += n;
+    }
+
+    free(buf);
+
+    if (total_samples == 0) {
+        printf("No samples captured! (zero_reads=%d) — I2S RX may not be running.\n", zero_reads);
+        return 1;
+    }
+
+    double rms = sqrt((double)sum_sq / total_samples);
+    printf("Samples: %d  |  Peak: +%ld / %ld  |  RMS: %.0f\n",
+           total_samples, (long)peak_pos, (long)peak_neg, rms);
+    if (rms < 5.0) {
+        printf("⚠ Very low signal — mic may not be connected or L/R pin wrong\n");
+    } else if (rms < 100.0) {
+        printf("Quiet room level — mic is working\n");
+    } else {
+        printf("Good signal level — mic is picking up sound\n");
+    }
+    if (ww_active) wake_word_resume();
+    return 0;
+}
+
+/* mic_playback — record from mic, then play back through speaker.
+ * Usage: mic_playback [gain] [seconds]
+ *   gain:    amplification factor (default: current ww_gain)
+ *   seconds: recording duration (default: 2, max: 5) */
+static int cmd_mic_playback(int argc, char **argv)
+{
+    float gain = wake_word_get_gain();  /* default to current ww_gain */
+    uint32_t duration_s = 2;
+    if (argc >= 2) gain = strtof(argv[1], NULL);
+    if (argc >= 3) { duration_s = atoi(argv[2]); if (duration_s > 5) duration_s = 5; }
+    if (gain < 0.1f) gain = 0.1f;
+    if (gain > 50.0f) gain = 50.0f;
+    if (duration_s < 1) duration_s = 1;
+
+    bool ww_active = wake_word_is_running();
+    if (ww_active) { wake_word_suspend(); vTaskDelay(pdMS_TO_TICKS(50)); }
+
+    const uint32_t sample_rate = LANG_MIC_SAMPLE_RATE;  /* 16000 */
+    const uint32_t total_bytes = sample_rate * 2 * duration_s;  /* 16-bit mono */
+
+    printf("Recording %lus from mic at %luHz (gain=%.1f)...\n",
+           (unsigned long)duration_s, (unsigned long)sample_rate, (double)gain);
+
+    /* Allocate recording buffer in PSRAM (64KB for 2s @ 16kHz 16-bit) */
+    uint8_t *rec_buf = ps_malloc(total_bytes);
+    if (!rec_buf) { printf("PSRAM alloc failed (%lu bytes)\n", (unsigned long)total_bytes); if (ww_active) wake_word_resume(); return 1; }
+
+    uint32_t rec_pos = 0;
+    int32_t peak_pos = 0, peak_neg = 0;
+    int64_t sum_sq = 0;
+
+    TickType_t start = xTaskGetTickCount();
+    while (rec_pos < total_bytes && (xTaskGetTickCount() - start) < pdMS_TO_TICKS(duration_s * 1000 + 500)) {
+        size_t bytes_read = 0;
+        uint32_t chunk = total_bytes - rec_pos;
+        if (chunk > 1024) chunk = 1024;
+        esp_err_t err = i2s_audio_read(rec_buf + rec_pos, chunk, &bytes_read, 200);
+        if (err != ESP_OK) {
+            printf("i2s_audio_read error: %s\n", esp_err_to_name(err));
+            free(rec_buf);
+            if (ww_active) wake_word_resume();
+            return 1;
+        }
+        /* Track signal levels */
+        int16_t *samples = (int16_t *)(rec_buf + rec_pos);
+        int n = bytes_read / 2;
+        for (int i = 0; i < n; i++) {
+            int16_t s = samples[i];
+            if (s > peak_pos) peak_pos = s;
+            if (s < peak_neg) peak_neg = s;
+            sum_sq += (int64_t)s * s;
+        }
+        rec_pos += bytes_read;
+    }
+
+    uint32_t total_samples = rec_pos / 2;
+    double rms = total_samples > 0 ? sqrt((double)sum_sq / total_samples) : 0;
+    printf("Recorded %lu bytes (%lu samples). Peak: +%ld/%ld  RMS: %.0f\n",
+           (unsigned long)rec_pos, (unsigned long)total_samples, (long)peak_pos, (long)peak_neg, rms);
+
+    if (rec_pos == 0) {
+        printf("Nothing recorded!\n");
+        free(rec_buf);
+        if (ww_active) wake_word_resume();
+        return 1;
+    }
+
+    /* Apply gain to recorded samples (same as feed_task pre-gain) */
+    if (gain != 1.0f) {
+        int16_t *samples = (int16_t *)rec_buf;
+        int32_t gain_q16 = (int32_t)(gain * 65536.0f);
+        int16_t g_peak_pos = 0, g_peak_neg = 0;
+        for (uint32_t i = 0; i < total_samples; i++) {
+            int32_t v = ((int32_t)samples[i] * gain_q16) >> 16;
+            if (v > 32767) v = 32767;
+            if (v < -32768) v = -32768;
+            samples[i] = (int16_t)v;
+            if (samples[i] > g_peak_pos) g_peak_pos = samples[i];
+            if (samples[i] < g_peak_neg) g_peak_neg = samples[i];
+        }
+        printf("After gain=%.1f: Peak: +%d/%d\n", (double)gain, (int)g_peak_pos, (int)g_peak_neg);
+    }
+
+    /* Build a minimal WAV header and play back */
+    const uint32_t wav_hdr_size = 44;
+    uint32_t wav_total = wav_hdr_size + rec_pos;
+    uint8_t *wav = ps_malloc(wav_total);
+    if (!wav) {
+        printf("WAV alloc failed\n");
+        free(rec_buf);
+        if (ww_active) wake_word_resume();
+        return 1;
+    }
+
+    /* RIFF header */
+    memcpy(wav, "RIFF", 4);
+    uint32_t riff_size = wav_total - 8;
+    memcpy(wav + 4, &riff_size, 4);
+    memcpy(wav + 8, "WAVE", 4);
+    /* fmt chunk */
+    memcpy(wav + 12, "fmt ", 4);
+    uint32_t fmt_size = 16;
+    memcpy(wav + 16, &fmt_size, 4);
+    uint16_t audio_fmt = 1;  /* PCM */
+    memcpy(wav + 20, &audio_fmt, 2);
+    uint16_t channels = 1;
+    memcpy(wav + 22, &channels, 2);
+    memcpy(wav + 24, &sample_rate, 4);
+    uint32_t byte_rate = sample_rate * 2;
+    memcpy(wav + 28, &byte_rate, 4);
+    uint16_t block_align = 2;
+    memcpy(wav + 32, &block_align, 2);
+    uint16_t bits_per_sample = 16;
+    memcpy(wav + 34, &bits_per_sample, 2);
+    /* data chunk */
+    memcpy(wav + 36, "data", 4);
+    memcpy(wav + 40, &rec_pos, 4);
+    memcpy(wav + wav_hdr_size, rec_buf, rec_pos);
+    free(rec_buf);
+
+    printf("Playing back through speaker...\n");
+    esp_err_t ret = i2s_audio_play_wav(wav, wav_total);
+    free(wav);
+
+    if (ret != ESP_OK) {
+        printf("Playback failed: %s\n", esp_err_to_name(ret));
+        if (ww_active) wake_word_resume();
+        return 1;
+    }
+    printf("Playback complete.\n");
+    if (ww_active) wake_word_resume();
+    return 0;
+}
+
+/* wake_word — toggle wake word on/off */
+static int cmd_wake_word(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("Wake word: %s\n", wake_word_is_running() ? "active" : "inactive");
+        printf("Usage: wake_word <on|off>\n");
+        return 0;
+    }
+    if (strcmp(argv[1], "on") == 0) {
+        if (wake_word_is_running()) {
+            wake_word_resume();
+            printf("Wake word resumed\n");
+        } else {
+            printf("Wake word not initialized — restart device to enable\n");
+        }
+    } else if (strcmp(argv[1], "off") == 0) {
+        if (wake_word_is_running()) {
+            wake_word_suspend();
+            printf("Wake word suspended\n");
+        } else {
+            printf("Wake word already inactive\n");
+        }
+    } else {
+        printf("Usage: wake_word <on|off>\n");
+    }
+    return 0;
+}
+
+/* ww_gain — get/set wake word software pre-gain */
+static int cmd_ww_gain(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("Wake word gain: %.2f (range 0.1 – 50.0)\n",
+               (double)wake_word_get_gain());
+        printf("Usage: ww_gain <value>\n");
+        return 0;
+    }
+    float val = strtof(argv[1], NULL);
+    if (val < 0.1f || val > 50.0f) {
+        printf("Error: gain must be between 0.1 and 50.0\n");
+        return 1;
+    }
+    wake_word_set_gain(val);
+    printf("Wake word gain set to %.2f (saved, takes effect immediately)\n",
+           (double)val);
+    return 0;
+}
+
+/* ww_threshold — get/set WakeNet detection threshold */
+static int cmd_ww_threshold(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("WakeNet threshold: %.3f (range 0.0 – 0.9999, lower=more sensitive)\n",
+               (double)wake_word_get_threshold());
+        printf("Usage: ww_threshold <value>\n");
+        return 0;
+    }
+    float val = strtof(argv[1], NULL);
+    if (val < 0.0f || val > 0.9999f) {
+        printf("Error: threshold must be between 0.0 and 0.9999\n");
+        return 1;
+    }
+    wake_word_set_threshold(val);
+    printf("WakeNet threshold set to %.3f (saved, takes effect immediately)\n",
+           (double)val);
+    return 0;
+}
+
+/* ww_status — show all wake word parameters */
+static int cmd_ww_status(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    printf("Wake word status:\n");
+    printf("  State:     %s\n", wake_word_is_running() ? "active" : "inactive");
+    printf("  Gain:      %.2f (range 0.1 – 50.0)\n",
+           (double)wake_word_get_gain());
+    printf("  Threshold: %.3f (range 0.0 – 0.9999, lower=more sensitive)\n",
+           (double)wake_word_get_threshold());
+    /* Show snapshot if any feeds have occurred */
+    wake_word_test_result_t snap;
+    wake_word_test_snapshot(&snap);
+    if (snap.fetches > 0) {
+        printf("  Volume:    %.0f dB\n", (double)snap.volume_db);
+        printf("  Peak:      +%d / %d\n", (int)snap.peak_pos, (int)snap.peak_neg);
+        printf("  Wakeups:   %"PRIu32"\n", snap.wakeups);
+    }
+    printf("\nCommands: ww_gain <val>, ww_threshold <val>, ww_test [secs], mic_playback [gain] [secs]\n");
+    return 0;
+}
+
+/* ww_test — commissioning test: monitor wake word for N seconds */
+static int cmd_ww_test(int argc, char **argv)
+{
+    if (!wake_word_is_running()) {
+        printf("Wake word not active — start it first (restart device)\n");
+        return 1;
+    }
+
+    int duration = 15;
+    if (argc >= 2) {
+        duration = atoi(argv[1]);
+        if (duration < 3) duration = 3;
+        if (duration > 60) duration = 60;
+    }
+
+    printf("╔══════════════════════════════════════════╗\n");
+    printf("║   Wake Word Commissioning Test           ║\n");
+    printf("╠══════════════════════════════════════════╣\n");
+    printf("║  Gain:      %.2f                        \n", (double)wake_word_get_gain());
+    printf("║  Threshold: %.3f                        \n", (double)wake_word_get_threshold());
+    printf("║  Duration:  %d seconds                  \n", duration);
+    printf("╚══════════════════════════════════════════╝\n");
+    printf("\nSay 'Hi ESP' clearly into the mic...\n\n");
+
+    /* Start test mode — enables per-event logging in detect_task */
+    wake_word_test_start(duration);
+
+    /* Poll snapshots every second */
+    wake_word_test_result_t prev = {0};
+    wake_word_test_snapshot(&prev);
+
+    for (int s = 0; s < duration; s++) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        wake_word_test_result_t cur;
+        wake_word_test_snapshot(&cur);
+
+        uint32_t d_speech  = cur.speech  - prev.speech;
+        uint32_t d_fetches = cur.fetches - prev.fetches;
+
+        printf("[%2d/%d] speech=%3"PRIu32"/%"PRIu32" vol=%.0fdB peak=+%d/%d wakeups=%"PRIu32"\n",
+               s + 1, duration,
+               d_speech, d_fetches,
+               (double)cur.volume_db,
+               (int)cur.peak_pos, (int)cur.peak_neg,
+               cur.wakeups);
+        prev = cur;
+    }
+
+    wake_word_test_stop();
+
+    /* Final summary */
+    wake_word_test_result_t final;
+    wake_word_test_snapshot(&final);
+    printf("\n══ Test Summary ════════════════════════════\n");
+    printf("  Total feeds:    %"PRIu32"\n", final.feeds);
+    printf("  Total fetches:  %"PRIu32"\n", final.fetches);
+    printf("  Speech frames:  %"PRIu32" (%.0f%%)\n",
+           final.speech,
+           final.fetches > 0 ? 100.0 * final.speech / final.fetches : 0);
+    printf("  Wake detections: %"PRIu32"\n", final.wakeups);
+    printf("  Peak amplitude:  +%d / %d\n", (int)final.peak_pos, (int)final.peak_neg);
+    printf("  Last volume:     %.0f dB\n", (double)final.volume_db);
+    printf("  Gain: %.2f  Threshold: %.3f\n",
+           (double)final.gain, (double)final.threshold);
+
+    if (final.wakeups > 0) {
+        printf("\n  ✓ Wake word detected %"PRIu32" time(s)! Settings look good.\n", final.wakeups);
+    } else if (final.speech == 0) {
+        printf("\n  ✗ No speech detected — mic may be too quiet.\n"
+               "    Try: ww_gain %.1f\n", (double)(wake_word_get_gain() * 2.0f));
+    } else {
+        printf("\n  ✗ Speech heard (%"PRIu32" frames) but no wake word.\n"
+               "    Try: ww_threshold %.3f  or  ww_gain %.1f\n",
+               final.speech,
+               (double)(wake_word_get_threshold() * 0.7f),
+               (double)(wake_word_get_gain() * 1.5f));
+    }
+    printf("════════════════════════════════════════════\n");
+    return 0;
+}
+
+/* rate_limit — get/set LLM API rate limit */
+static int cmd_rate_limit(int argc, char **argv)
+{
+    if (argc >= 2) {
+        int val = atoi(argv[1]);
+        if (val < 1 || val > 999) {
+            printf("Invalid: must be 1-999\n");
+            return 1;
+        }
+        agent_set_rate_limit(val);
+        printf("LLM rate limit set to %d/hour\n", val);
+    } else {
+        printf("LLM rate limit: %d/hour (used %d in current window)\n",
+               agent_get_rate_limit(), agent_get_rate_count());
+    }
+    return 0;
+}
+
 /* ── Init ──────────────────────────────────────────────────────── */
 
 esp_err_t serial_cli_init(void)
@@ -955,13 +1417,21 @@ esp_err_t serial_cli_init(void)
     esp_console_cmd_register(&model_cmd);
 
     /* set_model_provider */
-    provider_args.provider = arg_str1(NULL, NULL, "<provider>", "anthropic|openai|openrouter");
+    provider_args.provider = arg_str1(NULL, NULL, "<provider>", "anthropic|openai|openrouter|ollama");
     provider_args.end      = arg_end(1);
     esp_console_cmd_t provider_cmd = {
         .command = "set_model_provider", .help = "Set LLM provider",
         .func = &cmd_set_model_provider, .argtable = &provider_args,
     };
     esp_console_cmd_register(&provider_cmd);
+
+    /* set_local_url */
+    esp_console_cmd_t local_url_cmd = {
+        .command = "set_local_url",
+        .help    = "Get/set local model base URL: set_local_url [url]",
+        .func    = &cmd_set_local_url,
+    };
+    esp_console_cmd_register(&local_url_cmd);
 
     /* set_tg_token */
     tg_token_args.token = arg_str1(NULL, NULL, "<token>", "Telegram bot token");
@@ -1222,6 +1692,14 @@ esp_err_t serial_cli_init(void)
     };
     esp_console_cmd_register(&say_cmd);
 
+    /* volume */
+    esp_console_cmd_t volume_cmd = {
+        .command = "volume",
+        .help    = "Get/set speaker volume: volume [0-255] (0=mute, 64=25%, 128=50%, 255=100%)",
+        .func    = &cmd_volume,
+    };
+    esp_console_cmd_register(&volume_cmd);
+
     /* log_level */
     log_level_args.tag   = arg_str1(NULL, NULL, "<tag>",   "Log tag (e.g. tts, stt, agent, llm, ws, audio_pipeline, or * for all)");
     log_level_args.level = arg_int1(NULL, NULL, "<level>", "0=none 1=error 2=warn 3=info 4=debug 5=verbose");
@@ -1266,6 +1744,86 @@ esp_err_t serial_cli_init(void)
         .argtable = &notify_server_args,
     };
     esp_console_cmd_register(&notify_server_cmd);
+
+    /* test_tone */
+    esp_console_cmd_t test_tone_cmd = {
+        .command = "test_tone",
+        .help    = "Play 440 Hz test tone through speaker (no network needed)",
+        .func    = &cmd_test_tone,
+    };
+    esp_console_cmd_register(&test_tone_cmd);
+
+    /* mic_diag */
+    esp_console_cmd_t mic_diag_cmd = {
+        .command = "mic_diag",
+        .help    = "I2S RX diagnostics: registers, raw DMA read, wiring checklist",
+        .func    = &cmd_mic_diag,
+    };
+    esp_console_cmd_register(&mic_diag_cmd);
+
+    /* mic_test */
+    esp_console_cmd_t mic_test_cmd = {
+        .command = "mic_test",
+        .help    = "Read I2S mic for 2s and report signal levels",
+        .func    = &cmd_mic_test,
+    };
+    esp_console_cmd_register(&mic_test_cmd);
+
+    /* mic_playback */
+    esp_console_cmd_t mic_playback_cmd = {
+        .command = "mic_playback",
+        .help    = "Record from mic + playback: mic_playback [gain] [seconds]",
+        .func    = &cmd_mic_playback,
+    };
+    esp_console_cmd_register(&mic_playback_cmd);
+
+    /* wake_word on/off */
+    esp_console_cmd_t wake_word_cmd = {
+        .command = "wake_word",
+        .help    = "Toggle wake word detection: wake_word <on|off>",
+        .func    = &cmd_wake_word,
+    };
+    esp_console_cmd_register(&wake_word_cmd);
+
+    /* ww_gain — software pre-gain for mic signal before AFE */
+    esp_console_cmd_t ww_gain_cmd = {
+        .command = "ww_gain",
+        .help    = "Get/set wake word mic gain (0.1-50.0): ww_gain [value]",
+        .func    = &cmd_ww_gain,
+    };
+    esp_console_cmd_register(&ww_gain_cmd);
+
+    /* ww_threshold — WakeNet detection threshold */
+    esp_console_cmd_t ww_threshold_cmd = {
+        .command = "ww_threshold",
+        .help    = "Get/set WakeNet threshold (0.0-0.9999, lower=sensitive): ww_threshold [value]",
+        .func    = &cmd_ww_threshold,
+    };
+    esp_console_cmd_register(&ww_threshold_cmd);
+
+    /* ww_status — show all wake word params */
+    esp_console_cmd_t ww_status_cmd = {
+        .command = "ww_status",
+        .help    = "Show wake word status: gain, threshold, active state",
+        .func    = &cmd_ww_status,
+    };
+    esp_console_cmd_register(&ww_status_cmd);
+
+    /* ww_test — commissioning test */
+    esp_console_cmd_t ww_test_cmd = {
+        .command = "ww_test",
+        .help    = "Monitor wake word for N seconds: ww_test [seconds]",
+        .func    = &cmd_ww_test,
+    };
+    esp_console_cmd_register(&ww_test_cmd);
+
+    /* rate_limit */
+    esp_console_cmd_t rate_limit_cmd = {
+        .command = "rate_limit",
+        .help    = "Get/set LLM API rate limit: rate_limit [max_per_hour]",
+        .func    = &cmd_rate_limit,
+    };
+    esp_console_cmd_register(&rate_limit_cmd);
 
     ESP_ERROR_CHECK(esp_console_start_repl(repl));
     ESP_LOGI(TAG, "Serial CLI started");

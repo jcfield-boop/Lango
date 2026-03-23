@@ -44,6 +44,17 @@ const char *llm_get_model(void);
 const char *llm_get_api_key(void);
 
 /**
+ * Set the base URL for local/Ollama models (e.g. "http://192.168.0.25:11434/v1").
+ * Only used when provider is "ollama".
+ */
+void llm_set_local_url(const char *url);
+
+/**
+ * Return current local model base URL (empty string if not set).
+ */
+const char *llm_get_local_url(void);
+
+/**
  * Return cumulative session token stats and estimated cost.
  * @param in             Total input tokens this session (may be NULL)
  * @param out            Total output tokens this session (may be NULL)

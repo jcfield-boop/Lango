@@ -167,48 +167,23 @@ textarea:focus{border-color:#555}
     </table>
   </div>
   <div id="settings-panel">
-    <div class="settings-row">
-      <div class="field">
-        <label>LLM Provider</label>
-        <input id="cfg-provider" type="text" placeholder="anthropic" maxlength="32">
-      </div>
-      <div class="field">
-        <label>LLM Model</label>
-        <input id="cfg-model" type="text" placeholder="claude-3-5-haiku-latest" maxlength="64">
-      </div>
-    </div>
-    <div class="field">
-      <label>LLM API Key</label>
-      <input id="cfg-apikey" type="password" maxlength="320" autocomplete="off">
-    </div>
-    <div class="field">
-      <label>Web Search API Key</label>
-      <input id="cfg-searchkey" type="password" maxlength="128" autocomplete="off">
-    </div>
-    <div class="settings-row">
-      <div class="field">
-        <label>STT API Key (Groq Whisper)</label>
-        <input id="cfg-sttkey" type="password" maxlength="320" autocomplete="off">
-      </div>
-      <div class="field">
-        <label>TTS API Key (Groq PlayAI)</label>
-        <input id="cfg-ttskey" type="password" maxlength="320" autocomplete="off">
-      </div>
-    </div>
-    <div class="field">
-      <label>TTS Voice</label>
-      <input id="cfg-ttsvoice" type="text" placeholder="Fritz-PlayAI" maxlength="64">
-    </div>
     <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
       <label class="toggle"><input id="cfg-verbose" type="checkbox"><span class="toggle-slider"></span></label>
       <span style="color:#aaa;font-size:0.82rem">Verbose Logs</span>
     </div>
-    <div style="display:flex;gap:8px;align-items:center">
+    <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
       <button onclick="loadConfig()">&#x21BA; Load</button>
       <button onclick="saveConfig()">&#x1F4BE; Save</button>
       <span id="cfg-status"></span>
     </div>
-    <p style="color:#555;font-size:0.75rem">Keys stored in NVS, survive firmware updates. Leave a key field blank to keep the current value.</p>
+    <div style="margin-top:6px">
+      <label style="font-size:0.82rem;color:#aaa">Speaker Volume</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="cfg-volume" type="range" min="0" max="255" value="64" style="flex:1;accent-color:#7ec8e3">
+        <span id="cfg-volume-val" style="color:#ddd;font-size:0.82rem;min-width:40px;text-align:right">25%</span>
+      </div>
+    </div>
+    <p style="color:#555;font-size:0.75rem;margin:6px 0">API keys and voice settings are configured in the <strong style="color:#888">SERVICES.md</strong> tab.</p>
     <hr style="border:none;border-top:1px solid #333;margin:8px 0">
     <div class="field">
       <label>Firmware Update URL</label>
@@ -495,39 +470,20 @@ function dismissCrashBanner(){
 }
 
 /* ── Settings ── */
-var KEY_FIELDS={api_key:'cfg-apikey',search_key:'cfg-searchkey',stt_key:'cfg-sttkey',tts_key:'cfg-ttskey'};
+function updateVolLabel(){var v=document.getElementById('cfg-volume').value;document.getElementById('cfg-volume-val').textContent=Math.round(v*100/255)+'%'}
+document.addEventListener('DOMContentLoaded',function(){var sl=document.getElementById('cfg-volume');if(sl)sl.addEventListener('input',updateVolLabel)});
 function loadConfig(){
   document.getElementById('cfg-status').textContent='Loading...';
   fetch('/api/config')
   .then(function(r){return r.json()})
   .then(function(d){
-    document.getElementById('cfg-provider').value=d.provider||'';
-    document.getElementById('cfg-model').value=d.model||'';
-    /* Password fields: clear value; show placeholder indicating if key is already configured */
-    for(var k in KEY_FIELDS){
-      var el=document.getElementById(KEY_FIELDS[k]);
-      var configured=d[k]==='****';
-      el.value='';
-      el.placeholder=configured?'\u25cf\u25cf\u25cf\u25cf\u25cf\u25cf\u25cf\u25cf (configured \u2014 leave blank to keep)':'(not set)';
-      el.dataset.configured=configured?'1':'0';
-    }
-    document.getElementById('cfg-ttsvoice').value=d.tts_voice||'';
     document.getElementById('cfg-verbose').checked=!!d.verbose_logs;
+    if(d.volume!==undefined){document.getElementById('cfg-volume').value=d.volume;updateVolLabel()}
     document.getElementById('cfg-status').textContent='';
   }).catch(function(){document.getElementById('cfg-status').textContent='Load failed'});
 }
 function saveConfig(){
-  var body={
-    provider:document.getElementById('cfg-provider').value.trim(),
-    model:document.getElementById('cfg-model').value.trim(),
-    tts_voice:document.getElementById('cfg-ttsvoice').value.trim(),
-    verbose_logs:document.getElementById('cfg-verbose').checked
-  };
-  /* Only include key fields if the user actually typed a new value */
-  for(var k in KEY_FIELDS){
-    var v=document.getElementById(KEY_FIELDS[k]).value.trim();
-    if(v) body[k]=v;
-  }
+  var body={verbose_logs:document.getElementById('cfg-verbose').checked,volume:parseInt(document.getElementById('cfg-volume').value)};
   document.getElementById('cfg-status').textContent='Saving...';
   fetch('/api/config',{method:'POST',body:JSON.stringify(body),headers:{'Content-Type':'application/json'}})
   .then(function(r){return r.json()})
@@ -592,7 +548,28 @@ function setCronStatus(msg){document.getElementById('cron-status').textContent=m
 function sendMsg(){
   var input=document.getElementById('chat-input');
   var text=input.value.trim();
-  if(!text||!ws||ws.readyState!==1) return;
+  if(!text) return;
+
+  /* /say command — direct TTS to speaker, no LLM */
+  if(text.toLowerCase().startsWith('/say ')){
+    var sayText=text.substring(5).trim();
+    if(!sayText) return;
+    addLog('msg','[you] '+text);
+    input.value='';
+    addLog('info','[say] sending to speaker...');
+    fetch('/api/say',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text:sayText})
+    }).then(function(r){return r.json();}).then(function(d){
+      addLog(d.ok?'info':'err','[say] '+(d.ok?'speaking: "'+sayText+'"':'failed: '+(d.error||'unknown')));
+    }).catch(function(e){
+      addLog('err','[say] error: '+e.message);
+    });
+    return;
+  }
+
+  if(!ws||ws.readyState!==1) return;
   ws.send(JSON.stringify({type:'prompt',content:text,chat_id:'ws_console'}));
   addLog('msg','[you] '+text);
   input.value='';

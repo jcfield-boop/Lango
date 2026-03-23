@@ -2,6 +2,7 @@
 #include "mimi_config.h"
 #include "bus/message_bus.h"
 #include "gateway/ws_server.h"
+#include "memory/session_mgr.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,15 +32,15 @@ static bool cron_sanitize_destination(cron_job_t *job)
     }
 
     if (job->channel[0] == '\0') {
-        strncpy(job->channel, MIMI_CHAN_SYSTEM, sizeof(job->channel) - 1);
+        strncpy(job->channel, LANG_CHAN_SYSTEM, sizeof(job->channel) - 1);
         changed = true;
     }
 
-    if (strcmp(job->channel, MIMI_CHAN_TELEGRAM) == 0) {
+    if (strcmp(job->channel, LANG_CHAN_TELEGRAM) == 0) {
         if (job->chat_id[0] == '\0' || strcmp(job->chat_id, "cron") == 0) {
             ESP_LOGW(TAG, "Cron job %s has invalid telegram chat_id, fallback to system:cron",
                      job->id[0] ? job->id : "<new>");
-            strncpy(job->channel, MIMI_CHAN_SYSTEM, sizeof(job->channel) - 1);
+            strncpy(job->channel, LANG_CHAN_SYSTEM, sizeof(job->channel) - 1);
             strncpy(job->chat_id, "cron", sizeof(job->chat_id) - 1);
             changed = true;
         }
@@ -128,7 +129,11 @@ static esp_err_t cron_load_jobs(void)
         strncpy(job->id, id, sizeof(job->id) - 1);
         strncpy(job->name, name, sizeof(job->name) - 1);
         strncpy(job->message, message, sizeof(job->message) - 1);
-        strncpy(job->channel, channel ? channel : MIMI_CHAN_SYSTEM,
+        if (strlen(message) >= sizeof(job->message)) {
+            ESP_LOGW(TAG, "Job %s message truncated (%d→%d bytes)",
+                     id, (int)strlen(message), (int)(sizeof(job->message) - 1));
+        }
+        strncpy(job->channel, channel ? channel : LANG_CHAN_SYSTEM,
                 sizeof(job->channel) - 1);
         strncpy(job->chat_id, chat_id ? chat_id : "cron",
                 sizeof(job->chat_id) - 1);
@@ -244,12 +249,38 @@ static void cron_process_due_jobs(void)
     time_t now = time(NULL);
 
     bool changed = false;
+    int fired = 0;
 
     for (int i = 0; i < s_job_count; i++) {
         cron_job_t *job = &s_jobs[i];
         if (!job->enabled) continue;
         if (job->next_run <= 0) continue;
         if (job->next_run > now) continue;
+
+        /* Skip massively overdue recurring jobs — they're stale after reboot.
+         * If overdue by >2× interval, advance to the next future slot and
+         * skip this run.  Prevents burst-firing all jobs after a reflash. */
+        if (job->kind == CRON_KIND_EVERY && job->interval_s > 0) {
+            int64_t overdue = (int64_t)(now - job->next_run);
+            if (overdue > 2 * job->interval_s) {
+                int64_t next = job->next_run;
+                while (next <= now) {
+                    next += job->interval_s;
+                }
+                ESP_LOGW(TAG, "Cron job %s (%s) overdue by %llds (>2x interval) — skipping to next",
+                         job->name, job->id, (long long)overdue);
+                job->next_run = next;
+                changed = true;
+                continue;
+            }
+        }
+
+        /* Limit to 1 job per check interval to prevent burst-firing
+         * all overdue jobs at once (causes network/power stress on boot) */
+        if (fired >= 1) {
+            ESP_LOGI(TAG, "Cron job %s (%s) deferred to next interval", job->name, job->id);
+            continue;
+        }
 
         /* Job is due — fire it */
         ESP_LOGI(TAG, "Cron job firing: %s (%s)", job->name, job->id);
@@ -258,8 +289,12 @@ static void cron_process_due_jobs(void)
         snprintf(mon_msg, sizeof(mon_msg), "[cron] %s: %.40s", job->id, job->message);
         ws_server_broadcast_monitor("task", mon_msg);
 
+        /* Clear stale session so cron jobs start with clean context
+         * (same pattern as heartbeat — prevents LLM referencing old errors) */
+        session_clear(job->chat_id);
+
         /* Push message to inbound queue */
-        mimi_msg_t msg;
+        lang_msg_t msg;
         memset(&msg, 0, sizeof(msg));
         strncpy(msg.channel, job->channel, sizeof(msg.channel) - 1);
         strncpy(msg.chat_id, job->chat_id, sizeof(msg.chat_id) - 1);
@@ -291,11 +326,19 @@ static void cron_process_due_jobs(void)
                 job->next_run = 0;
             }
         } else {
-            /* Recurring: compute next run */
-            job->next_run = now + job->interval_s;
+            /* Recurring: advance from scheduled time, not wall clock,
+             * to prevent drift when jobs fire late (e.g. after reboot).
+             * A briefing scheduled for 06:05 stays at 06:05 even if
+             * the device was down and fires the job at 08:30. */
+            int64_t next = job->next_run + job->interval_s;
+            while (next <= now) {
+                next += job->interval_s;
+            }
+            job->next_run = next;
         }
 
         changed = true;
+        fired++;
     }
 
     if (changed) {
