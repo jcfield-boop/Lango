@@ -1,243 +1,192 @@
 # Langoustine — Remaining Work
 
-Generated from code review. Items ordered by priority.
+Generated from code review + coredump analysis. Items ordered by priority.
 
 ---
 
-## 🔴 P0 — Broken right now
+## 🔴 P0 — Do this next
 
-### 0. stt_task stack overflow → system crash (CONFIRMED via coredump)
+### 1. Drop TLS → plain HTTP/WS
 
-**Root cause (coredump decoded 2026-03-25):**
+**Why:** Browser mic (`getUserMedia`) was the only reason for HTTPS. With the
+physical INMP441/UAC mic + wake word, the browser UI is text + status only.
+Plain HTTP on port 80 frees ~20–30 KB SRAM per TLS session and eliminates
+self-signed cert warnings. Current idle SRAM is ~27 KB — every TLS connection
+eats into agent headroom.
 
-```
-Crashed task: wifi  exccause: 0x1c (LoadProhibitedCause)
-a2 = 0xa5a5a5a5  ← FreeRTOS stack fill pattern (overflow signature)
-stt_task: STACK USED/FREE = 18464/2084   (task size = 16384 bytes)
-```
+**Files to change:**
+- `main/gateway/ws_server.c`:
+  - Replace `esp_https_server` with plain `httpd_start()` on port 80
+  - Remove `esp_https_server.h` include and cert extern declarations
+  - Remove the port-80 redirect server (it becomes the main server)
+  - `ws_server_stop()`: call `httpd_stop()` instead of `httpd_ssl_stop()`
+- `main/langoustine_config.h`: remove any HTTPS/cert-related constants
+- `main/CMakeLists.txt`: remove `EMBED_TXTFILES` for cert/key PEM files
+- `littlefs_data/console/index.html`: change `wss:` → `ws:`, `https:` → `http:`
+- `littlefs_data/console/dev.html`: same WS URL fix
 
-The `stt_task` overflows by ~2KB. Overflow corrupts the adjacent `wifi` task TCB,
-causing the FreeRTOS scheduler to dereference `0xa5a5a5a5` and fault.
-
-**Why it overflows:** When local STT is configured, `stt_transcribe_local()` creates
-a *new* `esp_http_client` (not the persistent session) and calls `perform()` inside
-the stt_task stack frame, on top of the `opus_encode_pcm_to_ogg()` call that already
-consumed significant stack. Combined depth exceeds 16KB.
-
-**Fix: increase stt_task stack from 16KB → 28KB SRAM.**
-
-File: `main/audio/audio_pipeline.c`, line 176:
-```c
-// Before:
-16 * 1024, NULL,
-// After:
-28 * 1024, NULL,
-```
-
-Add a matching constant to `main/langoustine_config.h`:
-```c
-#define LANG_STT_STACK_SIZE   (28 * 1024)
-```
-
-And use it in `audio_pipeline.c`:
-```c
-LANG_STT_STACK_SIZE, NULL,
-```
-
-**Bonus fix (local STT stack pressure):** `stt_transcribe_local()` uses
-`esp_http_client_init()` + `esp_http_client_perform()` + cleanup on each call —
-a fresh TLS-capable client even for plain HTTP. Consider adding a persistent
-`http_session_t s_local_session` for the local path (same pattern as the cloud
-session), initialized with `transport_type = HTTP_TRANSPORT_OVER_TCP` (no TLS).
-This reduces per-call stack depth and avoids TCP handshake overhead on LAN.
-Not required for the crash fix — stack increase alone is sufficient.
+**After:** Rebuild + full flash. SRAM free should rise to ~47–57 KB at idle,
+giving comfortable headroom for agent + TLS-free WebSocket sessions.
 
 ---
 
-### 1. cron.json: all telegram jobs missing `chat_id`
+## 🟡 P1 — Feature test checklist
 
-**File:** `littlefs_data/cron.json`
+Run these in order after dropping TLS. Each is a go/no-go gate.
 
-`cron_sanitize_destination()` in `cron_service.c` (lines 38–45) silently
-downgrades any job where `channel == "telegram"` and `chat_id` is empty or
-`"cron"` back to `channel: "system", chat_id: "cron"`. All 6 jobs in the
-current `cron.json` have `"channel": "telegram"` but no `"chat_id"` field,
-so every one of them will fire on the system channel, not Telegram.
+### Voice pipeline — wake word
 
-**Fix:** Add `"chat_id": "<YOUR_TELEGRAM_NUMERIC_ID>"` to each job in
-`cron.json`. James can find his numeric chat ID by messaging `@userinfobot`
-on Telegram — it replies with the numeric ID (e.g. `"123456789"`).
+1. Say "Hi ESP" from ~1m away, normal speaking volume
+2. LED → white (listening)
+3. Say a short question ("what time is it?")
+4. LED → blue (thinking) → cyan (TTS) → green (idle)
+5. **Check:** transcript appears in dev console monitor feed
+6. **Check:** LLM response text in monitor feed
+7. **Check:** TTS WAV cached, `tts_id` sent to browser
+8. **Check:** I2S speaker plays response (requires `LANG_I2S_AUDIO_ENABLED=1` — see P2 #1)
+9. **Check:** no false wake during TTS playback
 
-```json
-{
-  "id": "brfng001",
-  "channel": "telegram",
-  "chat_id": "123456789",   ← add this to every job
-  ...
-}
+### Voice pipeline — PTT (BOOT button + UAC mic)
+
+1. Plug webcam into USB-A port, wait for `UAC device connected` in serial log
+2. Hold BOOT button (GPIO0) — LED → white
+3. Speak into webcam mic, release button
+4. Same LED/monitor flow as wake word path
+5. **Check:** Opus encoding log line shows compression ratio
+
+### Web UI (after HTTP switch)
+
+1. Navigate to `http://192.168.0.44` — no cert warning
+2. Type a message, press Enter — tokens stream
+3. Dev console at `http://192.168.0.44/console` — monitor feed live
+4. **Check:** `ws:` WebSocket connects (browser console, no mixed-content errors)
+
+### Telegram
+
+1. Send a message to the bot
+2. **Check:** placeholder "🤔 thinking..." appears
+3. **Check:** response edits placeholder in-place
+4. Test a tool-using prompt: "what's the weather in SF?" (web_search + get_weather)
+5. **Check:** cron briefing delivered at expected time
+
+### Cron jobs
+
+All 7 jobs have `chat_id: 5538967144`. Verify skip-stale guard advanced overdue
+`next_run` values on boot (check serial log for `cron: skipping stale job`).
+Manually trigger: `lango> heartbeat_trigger` — should not fire cron, only heartbeat.
+Watch next natural cron fire (daily briefing) and confirm Telegram delivery.
+
+### OLED display
+
+| Scenario | Expected |
+|----------|----------|
+| Idle | time, date, provider, SRAM/PSRAM, uptime |
+| LLM thinking | provider/model line, status = thinking |
+| TTS active | status = speaking |
+| STT active | status = transcribing |
+| Tool call | tool name shown briefly |
+
+### LED states
+
+| Trigger | Expected color |
+|---------|---------------|
+| Boot | solid red |
+| WiFi connecting | yellow blink |
+| Idle/ready | breathing green |
+| Wake word / PTT | pulsing white |
+| LLM thinking | pulsing blue |
+| TTS generating | pulsing cyan |
+| Error (e.g. STT fail) | fast red flash → reverts to green |
+
+### Agent tools — smoke test
+
 ```
+"What time is it in Tokyo?"          → get_current_time
+"Search for latest Arm news"         → web_search
+"What's the weather in San Francisco?" → get_weather
+"Read my MEMORY.md"                  → read_file
+"What's the temperature of the ESP?" → device_temp
+```
+
+Check each produces a clean response with no stack overflow / WDT reset.
+
+### Local STT / TTS / LLM (if mlx-audio / Ollama running)
+
+1. Set `base_url: http://<mac-ip>:8000` in SERVICES.md → save
+2. Trigger voice request — monitor feed should show "Trying local STT..."
+3. On success: "Local STT success" in monitor feed
+4. On failure: "Local STT offline, falling back to cloud" + 60s backoff
+5. Same test for local TTS (`base_url` serving `/v1/audio/speech`)
+6. For local LLM: `lango> set_local_url http://<mac-ip>:11434/v1` → voice request → monitor shows "routing: local (ollama)"
 
 ---
 
-## 🟡 P1 — Behaviour issues
+## 🟠 P2 — Fixes & features
+
+### 1. Enable I2S speaker playback
+
+`main/langoustine_config.h` line ~134:
+```c
+#define LANG_I2S_AUDIO_ENABLED  1   // was 0
+```
+Hardware is wired (MAX98357A VIN→5V, SD→GPIO42). Fix TTS truncation (#2) first —
+a 80-char limit means only the first sentence gets spoken.
 
 ### 2. TTS truncation cuts mid-sentence
 
-**File:** `main/agent/agent_loop.c` ~line 617
+`main/agent/agent_loop.c` ~line 617 — truncates at 80 chars hard.
+Walk back to last sentence boundary (`.`, `!`, `?`) before the limit.
+Consider raising limit to 200 chars now that power is stable.
 
+### 3. stt_task stack watermark logging
+
+Add after each STT transcription in `audio_pipeline.c`:
 ```c
-if (strlen(final_text) > 80) {
-    strncpy(tts_buf, final_text, 80);
-    tts_buf[80] = '\0';
+ESP_LOGI(TAG, "stt_task stack HWM: %u bytes free",
+         uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
 ```
+Confirm 24 KB stack has ≥4 KB headroom in practice. If HWM < 4 KB, raise to 26 KB.
 
-This hard-truncates at 80 characters regardless of sentence boundaries,
-producing clipped, unnatural speech. The limit exists to keep WAV size under
-~200KB on USB-powered supplies, which is a valid concern.
+### 4. Persistent local HTTP session for STT
 
-**Fix:** Truncate at the last sentence boundary (`.`, `!`, `?`) before the
-80-char limit, falling back to the last space if no punctuation is found.
-Something like:
+`main/audio/stt_client.c` — `stt_transcribe_local()` creates a fresh
+`esp_http_client` on each call (stack-heavy). Add a `static http_session_t
+s_local_session` (plain TCP, no TLS) initialized on first use. This reduces
+per-call stack depth by ~4 KB and allows stt_task to drop back to 20 KB,
+reclaiming 4 KB SRAM.
 
-```c
-#define TTS_MAX_CHARS 80
-if (strlen(final_text) > TTS_MAX_CHARS) {
-    strncpy(tts_buf, final_text, TTS_MAX_CHARS);
-    tts_buf[TTS_MAX_CHARS] = '\0';
-    /* Walk back to last sentence-ending punctuation */
-    int cut = TTS_MAX_CHARS - 1;
-    while (cut > 20 && tts_buf[cut] != '.' &&
-           tts_buf[cut] != '!' && tts_buf[cut] != '?') {
-        cut--;
-    }
-    if (cut > 20) tts_buf[cut + 1] = '\0';
-    tts_text = tts_buf;
-}
-```
+### 5. `/api/message` POST endpoint
 
-### 3. Memory compactor not on a schedule
-
-**Files:** `littlefs_data/skills/memory-compactor.md`, `littlefs_data/cron.json`
-
-`USER.md` notes "missing memory compaction behavior" as a past lesson. The
-`memory-compactor.md` skill exists but there is no cron job that runs it.
-`MEMORY.md` is currently small but will grow; without compaction the LLM
-context will bloat and eventually hit `LANG_MEMORY_MAX_BYTES` (16KB).
-
-**Fix:** Add a weekly cron job (e.g. Sunday 2 AM) to run the compactor:
-
-```json
-{
-  "id": "cmpct006",
-  "name": "Weekly Memory Compaction",
-  "enabled": true,
-  "kind": "every",
-  "interval_s": 604800,
-  "next_run": 0,
-  "last_run": 0,
-  "delete_after_run": false,
-  "channel": "system",
-  "chat_id": "cron",
-  "message": "Run the memory-compactor skill: read MEMORY.md, remove duplicate or superseded entries, merge related facts, keep total size under 8KB. Write the compacted result back to MEMORY.md. Log a one-line summary of what was removed."
-}
-```
-
-Note: `system` channel is correct here — no user reply needed.
+For external callers (Claude, scripts) to trigger agent turns over HTTP without
+a browser or Telegram. Auth via Bearer token. Returns 202 immediately, response
+goes to specified channel. See original spec in prior PLAN.md.
 
 ---
 
-## 🟠 P2 — External integration (Claude ↔ Lango)
+## 🔵 P3 — Nice to have
 
-### 4. Add `/api/message` POST endpoint
+### 6. `LANG_MAX_TOOL_CALLS` = 2 → 4
 
-**File:** `main/gateway/ws_server.c`
+Low-risk — parallel spawn only fires if SRAM guard passes. After TLS removal
+(~47 KB free idle), the guard will allow 2 parallel tools again. Raising cap
+to 4 allows compound briefing tasks in one LLM turn.
 
-This is the key missing piece for Claude (and other external callers) to
-trigger Lango agent turns over HTTPS without needing a browser or Telegram.
-The existing `s_auth_token` / `LANG_SECRET_HTTP_TOKEN` infrastructure is
-already in place for auth.
+### 7. Weekly memory compaction cron
 
-**Endpoint spec:**
-
-```
-POST /api/message
-Authorization: Bearer <LANG_SECRET_HTTP_TOKEN>
-Content-Type: application/json
-
-{
-  "message": "Check the ARM stock price",
-  "channel": "system",        // optional, default "system"
-  "chat_id": "api"            // optional, default "api"
-}
-```
-
-**Behaviour:**
-- Validate Bearer token against `s_auth_token` (same check used by other
-  protected endpoints).
-- Push a `mimi_msg_t` onto the inbound message bus with the given channel,
-  chat_id, and message content.
-- Return `{"status": "queued"}` immediately (202 Accepted) — don't block
-  waiting for the agent to respond, as LLM calls can take 10–30s and the
-  HTTP server has a short request timeout.
-- Responses will be routed to the channel specified (system → monitor
-  broadcast; websocket → connected client; telegram → Telegram chat).
-
-For a synchronous version (Claude waits for the response), a separate
-`/api/ask` endpoint with a response queue/semaphore pattern could be added
-later, but the async version is sufficient for orchestrated use.
-
-**Why this matters:** Once this endpoint exists and Lango is reachable via a
-tunnel (e.g. Cloudflare), Claude can:
-- Trigger morning briefings, surf checks, or stock lookups on demand
-- Execute GPIO actions and HA commands remotely
-- Use Lango as a local sensor/actuator layer
+Already in `cron.json` as job `cmpct006` (system channel, weekly). Confirm it
+fires and actually shrinks MEMORY.md when it runs.
 
 ---
 
-## 🔵 P3 — Configuration / tuning
+## ✅ Already fixed
 
-### 5. `LANG_MAX_TOOL_CALLS` = 2
-
-**File:** `main/langoustine_config.h` line 52
-
-The parallel tool execution path (`build_tool_results()`) allocates
-`tool_exec_ctx_t ctxs[LANG_MAX_TOOL_CALLS]` which is currently 2. The LLM
-can only request 2 tools in a single response. Raising this to 4 would let
-compound briefing tasks (e.g. web_search + noaa_buoy + get_weather +
-rss_fetch) run in parallel in a single turn rather than requiring 2
-iterations.
-
-**Constraint:** Each parallel task needs ~28KB SRAM stack + heap; the guard
-at `free_sram < n * 28KB + 28KB` will fall back to sequential if memory is
-tight. Raising the cap is low-risk — it only affects turns where the LLM
-actually requests that many tools simultaneously.
-
-**Suggested value:** `4`
-
-### 6. Local speaker playback
-
-**File:** `main/langoustine_config.h` line 134
-
-```c
-#define LANG_I2S_AUDIO_ENABLED  0
-```
-
-The MAX98357A amplifier is wired and `i2s_audio.c` + `tts_client.c` fully
-support local playback — it's just disabled. The comment in `agent_loop.c`
-says "keep WAV < ~200KB on USB-powered supplies."
-
-**Decision needed:** If Lango has a stable 5V supply (which it does — the
-wiring guide routes amp VIN to the USB 5V rail), enabling this would make
-Lango a true voice assistant that speaks responses without needing a browser
-tab open. The 80-char TTS limit (item 2 above) should be fixed first.
-
-To enable: set `LANG_I2S_AUDIO_ENABLED 1` and flash.
-
----
-
-## ✅ Already fixed (for reference)
-
-- `littlefs_data/config/SERVICES.md` added to `.gitignore`
-- All cron jobs switched from `websocket` to `telegram` channel
-- `device_temp` tool description corrected from "ESP32-C6" to "ESP32-S3"
-- mDNS service registration updated to `_https` on port 443
+- stt_task stack overflow (16 KB → 24 KB) — coredump confirmed, flashed
+- SRAM/TLS headroom (28 KB → 24 KB stack, TLS sessions now succeed)
+- Bootloader boot loop after OTA slot reset — full reflash with partition table
+- All cron jobs have `chat_id: 5538967144` — PLAN item #1 resolved
+- OLED layout (IP + RSSI, date row)
+- `tool_get_time` uses NTP directly
+- TTS voice: `autumn` (was `tara`)
+- SERVICES.md hot-reload on save
+- Klipper Moonraker URL port `:7125`
+- Default model: `openrouter/auto`
