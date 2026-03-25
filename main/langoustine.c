@@ -479,8 +479,8 @@ void app_main(void)
             mdns_init();
             mdns_hostname_set("lango");
             mdns_instance_name_set("Langoustine AI Assistant");
-            mdns_service_add(NULL, "_https", "_tcp", 443, NULL, 0);
-            ESP_LOGI(TAG, "mDNS started: lango.local port 443 (also: langoustine.local via cert SAN)");
+            mdns_service_add(NULL, "_http", "_tcp", LANG_WS_PORT, NULL, 0);
+            ESP_LOGI(TAG, "mDNS started: lango.local port %d", LANG_WS_PORT);
 
             /* Sync system clock via SNTP.
              * Set build timestamp immediately as fallback; SNTP will silently

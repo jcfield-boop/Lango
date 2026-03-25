@@ -61,12 +61,12 @@ trap 'echo "==> Stopping HTTP server (pid $SERVER_PID)"; kill $SERVER_PID 2>/dev
 sleep 0.5  # give server time to start
 
 # ── 4. Snapshot pre-OTA uptime (to detect genuine reboot) ──────────
-PRE_UPTIME=$(curl -sk --connect-timeout 5 "https://$DEVICE_HOST/api/sysinfo" \
+PRE_UPTIME=$(curl -s --connect-timeout 5 "http://$DEVICE_HOST/api/sysinfo" \
     | python3 -c "import sys,json; print(json.load(sys.stdin)['uptime_s'])" 2>/dev/null || echo "0")
 echo "==> Pre-OTA uptime: ${PRE_UPTIME}s"
 
 # ── 5. Trigger OTA ─────────────────────────────────────────────────
-echo "==> Triggering OTA on https://$DEVICE_HOST/api/ota"
+echo "==> Triggering OTA on http://$DEVICE_HOST/api/ota"
 
 AUTH_ARGS=()
 if [ -n "${OTA_TOKEN:-}" ]; then
@@ -74,7 +74,7 @@ if [ -n "${OTA_TOKEN:-}" ]; then
 fi
 
 RESPONSE=$(curl -ks --connect-timeout 10 -X POST \
-    "https://$DEVICE_HOST/api/ota" \
+    "http://$DEVICE_HOST/api/ota" \
     -H "Content-Type: application/json" \
     "${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"}" \
     -d "{\"url\":\"$BINARY_URL\"}" \
@@ -96,7 +96,7 @@ REBOOTING=0
 for i in $(seq 1 $((MAX_WAIT / 4))); do
     # Single request per poll — avoid duplicate TLS handshakes that steal
     # CPU from the OTA download on the ESP32's Core 0.
-    POLL_JSON=$(curl -sk --connect-timeout 3 "https://$DEVICE_HOST/api/ota/status" 2>/dev/null || echo '{}')
+    POLL_JSON=$(curl -s --connect-timeout 3 "http://$DEVICE_HOST/api/ota/status" 2>/dev/null || echo '{}')
     STATUS=$(echo "$POLL_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('state','?'))" 2>/dev/null || echo "unreachable")
     PCT=$(echo "$POLL_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('progress_pct',0))" 2>/dev/null || echo "0")
     printf "\r    status=%-12s pct=%3s%%  " "$STATUS" "$PCT"
@@ -119,7 +119,7 @@ echo ""
 
 if [ "$REBOOTING" = "0" ]; then
     # Fallback: check if device already rebooted (uptime < pre-OTA uptime)
-    POST_UPTIME=$(curl -sk --connect-timeout 5 "https://$DEVICE_HOST/api/sysinfo" \
+    POST_UPTIME=$(curl -s --connect-timeout 5 "http://$DEVICE_HOST/api/sysinfo" \
         | python3 -c "import sys,json; print(json.load(sys.stdin)['uptime_s'])" 2>/dev/null || echo "-1")
     if [ "$POST_UPTIME" -ge 0 ] && [ "$POST_UPTIME" -lt "$PRE_UPTIME" ] 2>/dev/null; then
         echo "==> Device already rebooted (uptime ${POST_UPTIME}s < pre-OTA ${PRE_UPTIME}s). OTA complete."
@@ -132,7 +132,7 @@ fi
 # ── 7. Wait for device to come back with lower uptime ───────────────
 echo "==> Waiting for device to reboot and come back online..."
 for i in $(seq 1 40); do
-    NEW_UPTIME=$(curl -sk --connect-timeout 2 "https://$DEVICE_HOST/api/sysinfo" \
+    NEW_UPTIME=$(curl -s --connect-timeout 2 "http://$DEVICE_HOST/api/sysinfo" \
         | python3 -c "import sys,json; print(json.load(sys.stdin)['uptime_s'])" 2>/dev/null || echo "-1")
     if [ "$NEW_UPTIME" -ge 0 ] && [ "$NEW_UPTIME" -lt "$PRE_UPTIME" ] 2>/dev/null; then
         echo ""

@@ -284,9 +284,26 @@ Any server exposing OpenAI-compatible `/v1/audio/speech` (TTS) and `/v1/audio/tr
 
 | Server | TTS | STT | Notes |
 |--------|-----|-----|-------|
-| [mlx-audio](https://github.com/Blaizzy/mlx-audio) | ✅ Kokoro, Qwen3-TTS | ✅ Whisper, Parakeet | Apple Silicon optimized; `pip install mlx-audio && python -m mlx_audio.server` |
+| [mlx-audio](https://github.com/Blaizzy/mlx-audio) | ✅ Kokoro, Qwen3-TTS | ✅ Whisper, Parakeet | Apple Silicon optimized; see setup below |
 | [Piper](https://github.com/rhasspy/piper) | ✅ | ❌ | Blazing fast CPU TTS (~200ms); needs a wrapper for OpenAI API |
 | [whisper.cpp](https://github.com/ggerganov/whisper.cpp) | ❌ | ✅ | `whisper-server --port 8080` |
+
+**mlx-audio setup (Apple Silicon Mac):**
+
+```bash
+pip install mlx-audio
+
+# Start the OpenAI-compatible server (models download automatically on first use)
+/Library/Frameworks/Python.framework/Versions/3.12/bin/python3 \
+    -m mlx_audio.server --host 0.0.0.0 --port 8000
+```
+
+Then set your Mac's LAN IP in SERVICES.md (find it with `ipconfig getifaddr en0`):
+
+```markdown
+## Local Audio (mlx-audio)
+base_url: http://192.168.x.x:8000
+```
 
 The device tries local first over plain HTTP (no TLS overhead), then falls back to Groq cloud if the local server is unreachable. After a failure, local is skipped for 60 seconds before retrying.
 
@@ -296,11 +313,8 @@ The device tries local first over plain HTTP (no TLS overhead), then falls back 
 
 ### Browser voice UI
 
-Navigate to `https://langoustine.local` (or `https://<device-ip>`).
+Navigate to `http://lango.local` (or `http://<device-ip>`).
 
-> **First visit:** the device uses a self-signed TLS certificate. In Safari: *Show Details → Visit Website → confirm in Keychain*. In Chrome: type `thisisunsafe` on the warning page.
-
-- **Voice mode:** Click **Record**, speak, click **Stop** — the browser sends WebM audio, Groq Whisper transcribes it, the LLM replies, and TTS audio plays back in the browser.
 - **Text mode:** Type a message and press Enter. Tokens stream word-by-word as the LLM generates.
 - The developer console at `/console` shows a real-time monitor feed: LLM provider/model, tool calls, search provider, heartbeat events.
 
@@ -497,6 +511,15 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 ---
 
 ## Changelog
+
+### 2026-03-25 — Drop TLS, plain HTTP/WS on port 80
+
+- **`main/gateway/ws_server.c`** — replaced `esp_https_server` + `httpd_ssl_start()` with plain `httpd_start()` on port 80. WebSocket clients connect via `ws:` instead of `wss:`. Removes ~20–30 KB SRAM overhead per TLS session; idle SRAM rises from ~27 KB to ~47 KB. Browser UI automatically switches to `ws:` (protocol-relative JS detection). `max_uri_handlers` raised from 25 → 27 (26 routes registered).
+- **`main/langoustine.c`** — mDNS now advertises `_http._tcp` on port 80 (was `_https._tcp:443`). Navigate to `http://lango.local`.
+- **`main/CMakeLists.txt`** — removed `EMBED_TXTFILES` for TLS cert/key PEMs; removed `esp_https_server` from REQUIRES.
+- **`main/display/oled_display.c`** — OLED IP display now abbreviates to last 2 octets (e.g. `192.168.0.44` → `0.44`) to fit the 128px display alongside the large clock.
+
+---
 
 ### 2026-03-25 — Fix: stt_task stack overflow crash with local STT/Opus
 
