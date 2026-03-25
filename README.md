@@ -498,6 +498,12 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 
 ## Changelog
 
+### 2026-03-25 — Fix: stt_task stack overflow crash with local STT/Opus
+
+- **`main/audio/audio_pipeline.c`** — `stt_task` stack increased 16 KB → 28 KB SRAM. Coredump analysis showed the task using 18.5 KB (overflow by ~2 KB), corrupting the adjacent wifi task TCB and causing a `LoadProhibitedCause` fault in the FreeRTOS scheduler (`a2 = 0xa5a5a5a5` fill pattern). The overflow is triggered when local STT is configured: `stt_transcribe_local()` creates a fresh `esp_http_client` on top of the `opus_encode_pcm_to_ogg()` stack frame, exceeding the previous 16 KB limit.
+
+---
+
 ### 2026-03-23 — Local-first audio, OLED dashboard, Ollama, Opus, rate limiting, WiFi onboarding
 - **Local-first TTS/STT** — New `## Local Audio` section in SERVICES.md. Device tries local server (mlx-audio, Piper, whisper.cpp — any OpenAI-compatible `/v1/audio/speech` and `/v1/audio/transcriptions`) over plain HTTP first, falls back to Groq cloud on failure. 60s backoff after local failure. Eliminates TLS overhead and cloud latency for voice pipeline.
 - **OLED dashboard overhaul** — IP address at top of display with RSSI signal bar below; date on its own row (no overlap). Active screen shows provider/model, status, message preview, and token counts. Idle screen shows time, date, provider, stats, uptime.
