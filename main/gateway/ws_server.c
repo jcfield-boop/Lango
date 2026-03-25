@@ -23,12 +23,6 @@
 #include <time.h>
 #include "esp_log.h"
 #include "esp_http_server.h"
-#include "esp_https_server.h"
-
-extern const uint8_t s_server_cert[]     asm("_binary_server_cert_pem_start");
-extern const uint8_t s_server_cert_end[] asm("_binary_server_cert_pem_end");
-extern const uint8_t s_server_key[]      asm("_binary_server_key_pem_start");
-extern const uint8_t s_server_key_end[]  asm("_binary_server_key_pem_end");
 #include "esp_timer.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
@@ -58,24 +52,7 @@ static char s_auth_token[128] = {0};
 static char s_cors_origin[128] = "*";
 
 static httpd_handle_t s_server = NULL;
-static httpd_handle_t s_redirect_server = NULL;
 static TaskHandle_t s_ws_ping_task = NULL;
-
-static esp_err_t redirect_handler(httpd_req_t *req)
-{
-    char host[64] = {0};
-    if (httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) != ESP_OK || !host[0]) {
-        strncpy(host, "langoustine.local", sizeof(host) - 1);
-    }
-    char *colon = strchr(host, ':');
-    if (colon) *colon = '\0';
-    char location[600];   /* "https://" (8) + host (63) + uri (512) + NUL */
-    snprintf(location, sizeof(location), "https://%s%s", host, req->uri);
-    httpd_resp_set_status(req, "301 Moved Permanently");
-    httpd_resp_set_hdr(req, "Location", location);
-    httpd_resp_send(req, NULL, 0);
-    return ESP_OK;
-}
 
 /* Simple client tracking */
 typedef struct {
@@ -1750,21 +1727,17 @@ esp_err_t ws_server_start(void)
         ESP_LOGI(TAG, "CORS origin: %s", s_cors_origin);
     }
 
-    httpd_ssl_config_t ssl_cfg         = HTTPD_SSL_CONFIG_DEFAULT();
-    ssl_cfg.httpd.server_port          = LANG_WSS_PORT;
-    ssl_cfg.httpd.ctrl_port            = LANG_WSS_PORT + 1;
-    ssl_cfg.httpd.max_open_sockets     = 8;
-    ssl_cfg.httpd.stack_size           = 10240;
-    ssl_cfg.httpd.max_uri_handlers     = 25;
-    ssl_cfg.httpd.send_wait_timeout    = 30;
-    ssl_cfg.httpd.recv_wait_timeout    = 120;  /* extended: WS ping keeps connection alive */
-    ssl_cfg.httpd.uri_match_fn         = httpd_uri_match_wildcard;
-    ssl_cfg.servercert                 = s_server_cert;
-    ssl_cfg.servercert_len             = s_server_cert_end - s_server_cert;
-    ssl_cfg.prvtkey_pem                = s_server_key;
-    ssl_cfg.prvtkey_len                = s_server_key_end - s_server_key;
+    httpd_config_t cfg             = HTTPD_DEFAULT_CONFIG();
+    cfg.server_port                = LANG_WS_PORT;
+    cfg.ctrl_port                  = LANG_WS_PORT + 1;
+    cfg.max_open_sockets           = 8;
+    cfg.stack_size                 = 10240;
+    cfg.max_uri_handlers           = 25;
+    cfg.send_wait_timeout          = 30;
+    cfg.recv_wait_timeout          = 120;  /* extended: WS ping keeps connection alive */
+    cfg.uri_match_fn               = httpd_uri_match_wildcard;
 
-    esp_err_t ret = httpd_ssl_start(&s_server, &ssl_cfg);
+    esp_err_t ret = httpd_start(&s_server, &cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start HTTPS server: %s", esp_err_to_name(ret));
         return ret;
@@ -1861,28 +1834,12 @@ esp_err_t ws_server_start(void)
     httpd_uri_t message_uri = { .uri = "/api/message", .method = HTTP_POST, .handler = message_post_handler };
     httpd_register_uri_handler(s_server, &message_uri);
 
-    /* HTTP → HTTPS redirect server on port 80 */
-    httpd_config_t redir_cfg    = HTTPD_DEFAULT_CONFIG();
-    redir_cfg.server_port       = LANG_WS_PORT;
-    redir_cfg.ctrl_port         = LANG_WS_PORT + 1;
-    redir_cfg.max_open_sockets  = 2;
-    redir_cfg.stack_size        = 4096;
-    redir_cfg.max_uri_handlers  = 2;
-    redir_cfg.uri_match_fn      = httpd_uri_match_wildcard;
-    if (httpd_start(&s_redirect_server, &redir_cfg) == ESP_OK) {
-        httpd_uri_t redir_any = {
-            .uri = "/*", .method = HTTP_GET, .handler = redirect_handler,
-        };
-        httpd_register_uri_handler(s_redirect_server, &redir_any);
-        ESP_LOGI(TAG, "HTTP redirect server on port %d", LANG_WS_PORT);
-    }
-
     /* WebSocket keepalive ping task (Core 0, low priority) */
     if (!s_ws_ping_task) {
         xTaskCreatePinnedToCore(ws_ping_task, "ws_ping", 4096, NULL, 2, &s_ws_ping_task, 0);
     }
 
-    ESP_LOGI(TAG, "HTTPS server started on port %d (WSS: /ws, Voice: /, Dev: /console)", LANG_WSS_PORT);
+    ESP_LOGI(TAG, "HTTP server started on port %d (WS: /ws, Voice: /, Dev: /console)", LANG_WS_PORT);
     return ESP_OK;
 }
 
@@ -2061,12 +2018,8 @@ esp_err_t ws_server_broadcast_monitor_verbose(const char *event, const char *msg
 
 esp_err_t ws_server_stop(void)
 {
-    if (s_redirect_server) {
-        httpd_stop(s_redirect_server);
-        s_redirect_server = NULL;
-    }
     if (s_server) {
-        httpd_ssl_stop(s_server);
+        httpd_stop(s_server);
         s_server = NULL;
         ESP_LOGI(TAG, "Server stopped");
     }

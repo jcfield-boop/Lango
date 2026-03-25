@@ -79,10 +79,21 @@ static void draw_idle_screen(void)
     portEXIT_CRITICAL(&s_mux);
 
     if (ip_copy[0]) {
-        /* Small 1x font IP right-aligned on row 0 (above the 2x baseline) */
+        /* Abbreviate to last 2 octets so full IP fits (e.g. "192.168.0.44" → "0.44") */
+        char *last_dot = strrchr(ip_copy, '.');
+        if (last_dot) {
+            char *prev_dot = NULL;
+            for (char *p = ip_copy; p < last_dot; p++) {
+                if (*p == '.') prev_dot = p;
+            }
+            if (prev_dot) {
+                memmove(ip_copy, prev_dot + 1, strlen(prev_dot));
+            }
+        }
+        /* Small 1x font IP right-aligned on row 0 */
         int ip_len = (int)strlen(ip_copy);
         int ip_x = 128 - ip_len * 6;
-        if (ip_x < 64) ip_x = 64;  /* don't overlap time */
+        if (ip_x < 64) ip_x = 64;
         ssd1306_str(ip_x, 0, ip_copy);
     }
 
