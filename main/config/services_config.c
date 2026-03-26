@@ -105,7 +105,11 @@ esp_err_t services_config_load(void)
                 keys_applied++;
             } else if (strcmp(key, "model") == 0) {
                 llm_set_local_model(val);
-                ESP_LOGI(TAG, "Local model: %s", val);
+                ESP_LOGI(TAG, "Local model (vision): %s", val);
+                keys_applied++;
+            } else if (strcmp(key, "local_text_model") == 0) {
+                llm_set_local_text_model(val);
+                ESP_LOGI(TAG, "Local text model: %s", val);
                 keys_applied++;
             } else if (strcmp(key, "voice_provider") == 0) {
                 llm_set_voice_provider(val);
@@ -230,10 +234,11 @@ esp_err_t services_config_reload(void)
 
         /* ── Local Model (Ollama) ────────────────────────────── */
         } else if (strstr(section, "local model")) {
-            if (strcmp(key, "base_url") == 0)        { llm_set_local_url(val);      keys_applied++; }
-            else if (strcmp(key, "model") == 0)       { llm_set_local_model(val);    keys_applied++; }
-            else if (strcmp(key, "voice_provider") == 0) { llm_set_voice_provider(val); keys_applied++; }
-            else if (strcmp(key, "voice_model") == 0)    { llm_set_voice_model(val);    keys_applied++; }
+            if (strcmp(key, "base_url") == 0)             { llm_set_local_url(val);        keys_applied++; }
+            else if (strcmp(key, "model") == 0)            { llm_set_local_model(val);      keys_applied++; }
+            else if (strcmp(key, "local_text_model") == 0) { llm_set_local_text_model(val); keys_applied++; }
+            else if (strcmp(key, "voice_provider") == 0)   { llm_set_voice_provider(val);   keys_applied++; }
+            else if (strcmp(key, "voice_model") == 0)      { llm_set_voice_model(val);      keys_applied++; }
 
         /* ── STT ─────────────────────────────────────────────── */
         } else if (strstr(section, "speech-to-text") || strstr(section, "stt")) {

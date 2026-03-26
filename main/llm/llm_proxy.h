@@ -71,11 +71,17 @@ void llm_set_request_override(const char *provider, const char *model);
 /** Clear per-request override, reverting to global provider/model. */
 void llm_clear_request_override(void);
 
-/** Set the local model name (e.g. "qwen2.5:14b"). */
+/** Set the local model name (e.g. "qwen3-vl:8b" — vision capable). */
 void llm_set_local_model(const char *model);
 
-/** Get the configured local model name. */
+/** Get the configured local model name (vision model when set). */
 const char *llm_get_local_model(void);
+
+/** Set the text-only local model (e.g. "gemma3:12b" — fast, no vision overhead). */
+void llm_set_local_text_model(const char *model);
+
+/** Get the text-only local model; falls back to local_model if not configured. */
+const char *llm_get_local_text_model(void);
 
 /** Check if the local Ollama instance is reachable (cached 60s). */
 bool llm_local_health_check(void);

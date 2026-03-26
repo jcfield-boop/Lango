@@ -422,6 +422,7 @@ static void agent_loop_task(void *arg)
 
         atomic_store(&s_agent_busy, true);
         int64_t turn_start_us = esp_timer_get_time();
+        bool turn_has_image = false;   /* set when tool_capture_image runs this turn */
         memory_tool_reset_turn();
         web_search_reset_turn();
 
@@ -606,14 +607,40 @@ static void agent_loop_task(void *arg)
                 ESP_LOGI(TAG, "Smart routing: %s", route_msg);
                 ws_server_broadcast_monitor("llm", route_msg);
             }
-        } else if (!is_voice && llm_smart_routing_available()) {
-            /* Text → local Ollama when reachable */
-            if (llm_local_health_check()) {
-                llm_set_request_override("ollama", llm_get_local_model());
+        } else if (!is_voice && strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0
+                   && llm_smart_routing_available()) {
+            /* Text (browser/Telegram) → local Ollama when reachable and appropriate.
+             * System/heartbeat always uses cloud (multi-step tool chains need speed).
+             *
+             * Complexity check: route complex requests (web search, email, briefings)
+             * to cloud even from text channel — local models struggle with long tool
+             * chains. Simple Q&A, time, weather, conversational → local fine.
+             *
+             * Vision check: if capture_image ran this turn, use the vision model.
+             * Otherwise use local_text_model (fast, text-only, e.g. gemma3:12b). */
+            bool is_complex = (strcasestr(msg.content, "briefing")  != NULL ||
+                               strcasestr(msg.content, "web search") != NULL ||
+                               strcasestr(msg.content, "search for") != NULL ||
+                               strcasestr(msg.content, " email")     != NULL ||
+                               strcasestr(msg.content, "send email") != NULL ||
+                               strcasestr(msg.content, "research")   != NULL ||
+                               strcasestr(msg.content, "forecast")   != NULL ||
+                               strcasestr(msg.content, "headlines")  != NULL);
+
+            if (is_complex) {
+                ESP_LOGI(TAG, "Smart routing: complex request → cloud");
+                ws_server_broadcast_monitor("llm", "routing: cloud (complex)");
+            } else if (llm_local_health_check()) {
+                /* Vision turns use the vision model; text turns use the text model */
+                const char *local_model = turn_has_image
+                    ? llm_get_local_model()
+                    : llm_get_local_text_model();
+                llm_set_request_override("ollama", local_model);
                 using_local = true;
                 {
-                    char route_msg[48];
-                    snprintf(route_msg, sizeof(route_msg), "routing: local → %s", llm_get_local_model());
+                    char route_msg[64];
+                    snprintf(route_msg, sizeof(route_msg), "routing: local → %s%s",
+                             local_model, turn_has_image ? " (vision)" : "");
                     ESP_LOGI(TAG, "Smart routing: %s", route_msg);
                     ws_server_broadcast_monitor("llm", route_msg);
                 }
@@ -624,10 +651,13 @@ static void agent_loop_task(void *arg)
         }
 
         while (iteration < LANG_AGENT_MAX_TOOL_ITER) {
-            /* Soft per-turn timeout: 180s. Daily briefing heartbeats need 4-6 LLM
-             * iterations with web_search + RSS + send_email — each round-trip to
-             * OpenRouter takes 5-15s, easily totaling 2-3 minutes. */
-            if ((esp_timer_get_time() - turn_start_us) > 180000000LL) {
+            /* Soft per-turn timeout. System tasks get 5 min (briefing involves
+             * 3-4 cloud LLM calls + web_search + email). Interactive turns get
+             * 3 min — enough for tool chains while giving the user feedback. */
+            int64_t turn_timeout_us = (strcmp(msg.channel, LANG_CHAN_SYSTEM) == 0)
+                ? 300000000LL   /* 5 min for heartbeat/cron */
+                : 180000000LL;  /* 3 min for browser/Telegram */
+            if ((esp_timer_get_time() - turn_start_us) > turn_timeout_us) {
                 ESP_LOGW(TAG, "Agent soft timeout at iter %d — abandoning turn", iteration);
                 ws_server_broadcast_monitor("error", "agent turn timeout");
                 final_text = strdup("[Sorry, that took too long. Please retry.]");
@@ -781,10 +811,12 @@ static void agent_loop_task(void *arg)
             cJSON_AddItemToObject(asst_msg, "content", build_assistant_content(&resp));
             cJSON_AddItemToArray(messages, asst_msg);
 
-            /* Track if capture_image was invoked this turn; flash LED white for illumination */
+            /* Track if capture_image was invoked this turn; flash LED white for illumination.
+             * Also set turn_has_image so subsequent LLM routing uses the vision model. */
             for (int ci = 0; ci < resp.call_count; ci++) {
                 if (strcmp(resp.calls[ci].name, "capture_image") == 0) {
                     capture_image_called = true;
+                    turn_has_image = true;
                     led_indicator_set(LED_CAPTURING);
                     break;
                 }

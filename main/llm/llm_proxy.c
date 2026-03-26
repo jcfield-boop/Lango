@@ -35,6 +35,10 @@ static char s_provider[16] = MIMI_LLM_PROVIDER_DEFAULT;
 static char s_local_url[LLM_LOCAL_URL_MAX] = {0};
 static char s_local_model[LLM_MODEL_MAX_LEN] = {0};
 
+/* Text-only local model (e.g. gemma3:12b) — used for non-vision turns.
+ * Falls back to s_local_model when not set. */
+static char s_local_text_model[LLM_MODEL_MAX_LEN] = {0};
+
 /* Voice-channel routing: when chat_id=="ptt", override to a fast cloud model
  * rather than local Ollama (which is too slow for real-time voice interaction).
  * Configured via SERVICES.md: voice_provider / voice_model under [Local Model]. */
@@ -1010,6 +1014,11 @@ typedef struct {
     void       *progress_ctx;
     size_t      last_progress_len;
     int64_t     last_progress_us;
+
+    /* Hard total-stream deadline (esp_timer_get_time() units, µs).
+     * Set before esp_http_client_perform(); checked in the data handler.
+     * Returning ESP_FAIL from the handler aborts the HTTP client cleanly. */
+    int64_t     stream_deadline_us;
 } sse_state_t;
 
 static sse_state_t *sse_state_alloc(void)
@@ -1246,6 +1255,15 @@ static esp_err_t sse_http_event_handler(esp_http_client_event_t *evt)
     sse_state_t *st = (sse_state_t *)evt->user_data;
     if (evt->event_id != HTTP_EVENT_ON_DATA) return ESP_OK;
 
+    /* Hard total-stream timeout: abort if we've been streaming too long.
+     * The per-chunk timeout_ms in esp_http_client_config only covers the gap
+     * between chunks, so a slow-but-steady model (e.g. qwen3-vl) can stream
+     * for 800+ seconds without triggering it. This deadline catches that. */
+    if (st->stream_deadline_us > 0 && esp_timer_get_time() > st->stream_deadline_us) {
+        ESP_LOGW("llm", "LLM stream hard timeout — aborting");
+        return ESP_FAIL;
+    }
+
     const char *p = (const char *)evt->data;
     int remaining  = evt->data_len;
 
@@ -1426,6 +1444,14 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
     }
     st->progress_cb  = progress_cb;
     st->progress_ctx = progress_ctx;
+
+    /* Hard stream deadline: 3 min for local plaintext, 90s for cloud TLS.
+     * Prevents slow vision/reasoning models from blocking the agent task
+     * indefinitely — the per-chunk timeout_ms does not bound total duration. */
+    {
+        int hard_ms = provider_is_plaintext() ? (3 * 60 * 1000) : (90 * 1000);
+        st->stream_deadline_us = esp_timer_get_time() + (int64_t)hard_ms * 1000;
+    }
 
     /* Configure HTTP client with SSE event handler */
     esp_http_client_config_t config = {
@@ -1622,6 +1648,22 @@ void llm_set_local_model(const char *model)
 }
 
 const char *llm_get_local_model(void) { return s_local_model; }
+
+void llm_set_local_text_model(const char *model)
+{
+    if (model && model[0]) {
+        safe_copy(s_local_text_model, sizeof(s_local_text_model), model);
+        ESP_LOGI(TAG, "Local text model set to: %s", s_local_text_model);
+    } else {
+        s_local_text_model[0] = '\0';
+    }
+}
+
+/* Returns the text-only local model, falling back to s_local_model if not set. */
+const char *llm_get_local_text_model(void)
+{
+    return (s_local_text_model[0]) ? s_local_text_model : s_local_model;
+}
 
 bool llm_local_health_check(void)
 {
