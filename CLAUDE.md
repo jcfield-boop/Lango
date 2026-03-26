@@ -72,7 +72,7 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 **Local pipeline** (fully on-device Mac at `192.168.0.51`):
 - STT: mlx-audio Whisper at `<base_url>/v1/audio/transcriptions` — raw WAV sent (Opus encoding bypassed)
 - TTS: mlx-audio Kokoro at `<base_url>/v1/audio/speech` — model + voice configurable via SERVICES.md
-- LLM: Ollama at `<local_url>/v1/chat/completions` — text/Telegram channel only; voice → cloud
+- LLM: Ollama at `<local_url>/v1/chat/completions` — text/Telegram channel only; voice → cloud. Uses `qwen2.5:14b` for reliable tool calling
 - Cloud fallback: Groq (STT/TTS), OpenRouter (LLM) when local services unavailable
 
 **Channel-aware LLM routing** (in `agent_loop.c`):
@@ -82,7 +82,7 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 
 **Boot warmup tasks** (prevent cold-start latency):
 - `stt_warmup_task`: 8s after boot, POSTs silent 20ms WAV to mlx-audio → pre-loads Whisper
-- `llm_warmup_task`: 12s after boot, POSTs minimal chat to Ollama → pre-loads llama3.2:3b; primes 15s health cache
+- `llm_warmup_task`: 25s after boot, POSTs minimal chat to Ollama → pre-loads qwen2.5:14b; primes 15s health cache (25s accounts for larger model cold-load time)
 
 ### I2S Bus Architecture
 

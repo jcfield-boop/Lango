@@ -1692,8 +1692,10 @@ const char *llm_get_voice_model(void)    { return s_voice_model; }
 
 static void llm_warmup_task(void *arg)
 {
-    /* Wait for WiFi + services to settle; longer than STT warmup (8s) */
-    vTaskDelay(pdMS_TO_TICKS(12000));
+    /* Wait for WiFi + services to settle, and for Ollama to load the model.
+     * qwen2.5:14b (~9GB) takes longer to load than llama3.2:3b (~2GB),
+     * so use 25s to avoid a premature "warmup done" before the model is ready. */
+    vTaskDelay(pdMS_TO_TICKS(25000));
 
     if (!s_local_url[0] || !s_local_model[0]) {
         vTaskDelete(NULL);
