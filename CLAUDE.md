@@ -82,7 +82,8 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 
 **Boot warmup tasks** (prevent cold-start latency):
 - `stt_warmup_task`: 8s after boot, POSTs silent 20ms WAV to mlx-audio → pre-loads Whisper
-- `llm_warmup_task`: 25s after boot, POSTs minimal chat to Ollama → pre-loads qwen2.5:14b; primes 15s health cache (25s accounts for larger model cold-load time)
+- `tts_warmup_task`: 18s after boot, POSTs one-word request to mlx-audio Kokoro → pre-loads TTS model (90s timeout for cold load); eliminates ~60s first-request delay
+- `llm_warmup_task`: 25s after boot, POSTs minimal chat to Ollama → pre-loads local model; primes 15s health cache
 
 ### I2S Bus Architecture
 
@@ -139,6 +140,18 @@ local_voice: af_heart                         # configurable TTS voice (af_heart
 ```
 
 NVS values take priority over SERVICES.md on initial load; `services_config_reload()` overrides NVS unconditionally (called when file saved via web UI).
+
+## OTA Notes
+
+- Default device IP: `192.168.0.44` (fixed via DHCP reservation)
+- OTA requires ≥22KB free SRAM (`OTA_MIN_FREE_HEAP`). If rejected with `low_heap`, reboot first: `curl -X POST http://192.168.0.44/api/reboot`
+- Download speed ~10-20 KB/s over WiFi; 2MB firmware takes ~150-200s
+- Script auto-retries once on error; detects successful reboot even if status broadcast is missed
+- LittleFS changes (SERVICES.md etc.) are NOT flashed by OTA script — use web UI Save or serial flash at `0xa30000`
+
+## Weather Tool
+
+`main/tools/tool_weather.c` — fetches from `wttr.in/?format=j1`. Response buffer is 20KB (j1 format returns 12-16KB JSON). Previously 8KB caused truncation and parse failures.
 
 ## PSRAM Allocation Rule
 
@@ -234,7 +247,7 @@ L/R  → GND  (left channel)
 | `main/gateway/ws_server.c` | HTTP+WebSocket server, all REST endpoints |
 | `main/audio/audio_pipeline.c` | PSRAM ring buffer + STT task coordination; Opus bypass for local STT |
 | `main/audio/stt_client.c` | Whisper multipart POST (Groq cloud + mlx-audio local); boot warmup task |
-| `main/audio/tts_client.c` | PlayAI/Kokoro POST + PSRAM cache; local mlx-audio; configurable model/voice |
+| `main/audio/tts_client.c` | PlayAI/Kokoro POST + PSRAM cache; local mlx-audio; configurable model/voice; boot warmup task |
 | `main/audio/wake_word.c` | WakeNet9 wake word detection; VAD silence 700ms |
 | `main/audio/i2s_audio.c` | I2S driver: simplex TX (I2S0 master) + RX (I2S1 slave) + WAV playback |
 | `main/llm/llm_proxy.c` | LLM request routing; Ollama local health check (15s cache); boot warmup task |
