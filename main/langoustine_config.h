@@ -156,7 +156,7 @@
 #define LANG_I2S_AUDIO_ENABLED  1
 
 /* Message Bus */
-#define LANG_BUS_QUEUE_LEN           48
+#define LANG_BUS_QUEUE_LEN           16
 #define LANG_OUTBOUND_STACK          (8 * 1024)
 #define LANG_OUTBOUND_PRIO           5
 #define LANG_OUTBOUND_CORE           0

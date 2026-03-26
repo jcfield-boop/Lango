@@ -299,7 +299,7 @@ esp_err_t llm_proxy_init(void)
      * Runs in a background task (12s delay) to avoid blocking app_main startup. */
     if (s_local_url[0] && s_local_model[0]) {
         ESP_LOGI(TAG, "Local LLM configured (%s) — scheduling Ollama warmup", s_local_model);
-        xTaskCreate(llm_warmup_task, "llm_warmup", 6 * 1024, NULL, 2, NULL);
+        xTaskCreate(llm_warmup_task, "llm_warmup", 4 * 1024, NULL, 2, NULL);
     }
 
     return ESP_OK;

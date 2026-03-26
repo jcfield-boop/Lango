@@ -23,7 +23,7 @@ static const char *TAG = "ota";
  * find a large contiguous SRAM block at runtime when the heap is fragmented.
  * OTA_MIN_FREE_HEAP only needs to cover small SRAM allocations during the download
  * (http_client config, OTA handle, headers) — the 14KB task stack is not from heap. */
-#define OTA_TASK_STACK       (14 * 1024)
+#define OTA_TASK_STACK       (8 * 1024)
 #define OTA_TASK_STACK_WORDS (OTA_TASK_STACK / sizeof(StackType_t))
 #define OTA_MIN_FREE_HEAP    (8 * 1024)   /* stack in BSS; just guard small SRAM allocs */
 

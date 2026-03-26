@@ -1752,7 +1752,7 @@ esp_err_t ws_server_start(void)
     cfg.server_port                = LANG_WS_PORT;
     cfg.ctrl_port                  = LANG_WS_PORT + 1;
     cfg.max_open_sockets           = 8;
-    cfg.stack_size                 = 10240;
+    cfg.stack_size                 = 8192;
     cfg.max_uri_handlers           = 27;  /* 26 handlers registered + 1 spare */
     cfg.send_wait_timeout          = 30;
     cfg.recv_wait_timeout          = 120;  /* extended: WS ping keeps connection alive */

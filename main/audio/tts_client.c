@@ -266,7 +266,7 @@ esp_err_t tts_client_init(void)
 
     /* Pre-load Kokoro at boot (18s delay) to avoid 60s cold-start on first request.
      * Task checks s_local_url after delay — set by services_config_load() at boot. */
-    xTaskCreate(tts_warmup_task, "tts_warmup", 6 * 1024, NULL, 2, NULL);
+    xTaskCreate(tts_warmup_task, "tts_warmup", 4 * 1024, NULL, 2, NULL);
 
     /* Create persistent session for TLS reuse */
     if (!s_session.valid) {

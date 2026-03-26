@@ -387,7 +387,7 @@ esp_err_t stt_client_init(void)
      * Runs in a background task (8s delay) to avoid blocking app_main startup. */
     if (s_local_url[0]) {
         ESP_LOGI(TAG, "Local STT configured (%s) — scheduling Whisper warmup", s_local_url);
-        xTaskCreate(stt_warmup_task, "stt_warmup", 8 * 1024, NULL, 2, NULL);
+        xTaskCreate(stt_warmup_task, "stt_warmup", 4 * 1024, NULL, 2, NULL);
     }
 
     return ESP_OK;
