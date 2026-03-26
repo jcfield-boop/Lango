@@ -316,7 +316,7 @@ static esp_err_t tts_generate_local(const char *text, bin_buf_t *bb)
         .url            = url,
         .event_handler  = http_event_cb,
         .user_data      = bb,
-        .timeout_ms     = 15000,  /* local LAN — generous for long text */
+        .timeout_ms     = 60000,  /* local LAN — 60s for long text (Kokoro ~2-3s/sentence warm) */
         .buffer_size    = 8192,
         .buffer_size_tx = 4096,
     };

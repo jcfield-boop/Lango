@@ -1062,8 +1062,9 @@ static esp_err_t sysinfo_handler(httpd_req_t *req)
 {
     if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
 
-    size_t heap_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    size_t heap_min  = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+    size_t heap_free  = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t heap_min   = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+    size_t heap_block = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
     size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     size_t lfs_total = 0, lfs_used = 0;
     esp_littlefs_info("littlefs", &lfs_total, &lfs_used);
@@ -1094,9 +1095,9 @@ static esp_err_t sysinfo_handler(httpd_req_t *req)
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_app_desc_t *app = esp_app_get_description();
 
-    char buf[768];
+    char buf[800];
     snprintf(buf, sizeof(buf),
-             "{\"heap_free\":%u,\"heap_min\":%u,\"psram_free\":%u,\"psram_min\":%u"
+             "{\"heap_free\":%u,\"heap_min\":%u,\"heap_block\":%u,\"psram_free\":%u,\"psram_min\":%u"
              ",\"lfs_total\":%u,\"lfs_used\":%u"
              ",\"tokens_in\":%u,\"tokens_out\":%u,\"cost_millicents\":%u"
              ",\"search_calls\":%u,\"search_cost_millicents\":%u"
@@ -1104,7 +1105,7 @@ static esp_err_t sysinfo_handler(httpd_req_t *req)
              ",\"wifi_rssi\":%d,\"task_count\":%u"
              ",\"ota_partition\":\"%s\",\"firmware_version\":\"%s\""
              ",\"uac_mic_connected\":%s}",
-             (unsigned)heap_free, (unsigned)heap_min,
+             (unsigned)heap_free, (unsigned)heap_min, (unsigned)heap_block,
              (unsigned)psram_free, (unsigned)psram_min,
              (unsigned)lfs_total, (unsigned)lfs_used,
              (unsigned)tok_in, (unsigned)tok_out, (unsigned)llm_cost_mc,

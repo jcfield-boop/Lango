@@ -19,12 +19,17 @@
 
 static const char *TAG = "ota";
 
-/* Minimum free SRAM required BEFORE creating the OTA task (checked in ota_start_async).
- * The OTA task stack itself is 14KB (OTA_TASK_STACK), so the effective headroom after
- * task creation is (OTA_MIN_FREE_HEAP - OTA_TASK_STACK) = 8KB for flash write buffers,
- * OTA handle, and other small SRAM allocations. TLS and HTTP buffers go to PSRAM. */
+/* OTA task uses a statically pre-allocated stack (BSS) so that xTaskCreate never has to
+ * find a large contiguous SRAM block at runtime when the heap is fragmented.
+ * OTA_MIN_FREE_HEAP only needs to cover small SRAM allocations during the download
+ * (http_client config, OTA handle, headers) — the 14KB task stack is not from heap. */
 #define OTA_TASK_STACK       (14 * 1024)
-#define OTA_MIN_FREE_HEAP    (22 * 1024)  /* 14KB stack + 8KB headroom */
+#define OTA_TASK_STACK_WORDS (OTA_TASK_STACK / sizeof(StackType_t))
+#define OTA_MIN_FREE_HEAP    (8 * 1024)   /* stack in BSS; just guard small SRAM allocs */
+
+/* Pre-allocated task stack and TCB in SRAM BSS — avoids fragmentation-triggered OOM. */
+static StaticTask_t  s_ota_tcb;
+static StackType_t   s_ota_stack[OTA_TASK_STACK_WORDS];
 
 /* HTTP receive buffer for OTA download. */
 #define OTA_HTTP_BUF_SIZE    (16 * 1024)
@@ -293,11 +298,14 @@ esp_err_t ota_start_async(const char *url)
     /* Clear any previous error state before launching */
     status_set(OTA_STATE_PENDING, 0, NULL, NULL);
     s_ota_running = true;
-    BaseType_t ret = xTaskCreate(ota_task, "ota_update", OTA_TASK_STACK, NULL, 5, NULL);
-    if (ret != pdPASS) {
+    /* Use xTaskCreateStatic so the pre-allocated BSS stack is used — no contiguous
+     * SRAM block required at runtime regardless of heap fragmentation state. */
+    TaskHandle_t h = xTaskCreateStatic(ota_task, "ota_update", OTA_TASK_STACK_WORDS,
+                                        NULL, 5, s_ota_stack, &s_ota_tcb);
+    if (h == NULL) {
         s_ota_running = false;
         status_set(OTA_STATE_IDLE, 0, NULL, NULL);
-        ws_server_broadcast_monitor("ota", "OTA task create failed (OOM)");
+        ws_server_broadcast_monitor("ota", "OTA task create failed");
         return ESP_ERR_NO_MEM;
     }
 
