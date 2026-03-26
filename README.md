@@ -512,6 +512,16 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 
 ## Changelog
 
+### 2026-03-26 — Smart LLM routing, SRAM guard tuning, auto-email, stream timeout
+
+- **Smart LLM routing** (`main/agent/agent_loop.c`) — Channel-aware and complexity-aware model selection. `system` channel (heartbeat, cron) always routes to cloud to avoid Ollama hangs on multi-tool chains. Text channel now detects complex requests (briefing, email, search, research, forecast, headlines) and routes those to cloud too. Voice channel (`ptt`) continues to use configurable `voice_provider`/`voice_model`.
+- **Vision-aware local model selection** — When a turn calls `capture_image`, subsequent LLM routing uses `llm_get_local_model()` (default `qwen3-vl:8b`). Plain-text turns use the new `local_text_model` (default `gemma3:12b`). Configure both in SERVICES.md `## Local Model` section: `model:` (vision) and `local_text_model:` (text-only).
+- **LLM stream hard timeout** (`main/llm/llm_proxy.c`) — Per-stream deadline enforced in the SSE event handler: 3 minutes for local (Ollama), 90 seconds for cloud. Prevents indefinite hangs when a slow model streams tokens arbitrarily slowly. Previous behaviour: a 7-search briefing on qwen3-vl:8b could block for 800+ seconds.
+- **Auto-email long responses** — WebSocket channel responses longer than 200 characters are automatically emailed to the configured `to_address` (via `tool_smtp`). Subject line is derived from the first 60 characters of the response. Zero additional LLM turns consumed.
+- **SRAM guard threshold lowered** — Hard-restart threshold reduced from 22 KB to 14 KB; warning-only threshold reduced from 28 KB to 24 KB. Empirically, turns complete successfully at a heap_min of 13.9 KB. The previous 22 KB threshold was falsely triggering restarts (~18.6 KB free) after heavy briefing turns due to normal mbedTLS session-ticket cache accumulation — not an actual leak.
+- **Per-channel LLM timeout** — System channel turns allow 300 s (multi-tool chains); interactive turns allow 180 s.
+- **`local_text_model` config key** — New SERVICES.md key parsed in both boot and hot-reload paths. Allows separate Ollama models for vision turns (`model:`) and text-only turns (`local_text_model:`).
+
 ### 2026-03-25 — Drop TLS, plain HTTP/WS on port 80
 
 - **`main/gateway/ws_server.c`** — replaced `esp_https_server` + `httpd_ssl_start()` with plain `httpd_start()` on port 80. WebSocket clients connect via `ws:` instead of `wss:`. Removes ~20–30 KB SRAM overhead per TLS session; idle SRAM rises from ~27 KB to ~47 KB. Browser UI automatically switches to `ws:` (protocol-relative JS detection). `max_uri_handlers` raised from 25 → 27 (26 routes registered).

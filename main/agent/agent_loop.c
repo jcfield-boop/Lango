@@ -427,17 +427,22 @@ static void agent_loop_task(void *arg)
         memory_tool_reset_turn();
         web_search_reset_turn();
 
-        /* SRAM guard: if heap is critically low, restart cleanly rather than
-         * letting the LLM call hit malloc(NULL) and cause a hard panic.
-         * Threshold: mbedTLS (~15KB) + HTTP bufs (~8KB) + safety margin = 26KB.
+        /* SRAM guard: restart only if genuinely unable to complete a turn.
+         * Empirical floor: heap_min reached 13.9 KB during a 7-search briefing
+         * and completed successfully.  mbedTLS session-ticket cache (held after
+         * multiple HTTPS connections) consumes ~8-10 KB persistently — this is
+         * normal and does NOT require a restart.
+         *
+         * Thresholds:
+         *   < 14 KB  — hard restart (below observed safe floor)
+         *   < 24 KB  — warning only, proceed
+         *
          * A hard restart shows as ESP_RST_SW (intentional), not ESP_RST_PANIC. */
         {
             uint32_t sram_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
             ESP_LOGI(TAG, "Turn start: SRAM free=%lu B", (unsigned long)sram_free);
-            if (sram_free < 22 * 1024) {
-                /* Try lighter recovery first: trim session to free cJSON memory.
-                 * cJSON trees are in PSRAM, but traversal metadata and the parse
-                 * path use SRAM. Trimming to 10 msgs often frees enough. */
+            if (sram_free < 14 * 1024) {
+                /* Try lighter recovery first: trim session to free cJSON memory. */
                 ESP_LOGW(TAG, "SRAM critically low (%lu B) — trimming session %s",
                          (unsigned long)sram_free, msg.chat_id);
                 session_trim(msg.chat_id, 10);
@@ -447,7 +452,7 @@ static void agent_loop_task(void *arg)
                 ESP_LOGI(TAG, "SRAM after session trim: %lu B (was %lu B)",
                          (unsigned long)sram_after, (unsigned long)sram_free);
 
-                if (sram_after < 22 * 1024) {
+                if (sram_after < 14 * 1024) {
                     char wmsg[80];
                     snprintf(wmsg, sizeof(wmsg),
                              "SRAM still critically low (%lu B) after trim — restarting",
@@ -458,9 +463,9 @@ static void agent_loop_task(void *arg)
                     esp_restart();
                 }
                 ws_server_broadcast_monitor("system", "SRAM recovered via session trim");
-            } else if (sram_free < 28 * 1024) {
+            } else if (sram_free < 24 * 1024) {
                 char wmsg[72];
-                snprintf(wmsg, sizeof(wmsg), "SRAM low at turn start: %lu B — risk of OOM",
+                snprintf(wmsg, sizeof(wmsg), "SRAM low at turn start: %lu B — proceeding",
                          (unsigned long)sram_free);
                 ESP_LOGW(TAG, "%s", wmsg);
                 ws_server_broadcast_monitor("system", wmsg);

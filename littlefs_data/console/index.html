@@ -178,6 +178,13 @@ input:focus{border-color:#555}
           <div class="fld"><label>TTS Key (Groq)</label><input id="cfg-ttskey" type="password" placeholder="gsk_…" maxlength="320" autocomplete="off"></div>
         </div>
         <div class="fld"><label>TTS Voice</label><input id="cfg-ttsvoice" type="text" placeholder="Fritz-PlayAI" maxlength="64"></div>
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 0">
+          <span style="font-size:0.78rem;color:#aaa;white-space:nowrap">Volume</span>
+          <input id="cfg-volume" type="range" min="0" max="255" value="220"
+            style="flex:1;accent-color:#7ee38e;cursor:pointer"
+            oninput="document.getElementById('cfg-vol-pct').textContent=Math.round(this.value/255*100)+'%';applyBrowserVolume(this.value)">
+          <span id="cfg-vol-pct" style="font-size:0.78rem;color:#aaa;min-width:3em;text-align:right">86%</span>
+        </div>
         <div style="display:flex;align-items:center;gap:8px;padding:4px 0">
           <label class="toggle"><input id="cfg-verbose" type="checkbox"><span class="toggle-sl"></span></label>
           <span style="font-size:0.78rem;color:#888">Verbose Logs (firmware)</span>
@@ -362,6 +369,7 @@ var curAudio = null;
 function playTTS(ttsId) {
   if (curAudio) { try { curAudio.pause(); } catch(e) {} curAudio = null; }
   var a = new Audio(location.protocol + '//' + location.host + '/tts/' + ttsId);
+  a.volume = browserVolume;
   curAudio = a;
   a.onplay  = function() { setStatus('speaking'); };
   a.onended = function() { setStatus('idle'); if (curAudio === a) curAudio = null; };
@@ -648,6 +656,13 @@ function delCron(id, name) {
     .catch(function() {});
 }
 
+/* ── Volume ── */
+var browserVolume = 1.0;
+function applyBrowserVolume(raw) {
+  browserVolume = Math.max(0, Math.min(1, raw / 255));
+  if (curAudio) curAudio.volume = browserVolume;
+}
+
 /* ── Settings ── */
 function loadConfig() {
   document.getElementById('cfg-status').textContent = 'Loading…';
@@ -661,6 +676,10 @@ function loadConfig() {
     document.getElementById('cfg-ttsvoice').value = d.tts_voice || '';
     document.getElementById('cfg-verbose').checked = !!d.verbose_logs;
     document.getElementById('cfg-tts-autoplay').checked = ttsAutoPlay;
+    var vol = (d.volume !== undefined) ? d.volume : 220;
+    document.getElementById('cfg-volume').value = vol;
+    document.getElementById('cfg-vol-pct').textContent = Math.round(vol/255*100) + '%';
+    applyBrowserVolume(vol);
     document.getElementById('cfg-status').textContent = '';
   }).catch(function() { document.getElementById('cfg-status').textContent = 'Failed'; });
 }
@@ -676,7 +695,8 @@ function saveConfig() {
       stt_key: document.getElementById('cfg-sttkey').value.trim(),
       tts_key: document.getElementById('cfg-ttskey').value.trim(),
       tts_voice: document.getElementById('cfg-ttsvoice').value.trim(),
-      verbose_logs: document.getElementById('cfg-verbose').checked
+      verbose_logs: document.getElementById('cfg-verbose').checked,
+      volume: parseInt(document.getElementById('cfg-volume').value, 10)
     }),
     headers: { 'Content-Type': 'application/json' }
   }).then(function(r) { return r.json(); })
