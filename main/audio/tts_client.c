@@ -15,6 +15,7 @@
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 static const char *TAG = "tts";
 
@@ -53,6 +54,7 @@ static char s_local_voice[TTS_LOCAL_VOICE_MAX] = "af_heart";
 static bool s_local_offline = false;
 static int64_t s_local_fail_us = 0;
 #define LOCAL_BACKOFF_US   (60 * 1000000LL)  /* skip local for 60s after failure */
+#define TTS_WU_TIMEOUT_MS  90000             /* Kokoro cold-load can take up to ~60s */
 
 /* Persistent HTTP session — created once in tts_client_init() */
 static http_session_t s_session = {0};
@@ -150,6 +152,79 @@ static void gen_id(char *id_out)
 
 /* ── Public API ────────────────────────────────────────────────── */
 
+/* ── Boot warmup: pre-loads Kokoro model before first real TTS request ── */
+
+static void tts_warmup_task(void *arg)
+{
+    /* Stagger after STT warmup (8s) and before LLM warmup (25s) */
+    vTaskDelay(pdMS_TO_TICKS(18000));
+
+    if (!s_local_url[0]) {
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "TTS warmup: pre-loading Kokoro at %s", s_local_url);
+    ws_server_broadcast_monitor_verbose("tts", "Pre-loading local Kokoro model...");
+
+    char url[TTS_LOCAL_URL_MAX + 32];
+    snprintf(url, sizeof(url), "%s/v1/audio/speech", s_local_url);
+
+    /* One-word request — triggers model load without generating much audio */
+    cJSON *req = cJSON_CreateObject();
+    if (!req) { vTaskDelete(NULL); return; }
+    cJSON_AddStringToObject(req, "model",           s_local_model[0] ? s_local_model : "mlx-community/Kokoro-82M-bf16");
+    cJSON_AddStringToObject(req, "input",           "hi");
+    cJSON_AddStringToObject(req, "voice",           s_local_voice[0] ? s_local_voice : "af_heart");
+    cJSON_AddStringToObject(req, "response_format", "wav");
+
+    char *body = cJSON_PrintUnformatted(req);
+    cJSON_Delete(req);
+    if (!body) { vTaskDelete(NULL); return; }
+
+    /* bin_buf_t with no pre-allocation — bin_append will ps_malloc on first chunk */
+    bin_buf_t bb = {0};
+
+    int64_t t0 = esp_timer_get_time();
+
+    esp_http_client_config_t cfg = {
+        .url            = url,
+        .event_handler  = http_event_cb,
+        .user_data      = &bb,
+        .timeout_ms     = TTS_WU_TIMEOUT_MS,
+        .buffer_size    = 8192,
+        .buffer_size_tx = 4096,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        free(body);
+        vTaskDelete(NULL);
+        return;
+    }
+    esp_http_client_set_method(client, HTTP_METHOD_POST);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, body, (int)strlen(body));
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status    = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    free(body);
+    if (bb.data) free(bb.data);  /* ps_malloc'd PSRAM — standard free() works */
+
+    int64_t elapsed_ms = (esp_timer_get_time() - t0) / 1000;
+
+    if (err == ESP_OK && status == 200) {
+        s_local_offline = false;
+        ESP_LOGI(TAG, "TTS warmup done in %lldms — Kokoro ready", elapsed_ms);
+        ws_server_broadcast_monitor("tts", "Local TTS ready (warmed up)");
+    } else {
+        ESP_LOGW(TAG, "TTS warmup failed after %lldms (err=%s, HTTP %d) — will retry on first use",
+                 elapsed_ms, esp_err_to_name(err), status);
+    }
+
+    vTaskDelete(NULL);
+}
+
 esp_err_t tts_client_init(void)
 {
     s_cache_lock = xSemaphoreCreateMutex();
@@ -188,6 +263,10 @@ esp_err_t tts_client_init(void)
     } else {
         ESP_LOGW(TAG, "No TTS API key. Use CLI: tts_key <KEY>");
     }
+
+    /* Pre-load Kokoro at boot (18s delay) to avoid 60s cold-start on first request.
+     * Task checks s_local_url after delay — set by services_config_load() at boot. */
+    xTaskCreate(tts_warmup_task, "tts_warmup", 6 * 1024, NULL, 2, NULL);
 
     /* Create persistent session for TLS reuse */
     if (!s_session.valid) {

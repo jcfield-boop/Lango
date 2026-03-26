@@ -16,7 +16,7 @@ static const char *TAG = "tool_weather";
 
 #define WEATHER_NVS_NS  "weather_config"
 #define WEATHER_NVS_KEY "location"
-#define WEATHER_BUF_SIZE (8 * 1024)
+#define WEATHER_BUF_SIZE (20 * 1024)  /* wttr.in j1 responses are typically 12-16KB */
 
 typedef struct {
     char *data;
