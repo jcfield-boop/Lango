@@ -83,6 +83,18 @@ bool llm_local_health_check(void);
 /** Returns true if smart routing is possible (cloud global + local configured). */
 bool llm_smart_routing_available(void);
 
+/** Set provider/model used for voice channel (chat_id=="ptt") requests.
+ *  When set, voice bypasses local Ollama and uses a fast cloud model instead. */
+void llm_set_voice_provider(const char *provider);
+void llm_set_voice_model(const char *model);
+
+/** Returns true if voice routing is configured (voice_provider + voice_model set). */
+bool llm_voice_routing_available(void);
+
+/** Get the configured voice provider/model strings. */
+const char *llm_get_voice_provider(void);
+const char *llm_get_voice_model(void);
+
 /* ── Tool Use Support ──────────────────────────────────────────── */
 
 typedef struct {

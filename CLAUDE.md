@@ -63,11 +63,26 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 1. Browser sends `audio_start` JSON → `audio_ring_open(chat_id, mime)`
 2. Browser sends binary WebSocket frames → `audio_ring_append()` into 256KB PSRAM ring buffer
 3. Browser sends `audio_end` → `audio_ring_commit()` signals the STT task on Core 1
-4. STT task POSTs to Groq Whisper API → pushes transcript as inbound message
-5. Agent processes transcript → generates response → calls `tts_generate()`
-6. TTS client POSTs to Groq PlayAI API → WAV cached in PSRAM (up to 4 entries, 512KB each, 5-min TTL)
+4. STT task POSTs to local mlx-audio Whisper (if `stt_local_url` set) or Groq Whisper → transcript
+5. Agent processes transcript → LLM (voice channel → cloud, text channel → local Ollama) → response
+6. TTS client tries local mlx-audio Kokoro first, falls back to Groq PlayAI → WAV cached in PSRAM
 7. If `LANG_I2S_AUDIO_ENABLED`: WAV is played immediately via MAX98357A on GPIO 3/4/6
 8. `{"type":"message","tts_id":"<8hex>"}` sent to browser → browser fetches `GET /tts/<id>`
+
+**Local pipeline** (fully on-device Mac at `192.168.0.51`):
+- STT: mlx-audio Whisper at `<base_url>/v1/audio/transcriptions` — raw WAV sent (Opus encoding bypassed)
+- TTS: mlx-audio Kokoro at `<base_url>/v1/audio/speech` — model + voice configurable via SERVICES.md
+- LLM: Ollama at `<local_url>/v1/chat/completions` — text/Telegram channel only; voice → cloud
+- Cloud fallback: Groq (STT/TTS), OpenRouter (LLM) when local services unavailable
+
+**Channel-aware LLM routing** (in `agent_loop.c`):
+- `chat_id == "ptt"` → voice channel → routes to `voice_provider`/`voice_model` (default: `openrouter`/`openai/gpt-4o-mini`)
+- All other channels → text channel → routes to local Ollama if available, else cloud
+- Voice responses also get VOICE MODE injection: natural spoken English, no markdown, ≤3 sentences
+
+**Boot warmup tasks** (prevent cold-start latency):
+- `stt_warmup_task`: 8s after boot, POSTs silent 20ms WAV to mlx-audio → pre-loads Whisper
+- `llm_warmup_task`: 12s after boot, POSTs minimal chat to Ollama → pre-loads llama3.2:3b; primes 15s health cache
 
 ### I2S Bus Architecture
 
@@ -99,6 +114,31 @@ All constants live in `main/langoustine_config.h` under the `LANG_` prefix. Verb
 
 ### NVS Namespaces
 `wifi_config`, `llm_config`, `tg_config`, `stt_config`, `tts_config`, `proxy_config`, `search_config`
+
+### SERVICES.md Hot-Reload Keys
+
+`littlefs_data/config/SERVICES.md` is parsed at boot and on save via web UI (no restart needed). Key sections:
+
+```
+## LLM (Anthropic / OpenAI / OpenRouter)
+api_key: <key>
+provider: openrouter
+model: openrouter/auto
+
+## Local Model (Ollama)
+base_url: http://192.168.0.51:11434/v1
+api_key: ollama
+model: llama3.2:3b
+voice_provider: openrouter        # LLM provider for voice channel (PTT/wake word)
+voice_model: openai/gpt-4o-mini   # fast cloud model for low-latency voice responses
+
+## Local Audio (mlx-audio)
+base_url: http://192.168.0.51:8000
+local_model: mlx-community/Kokoro-82M-bf16   # configurable TTS model
+local_voice: af_heart                         # configurable TTS voice (af_heart, af_sky, am_adam…)
+```
+
+NVS values take priority over SERVICES.md on initial load; `services_config_reload()` overrides NVS unconditionally (called when file saved via web UI).
 
 ## PSRAM Allocation Rule
 
@@ -189,17 +229,22 @@ L/R  → GND  (left channel)
 | `main/langoustine.c` | App entry point: init sequence, outbound dispatch task |
 | `main/langoustine_config.h` | All `LANG_*` constants and `MIMI_*` compat aliases |
 | `main/langoustine_secrets.h.example` | Template for build-time secrets |
-| `main/agent/agent_loop.c` | Core AI ReAct loop (Core 1) |
+| `main/agent/agent_loop.c` | Core AI ReAct loop (Core 1); channel-aware LLM routing; VOICE MODE injection |
 | `main/agent/context_builder.c` | Assembles system prompt from SOUL/USER/MEMORY/skills |
 | `main/gateway/ws_server.c` | HTTP+WebSocket server, all REST endpoints |
-| `main/audio/audio_pipeline.c` | PSRAM ring buffer + STT task coordination |
-| `main/audio/stt_client.c` | Groq Whisper multipart POST |
-| `main/audio/tts_client.c` | Groq PlayAI POST + PSRAM cache; local I2S playback |
+| `main/audio/audio_pipeline.c` | PSRAM ring buffer + STT task coordination; Opus bypass for local STT |
+| `main/audio/stt_client.c` | Whisper multipart POST (Groq cloud + mlx-audio local); boot warmup task |
+| `main/audio/tts_client.c` | PlayAI/Kokoro POST + PSRAM cache; local mlx-audio; configurable model/voice |
+| `main/audio/wake_word.c` | WakeNet9 wake word detection; VAD silence 700ms |
 | `main/audio/i2s_audio.c` | I2S driver: simplex TX (I2S0 master) + RX (I2S1 slave) + WAV playback |
+| `main/llm/llm_proxy.c` | LLM request routing; Ollama local health check (15s cache); boot warmup task |
 | `main/telegram/telegram_bot.c` | Long-poll Telegram bot |
 | `main/bus/message_bus.c` | FreeRTOS inbound/outbound queues |
+| `main/config/services_config.c` | SERVICES.md parser (load + hot-reload) |
 | `main/memory/psram_alloc.h` | PSRAM/SRAM allocation wrappers |
 | `main/cli/serial_cli.c` | Full UART REPL with all config commands |
 | `sdkconfig.defaults.esp32s3` | ESP32-S3 SDK defaults (flash, PSRAM, partitions) |
 | `partitions_s3_32mb.csv` | Flash partition map |
 | `littlefs_data/` | Static filesystem content (baked into littlefs.bin) |
+| `littlefs_data/config/SERVICES.md` | Hot-reloadable service config (keys, URLs, voice settings) |
+| `littlefs_data/HEARTBEAT.md` | Scheduled agent task checklist (30m health, daily briefing, surf, ARM stock) |

@@ -13,6 +13,11 @@
 #include "esp_timer.h"
 #include "nvs.h"
 #include "cJSON.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+/* Forward declaration — warmup task defined near end of file */
+static void llm_warmup_task(void *arg);
 
 static const char *TAG = "llm";
 
@@ -30,6 +35,12 @@ static char s_provider[16] = MIMI_LLM_PROVIDER_DEFAULT;
 static char s_local_url[LLM_LOCAL_URL_MAX] = {0};
 static char s_local_model[LLM_MODEL_MAX_LEN] = {0};
 
+/* Voice-channel routing: when chat_id=="ptt", override to a fast cloud model
+ * rather than local Ollama (which is too slow for real-time voice interaction).
+ * Configured via SERVICES.md: voice_provider / voice_model under [Local Model]. */
+static char s_voice_provider[16] = {0};
+static char s_voice_model[LLM_MODEL_MAX_LEN] = {0};
+
 /* Per-request override (single agent task, no concurrency) */
 static char s_override_provider[16] = {0};
 static char s_override_model[LLM_MODEL_MAX_LEN] = {0};
@@ -38,7 +49,7 @@ static bool s_override_active = false;
 /* Cached local health check */
 static bool s_local_online = false;
 static int64_t s_local_check_us = 0;
-#define LOCAL_HEALTH_CACHE_US  (60LL * 1000000LL)  /* 60 seconds */
+#define LOCAL_HEALTH_CACHE_US  (15LL * 1000000LL)  /* 15 seconds — short enough to catch model eviction */
 
 static uint32_t s_total_input_tokens    = 0;
 static uint32_t s_total_output_tokens   = 0;
@@ -283,6 +294,14 @@ esp_err_t llm_proxy_init(void)
     } else {
         ESP_LOGW(TAG, "No API key. Use CLI: set_api_key <KEY>");
     }
+
+    /* Pre-warm local Ollama model so the first request doesn't pay cold-load cost.
+     * Runs in a background task (12s delay) to avoid blocking app_main startup. */
+    if (s_local_url[0] && s_local_model[0]) {
+        ESP_LOGI(TAG, "Local LLM configured (%s) — scheduling Ollama warmup", s_local_model);
+        xTaskCreate(llm_warmup_task, "llm_warmup", 6 * 1024, NULL, 2, NULL);
+    }
+
     return ESP_OK;
 }
 
@@ -1354,6 +1373,10 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
         cJSON_AddNumberToObject(body, "max_tokens", MIMI_LLM_MAX_TOKENS);
     }
     cJSON_AddBoolToObject(body, "stream", true);
+    if (provider_is_ollama()) {
+        /* Keep model loaded for 10 min after last request (Ollama default is 5 min) */
+        cJSON_AddStringToObject(body, "keep_alive", "10m");
+    }
 
     if (provider_uses_openai_format()) {
         /* Request usage in the final streaming chunk */
@@ -1641,4 +1664,82 @@ bool llm_smart_routing_available(void)
     /* Smart routing is possible when: global provider is cloud-based AND local URL+model are configured */
     return (strcmp(s_provider, "openrouter") == 0 || strcmp(s_provider, "anthropic") == 0)
            && s_local_url[0] && s_local_model[0];
+}
+
+/* ── Voice routing ──────────────────────────────────────────────── */
+
+void llm_set_voice_provider(const char *p)
+{
+    if (p) safe_copy(s_voice_provider, sizeof(s_voice_provider), p);
+    else    s_voice_provider[0] = '\0';
+}
+
+void llm_set_voice_model(const char *m)
+{
+    if (m) safe_copy(s_voice_model, sizeof(s_voice_model), m);
+    else    s_voice_model[0] = '\0';
+}
+
+bool llm_voice_routing_available(void)
+{
+    return s_voice_provider[0] != '\0' && s_voice_model[0] != '\0';
+}
+
+const char *llm_get_voice_provider(void) { return s_voice_provider; }
+const char *llm_get_voice_model(void)    { return s_voice_model; }
+
+/* ── Ollama boot warmup ─────────────────────────────────────────── */
+
+static void llm_warmup_task(void *arg)
+{
+    /* Wait for WiFi + services to settle; longer than STT warmup (8s) */
+    vTaskDelay(pdMS_TO_TICKS(12000));
+
+    if (!s_local_url[0] || !s_local_model[0]) {
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Ollama warmup: loading %s...", s_local_model);
+
+    /* Build minimal chat completion — no tools, no system prompt, stream=false */
+    char url[LLM_LOCAL_URL_MAX + 32];
+    snprintf(url, sizeof(url), "%s/chat/completions", s_local_url);
+
+    char body[384];
+    snprintf(body, sizeof(body),
+             "{\"model\":\"%s\","
+             "\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],"
+             "\"max_tokens\":3,\"stream\":false}",
+             s_local_model);
+
+    /* No response buffer needed — we only care about HTTP status code */
+    esp_http_client_config_t cfg = {
+        .url        = url,
+        .timeout_ms = 60000,  /* model cold-load can take up to 60s */
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) { vTaskDelete(NULL); return; }
+
+    esp_http_client_set_method(client, HTTP_METHOD_POST);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, body, (int)strlen(body));
+
+    int64_t t0 = esp_timer_get_time();
+    esp_err_t ret = esp_http_client_perform(client);
+    int64_t elapsed_ms = (esp_timer_get_time() - t0) / 1000;
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    if (ret == ESP_OK && status == 200) {
+        ESP_LOGI(TAG, "Ollama warmup done in %lldms — model ready", elapsed_ms);
+        /* Prime health cache so first agent turn skips the health check */
+        s_local_online   = true;
+        s_local_check_us = esp_timer_get_time();
+    } else {
+        ESP_LOGW(TAG, "Ollama warmup failed in %lldms (err=%s HTTP %d) — will retry on first request",
+                 elapsed_ms, esp_err_to_name(ret), status);
+    }
+
+    vTaskDelete(NULL);
 }

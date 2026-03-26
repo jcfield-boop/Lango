@@ -12,6 +12,8 @@
 #include "esp_timer.h"
 #include "nvs.h"
 #include "cJSON.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "stt";
 
@@ -193,18 +195,31 @@ static esp_err_t stt_transcribe_local(const uint8_t *audio, size_t audio_len,
     esp_http_client_set_post_field(client, (const char *)body, (int)body_len);
 
     ESP_LOGI(TAG, "STT local: POST %s (%u audio bytes)", url, (unsigned)audio_len);
-    ws_server_broadcast_monitor_verbose("stt", "Trying local STT (mlx-audio)...");
+    {
+        char stt_info[80];
+        snprintf(stt_info, sizeof(stt_info), "STT → mlx-audio (%.1fs audio, %uKB)",
+                 (float)audio_len / (16000 * 2), (unsigned)(audio_len / 1024));
+        ws_server_broadcast_monitor_verbose("stt", stt_info);
+    }
 
+    int64_t t_start = esp_timer_get_time();
     esp_err_t ret = esp_http_client_perform(client);
+    int64_t elapsed_ms = (esp_timer_get_time() - t_start) / 1000;
     int status = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);
     free(body);
 
     if (ret != ESP_OK || status != 200) {
-        ESP_LOGW(TAG, "Local STT failed: %s (HTTP %d)", esp_err_to_name(ret), status);
+        ESP_LOGW(TAG, "Local STT failed in %lldms: %s (HTTP %d)",
+                 elapsed_ms, esp_err_to_name(ret), status);
         s_local_offline = true;
         s_local_fail_us = esp_timer_get_time();
-        ws_server_broadcast_monitor_verbose("stt", "Local STT offline, falling back to cloud");
+        {
+            char fail_msg[80];
+            snprintf(fail_msg, sizeof(fail_msg), "STT failed in %lldms (HTTP %d) — falling back to cloud",
+                     elapsed_ms, status);
+            ws_server_broadcast_monitor_verbose("stt", fail_msg);
+        }
         free(rb.data);
         return ESP_FAIL;
     }
@@ -235,8 +250,12 @@ static esp_err_t stt_transcribe_local(const uint8_t *audio, size_t audio_len,
     cJSON *text_item = cJSON_GetObjectItem(root, "text");
     if (cJSON_IsString(text_item) && text_item->valuestring[0]) {
         strncpy(out->text, text_item->valuestring, sizeof(out->text) - 1);
-        ESP_LOGI(TAG, "Local STT: \"%s\"", out->text);
-        ws_server_broadcast_monitor_verbose("stt", "Local STT success");
+        ESP_LOGI(TAG, "Local STT in %lldms: \"%s\"", elapsed_ms, out->text);
+        {
+            char ok_msg[80];
+            snprintf(ok_msg, sizeof(ok_msg), "STT done in %lldms", elapsed_ms);
+            ws_server_broadcast_monitor_verbose("stt", ok_msg);
+        }
         cJSON_Delete(root);
         return ESP_OK;
     }
@@ -244,6 +263,84 @@ static esp_err_t stt_transcribe_local(const uint8_t *audio, size_t audio_len,
     cJSON_Delete(root);
     strncpy(out->error, "Empty local STT result", sizeof(out->error) - 1);
     return ESP_FAIL;
+}
+
+/* ── mlx-audio warmup ──────────────────────────────────────────── */
+
+/* Minimal valid WAV: 44-byte header + 320 zero samples (20ms of silence at 16kHz).
+ * Sending this at boot pre-loads the Whisper model so the first real transcription
+ * is fast (~1.4s) rather than slow (~10–15s for cold-model load). */
+static void stt_warmup_task(void *arg)
+{
+    /* Wait for WiFi + local server to be ready */
+    vTaskDelay(pdMS_TO_TICKS(8000));
+
+    /* Double-check URL is still set after the delay */
+    if (!s_local_url[0]) {
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "mlx-audio warmup: pre-loading Whisper model...");
+    ws_server_broadcast_monitor_verbose("stt", "Pre-loading local Whisper model...");
+
+    /* Build a minimal silent WAV (44-byte header + 320 zero-PCM samples = 684 bytes).
+     * All sizes are compile-time constants; fixed array avoids VLA. */
+    #define WU_SAMPLE_RATE  16000u
+    #define WU_CHANNELS     1u
+    #define WU_BITS         16u
+    #define WU_NUM_SAMPLES  320u    /* 20ms of silence at 16kHz */
+    #define WU_DATA_BYTES   (WU_NUM_SAMPLES * WU_CHANNELS * (WU_BITS / 8u))
+    #define WU_BYTE_RATE    (WU_SAMPLE_RATE * WU_CHANNELS * (WU_BITS / 8u))
+    #define WU_BLOCK_ALIGN  (WU_CHANNELS * (WU_BITS / 8u))
+    #define WU_RIFF_SIZE    (36u + WU_DATA_BYTES)
+    #define WU_WAV_SIZE     (44u + WU_DATA_BYTES)
+
+    uint8_t wav[WU_WAV_SIZE];
+    memset(wav, 0, sizeof(wav));
+
+    uint32_t sample_rate  = WU_SAMPLE_RATE;
+    uint16_t channels     = WU_CHANNELS;
+    uint16_t bits         = WU_BITS;
+    uint32_t data_bytes   = WU_DATA_BYTES;
+    uint32_t byte_rate    = WU_BYTE_RATE;
+    uint16_t block_align  = WU_BLOCK_ALIGN;
+    uint32_t riff_size    = WU_RIFF_SIZE;
+
+    memcpy(wav +  0, "RIFF", 4);
+    memcpy(wav +  4, &riff_size,   4);
+    memcpy(wav +  8, "WAVE", 4);
+    memcpy(wav + 12, "fmt ", 4);
+    uint32_t fmt_sz = 16; uint16_t pcm_fmt = 1;
+    memcpy(wav + 16, &fmt_sz,      4);
+    memcpy(wav + 20, &pcm_fmt,     2);
+    memcpy(wav + 22, &channels,    2);
+    memcpy(wav + 24, &sample_rate, 4);
+    memcpy(wav + 28, &byte_rate,   4);
+    memcpy(wav + 32, &block_align, 2);
+    memcpy(wav + 34, &bits,        2);
+    memcpy(wav + 36, "data", 4);
+    memcpy(wav + 40, &data_bytes,  4);
+    /* samples are already zero from memset */
+
+    stt_result_t result = {0};
+    int64_t t0 = esp_timer_get_time();
+    esp_err_t ret = stt_transcribe_local(wav, sizeof(wav), "audio/wav", &result);
+    int64_t elapsed_ms = (esp_timer_get_time() - t0) / 1000;
+
+    if (ret == ESP_OK || result.text[0] != '\0') {
+        ESP_LOGI(TAG, "mlx-audio warmup done in %lldms — model ready", elapsed_ms);
+        ws_server_broadcast_monitor_verbose("stt", "Local Whisper model ready");
+        /* Warmup succeeded — clear any offline flag set during the silence send */
+        s_local_offline = false;
+    } else {
+        ESP_LOGW(TAG, "mlx-audio warmup failed in %lldms (%s) — will retry on first real request",
+                 elapsed_ms, result.error[0] ? result.error : "unknown");
+        /* Don't leave server marked offline for an empty-result warmup */
+        s_local_offline = false;
+    }
+
+    vTaskDelete(NULL);
 }
 
 /* ── Public API ────────────────────────────────────────────────── */
@@ -285,6 +382,14 @@ esp_err_t stt_client_init(void)
             ESP_LOGW(TAG, "STT http_session_init failed: %s", esp_err_to_name(err));
         }
     }
+
+    /* Pre-warm local Whisper model so the first real request is fast.
+     * Runs in a background task (8s delay) to avoid blocking app_main startup. */
+    if (s_local_url[0]) {
+        ESP_LOGI(TAG, "Local STT configured (%s) — scheduling Whisper warmup", s_local_url);
+        xTaskCreate(stt_warmup_task, "stt_warmup", 8 * 1024, NULL, 2, NULL);
+    }
+
     return ESP_OK;
 }
 

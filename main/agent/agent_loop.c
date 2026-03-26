@@ -162,13 +162,22 @@ static void append_turn_context_prompt(char *prompt, size_t size, const lang_msg
     size_t off = strnlen(prompt, size - 1);
     if (off >= size - 1) return;
 
+    bool is_voice = (strcmp(msg->chat_id, "ptt") == 0);
+
     int n = snprintf(
         prompt + off, size - off,
         "\n## Current Turn Context\n"
         "- source_channel: %s\n"
-        "- source_chat_id: %s\n",
+        "- source_chat_id: %s\n"
+        "%s",
         msg->channel[0] ? msg->channel : "(unknown)",
-        msg->chat_id[0] ? msg->chat_id : "(empty)");
+        msg->chat_id[0] ? msg->chat_id : "(empty)",
+        is_voice
+            ? "- VOICE MODE: This response will be spoken aloud. "
+              "Use natural conversational English only — no markdown, no bullet points, "
+              "no headers, no asterisks, no backticks. "
+              "Keep the reply under 3 sentences unless the user asks for more detail.\n"
+            : "");
 
     if (n < 0 || (size_t)n >= (size - off)) {
         prompt[size - 1] = '\0';
@@ -579,15 +588,35 @@ static void agent_loop_task(void *arg)
         strncpy(stream_ctx.chat_id, msg.chat_id, sizeof(stream_ctx.chat_id) - 1);
         strncpy(stream_ctx.channel, msg.channel, sizeof(stream_ctx.channel) - 1);
 
-        /* Smart routing: prefer local Ollama when available */
-        bool using_local = false;
-        if (llm_smart_routing_available()) {
-            bool local_ok = llm_local_health_check();
-            if (local_ok) {
+        /* Smart routing: channel-aware local/cloud selection.
+         * Voice (chat_id="ptt"): always use a fast cloud model — latency matters.
+         * Text (browser/Telegram): prefer local Ollama when available. */
+        bool using_local        = false;
+        bool using_voice_cloud  = false;
+        bool is_voice           = (strcmp(msg.chat_id, "ptt") == 0);
+
+        if (is_voice && llm_voice_routing_available()) {
+            /* Voice → dedicated fast cloud model */
+            llm_set_request_override(llm_get_voice_provider(), llm_get_voice_model());
+            using_voice_cloud = true;
+            {
+                char route_msg[64];
+                snprintf(route_msg, sizeof(route_msg), "routing: cloud (voice) → %s/%s",
+                         llm_get_voice_provider(), llm_get_voice_model());
+                ESP_LOGI(TAG, "Smart routing: %s", route_msg);
+                ws_server_broadcast_monitor("llm", route_msg);
+            }
+        } else if (!is_voice && llm_smart_routing_available()) {
+            /* Text → local Ollama when reachable */
+            if (llm_local_health_check()) {
                 llm_set_request_override("ollama", llm_get_local_model());
                 using_local = true;
-                ESP_LOGI(TAG, "Smart routing: using local %s", llm_get_local_model());
-                ws_server_broadcast_monitor("llm", "routing: local (ollama)");
+                {
+                    char route_msg[48];
+                    snprintf(route_msg, sizeof(route_msg), "routing: local → %s", llm_get_local_model());
+                    ESP_LOGI(TAG, "Smart routing: %s", route_msg);
+                    ws_server_broadcast_monitor("llm", route_msg);
+                }
             } else {
                 ESP_LOGI(TAG, "Smart routing: local offline, using cloud");
                 ws_server_broadcast_monitor("llm", "routing: cloud (local offline)");
@@ -654,13 +683,28 @@ static void agent_loop_task(void *arg)
                                                &resp);
             }
 
-            /* Cloud fallback: if local failed, try cloud provider */
+            /* Cloud fallback: if local Ollama failed, retry with global cloud provider */
             if (err != ESP_OK && using_local) {
                 ESP_LOGW(TAG, "Local LLM failed (%s), falling back to cloud", esp_err_to_name(err));
                 ws_server_broadcast_monitor("llm", "local failed — falling back to cloud");
                 oled_display_set_message("Fallback: cloud");
                 llm_clear_request_override();
                 using_local = false;
+                retry_done = false;
+                err = llm_chat_tools_streaming(system_prompt, messages, tools_json,
+                                               force_this_iter,
+                                               ws_stream_progress, &stream_ctx,
+                                               &resp);
+            }
+
+            /* Voice cloud fallback: if the dedicated voice model failed, clear override
+             * and retry with the global cloud provider */
+            if (err != ESP_OK && using_voice_cloud) {
+                ESP_LOGW(TAG, "Voice cloud LLM failed (%s), falling back to global provider",
+                         esp_err_to_name(err));
+                ws_server_broadcast_monitor("llm", "voice cloud failed — falling back to global");
+                llm_clear_request_override();
+                using_voice_cloud = false;
                 retry_done = false;
                 err = llm_chat_tools_streaming(system_prompt, messages, tools_json,
                                                force_this_iter,

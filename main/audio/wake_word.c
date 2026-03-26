@@ -46,8 +46,10 @@ static const char *TAG = "wake_word";
 /* Max ms between wake word detection and first speech before aborting */
 #define WW_SPEECH_TIMEOUT_MS   10000
 
-/* ms of VAD silence after speech to trigger end-of-utterance */
-#define WW_VAD_SILENCE_MS       1500
+/* ms of VAD silence after speech to trigger end-of-utterance.
+ * 700ms feels natural — short enough to be responsive, long enough not to
+ * cut off mid-sentence.  1500ms was too conservative for voice assistant use. */
+#define WW_VAD_SILENCE_MS        700
 
 /* Max recording duration (safety limit) */
 #define WW_MAX_RECORD_MS        8000
@@ -525,9 +527,10 @@ esp_err_t wake_word_init(void)
 /* SRAM stack sizes — MUST be in internal SRAM (not PSRAM) because ESP-SR
  * reads model data from flash, and PSRAM stacks trigger the SPI flash
  * cache safety assertion.  Feed needs 8KB (DSP processing inside afe->feed).
- * Detect needs 4KB. */
+ * Detect needs 8KB: calls audio_ring_open_wav (LittleFS), audio_ring_patch_wav_sizes,
+ * audio_ring_commit, ws_server_broadcast_monitor (semaphore+socket) — 4KB overflows. */
 #define WW_FEED_STACK    8192
-#define WW_DETECT_STACK  4096
+#define WW_DETECT_STACK  8192
 
 static StaticTask_t  s_feed_tcb;
 static StaticTask_t  s_detect_tcb;

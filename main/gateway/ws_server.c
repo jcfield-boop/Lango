@@ -1193,6 +1193,8 @@ static esp_err_t config_get_handler(httpd_req_t *req)
     cJSON_AddStringToObject(j, "notify_topic", notify_topic);
     cJSON_AddBoolToObject(j, "verbose_logs", s_verbose_logs);
     cJSON_AddBoolToObject(j, "wake_word", wake_word_is_running());
+    cJSON_AddNumberToObject(j, "wake_threshold", (double)wake_word_get_threshold());
+    cJSON_AddNumberToObject(j, "wake_gain", (double)wake_word_get_gain());
     cJSON_AddNumberToObject(j, "volume", (double)i2s_audio_get_volume());
 
     char *json_str = cJSON_PrintUnformatted(j);
@@ -1331,6 +1333,24 @@ static esp_err_t config_post_handler(httpd_req_t *req)
             nvs_set_u8(nvs, WS_NVS_KEY_VERBOSE, s_verbose_logs ? 1 : 0);
             nvs_commit(nvs);
             nvs_close(nvs);
+        }
+    }
+
+    cJSON *ww_thresh = cJSON_GetObjectItem(root, "wake_threshold");
+    if (ww_thresh && cJSON_IsString(ww_thresh)) {
+        float t = (float)atof(ww_thresh->valuestring);
+        if (t > 0.0f && t <= 1.0f) {
+            wake_word_set_threshold(t);  /* applies live + saves to NVS */
+            ESP_LOGI(TAG, "Wake threshold set to %.3f via HTTP", (double)t);
+        }
+    }
+
+    cJSON *ww_gain = cJSON_GetObjectItem(root, "wake_gain");
+    if (ww_gain && cJSON_IsString(ww_gain)) {
+        float g = (float)atof(ww_gain->valuestring);
+        if (g >= 0.1f && g <= 50.0f) {
+            wake_word_set_gain(g);  /* applies live + saves to NVS */
+            ESP_LOGI(TAG, "Wake gain set to %.2f via HTTP", (double)g);
         }
     }
 

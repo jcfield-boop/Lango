@@ -44,8 +44,12 @@ static char s_model[TTS_MODEL_MAX]       = LANG_DEFAULT_TTS_MODEL;
 static char s_voice[TTS_VOICE_MAX]       = LANG_DEFAULT_TTS_VOICE;
 
 /* Local TTS (mlx-audio / Piper / etc.) — plain HTTP, no TLS */
-#define TTS_LOCAL_URL_MAX  192
-static char s_local_url[TTS_LOCAL_URL_MAX] = {0};
+#define TTS_LOCAL_URL_MAX    192
+#define TTS_LOCAL_MODEL_MAX  128
+#define TTS_LOCAL_VOICE_MAX   64
+static char s_local_url[TTS_LOCAL_URL_MAX]     = {0};
+static char s_local_model[TTS_LOCAL_MODEL_MAX] = "mlx-community/Kokoro-82M-bf16";
+static char s_local_voice[TTS_LOCAL_VOICE_MAX] = "af_heart";
 static bool s_local_offline = false;
 static int64_t s_local_fail_us = 0;
 #define LOCAL_BACKOFF_US   (60 * 1000000LL)  /* skip local for 60s after failure */
@@ -220,9 +224,9 @@ static esp_err_t tts_generate_local(const char *text, bin_buf_t *bb)
 
     cJSON *req = cJSON_CreateObject();
     if (!req) return ESP_ERR_NO_MEM;
-    cJSON_AddStringToObject(req, "model", "mlx-community/Kokoro-82M-bf16");
+    cJSON_AddStringToObject(req, "model", s_local_model);
     cJSON_AddStringToObject(req, "input", text);
-    cJSON_AddStringToObject(req, "voice", "af_heart");
+    cJSON_AddStringToObject(req, "voice", s_local_voice);
     cJSON_AddStringToObject(req, "response_format", "wav");
 
     char *body = cJSON_PrintUnformatted(req);
@@ -550,4 +554,20 @@ void tts_set_local_url(const char *url)
 const char *tts_get_local_url(void)
 {
     return s_local_url;
+}
+
+void tts_set_local_model(const char *model)
+{
+    if (!model || model[0] == '\0') return;
+    strncpy(s_local_model, model, sizeof(s_local_model) - 1);
+    s_local_model[sizeof(s_local_model) - 1] = '\0';
+    ESP_LOGI(TAG, "Local TTS model: %s", s_local_model);
+}
+
+void tts_set_local_voice(const char *voice)
+{
+    if (!voice || voice[0] == '\0') return;
+    strncpy(s_local_voice, voice, sizeof(s_local_voice) - 1);
+    s_local_voice[sizeof(s_local_voice) - 1] = '\0';
+    ESP_LOGI(TAG, "Local TTS voice: %s", s_local_voice);
 }

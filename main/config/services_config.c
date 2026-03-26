@@ -107,6 +107,14 @@ esp_err_t services_config_load(void)
                 llm_set_local_model(val);
                 ESP_LOGI(TAG, "Local model: %s", val);
                 keys_applied++;
+            } else if (strcmp(key, "voice_provider") == 0) {
+                llm_set_voice_provider(val);
+                ESP_LOGI(TAG, "Voice provider: %s", val);
+                keys_applied++;
+            } else if (strcmp(key, "voice_model") == 0) {
+                llm_set_voice_model(val);
+                ESP_LOGI(TAG, "Voice model: %s", val);
+                keys_applied++;
             }
 
         /* ── Speech-to-Text section ──────────────────────────── */
@@ -158,6 +166,14 @@ esp_err_t services_config_load(void)
                 tts_set_local_url(val);
                 stt_set_local_url(val);
                 ESP_LOGI(TAG, "Local audio URL: %s (TTS+STT)", val);
+                keys_applied++;
+            } else if (strcmp(key, "local_model") == 0) {
+                tts_set_local_model(val);
+                ESP_LOGI(TAG, "Local TTS model: %s", val);
+                keys_applied++;
+            } else if (strcmp(key, "local_voice") == 0) {
+                tts_set_local_voice(val);
+                ESP_LOGI(TAG, "Local TTS voice: %s", val);
                 keys_applied++;
             }
         }
@@ -214,8 +230,10 @@ esp_err_t services_config_reload(void)
 
         /* ── Local Model (Ollama) ────────────────────────────── */
         } else if (strstr(section, "local model")) {
-            if (strcmp(key, "base_url") == 0) { llm_set_local_url(val); keys_applied++; }
-            else if (strcmp(key, "model") == 0) { llm_set_local_model(val); keys_applied++; }
+            if (strcmp(key, "base_url") == 0)        { llm_set_local_url(val);      keys_applied++; }
+            else if (strcmp(key, "model") == 0)       { llm_set_local_model(val);    keys_applied++; }
+            else if (strcmp(key, "voice_provider") == 0) { llm_set_voice_provider(val); keys_applied++; }
+            else if (strcmp(key, "voice_model") == 0)    { llm_set_voice_model(val);    keys_applied++; }
 
         /* ── STT ─────────────────────────────────────────────── */
         } else if (strstr(section, "speech-to-text") || strstr(section, "stt")) {
@@ -240,9 +258,11 @@ esp_err_t services_config_reload(void)
         /* ── Local Audio ─────────────────────────────────────── */
         } else if (strstr(section, "local audio")) {
             if (strcmp(key, "base_url") == 0) {
-                tts_set_local_url(val);
-                stt_set_local_url(val);
-                keys_applied++;
+                tts_set_local_url(val); stt_set_local_url(val); keys_applied++;
+            } else if (strcmp(key, "local_model") == 0) {
+                tts_set_local_model(val); keys_applied++;
+            } else if (strcmp(key, "local_voice") == 0) {
+                tts_set_local_voice(val); keys_applied++;
             }
         }
     }

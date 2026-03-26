@@ -52,3 +52,11 @@ void tts_set_local_url(const char *url);
 
 /** Get local TTS base URL (empty string if not set). */
 const char *tts_get_local_url(void);
+
+/** Set local TTS model name (e.g. "mlx-community/Kokoro-82M-bf16").
+ *  Defaults to Kokoro-82M-bf16 if not set. */
+void tts_set_local_model(const char *model);
+
+/** Set local TTS voice name (e.g. "af_heart", "af_sky", "am_adam").
+ *  Defaults to "af_heart" if not set. */
+void tts_set_local_voice(const char *voice);

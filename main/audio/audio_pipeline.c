@@ -92,8 +92,16 @@ static void audio_stt_task(void *arg)
         stt_mime[sizeof(stt_mime) - 1] = '\0';
         uint8_t *opus_buf = NULL;
 
-        if (strcmp(mime, "audio/wav") == 0 && audio_len > 44) {
-            /* WAV: skip 44-byte header to get raw PCM */
+        if (strcmp(mime, "audio/wav") == 0 && audio_len > 44
+            && stt_get_local_url()[0] == '\0') {
+            /* WAV → Opus/OGG compression for cloud STT only (bandwidth matters).
+             * Skip Opus encoding when local STT (mlx-audio) is configured:
+             *   - LAN upload cost is negligible; raw WAV avoids the extra PSRAM
+             *     allocation and CPU time in the STT task.
+             *   - Opus encoder state is >4KB → allocated in PSRAM; the STT task
+             *     stack is also PSRAM (24KB > SPIRAM_MALLOC_ALWAYSINTERNAL=4096).
+             *     Two concurrent PSRAM-backed allocations + TLS stack pressure
+             *     can cause panics on wake-word audio paths. */
             const int16_t *pcm = (const int16_t *)(s_ring.buf + 44);
             size_t pcm_bytes = audio_len - 44;
             size_t opus_size = 0;
@@ -112,6 +120,9 @@ static void audio_stt_task(void *arg)
                 ESP_LOGW(TAG, "Opus encode failed (%s), sending raw WAV",
                          esp_err_to_name(enc_ret));
             }
+        } else if (strcmp(mime, "audio/wav") == 0 && stt_get_local_url()[0] != '\0') {
+            ESP_LOGI(TAG, "Local STT configured — skipping Opus encoding, sending raw WAV (%u bytes)",
+                     (unsigned)audio_len);
         }
 
         stt_result_t result = {0};
