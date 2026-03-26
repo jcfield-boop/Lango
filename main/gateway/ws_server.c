@@ -14,6 +14,7 @@
 #include "audio/wake_word.h"
 #include "config/services_config.h"
 #include "tools/tool_say.h"
+#include "mcp/mcp_server.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -1686,6 +1687,63 @@ static esp_err_t message_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── POST /mcp — MCP Streamable HTTP transport ───────────────── */
+
+#define MCP_MAX_BODY   32768
+#define MCP_OUTPUT_SIZE 32768
+
+static esp_err_t mcp_post_handler(httpd_req_t *req)
+{
+    if (!request_is_authed(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+        return ESP_OK;
+    }
+
+    size_t body_len = (req->content_len > 0 && (size_t)req->content_len < MCP_MAX_BODY)
+                      ? (size_t)req->content_len : MCP_MAX_BODY;
+
+    char *body = ps_calloc(1, body_len + 1);
+    char *output = ps_calloc(1, MCP_OUTPUT_SIZE);
+    if (!body || !output) {
+        free(body);
+        free(output);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_OK;
+    }
+
+    /* Read full POST body (mbedTLS may fragment across multiple recv calls) */
+    size_t received = 0;
+    while (received < body_len) {
+        int r = httpd_req_recv(req, body + received, body_len - received);
+        if (r <= 0) break;
+        received += (size_t)r;
+    }
+    if (received == 0) {
+        free(body);
+        free(output);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body received");
+        return ESP_OK;
+    }
+    body[received] = '\0';
+
+    mcp_handle_request(body, received, output, MCP_OUTPUT_SIZE);
+    free(body);
+
+    apply_cors(req);
+    httpd_resp_set_type(req, "application/json");
+
+    if (output[0] == '\0') {
+        /* Notification — no response body, send 204 */
+        httpd_resp_set_status(req, "204 No Content");
+        httpd_resp_send(req, NULL, 0);
+    } else {
+        httpd_resp_sendstr(req, output);
+    }
+
+    free(output);
+    return ESP_OK;
+}
+
 /* ── Public API ──────────────────────────────────────────────── */
 
 esp_err_t ws_server_start(void)
@@ -1753,7 +1811,7 @@ esp_err_t ws_server_start(void)
     cfg.ctrl_port                  = LANG_WS_PORT + 1;
     cfg.max_open_sockets           = 8;
     cfg.stack_size                 = 8192;
-    cfg.max_uri_handlers           = 27;  /* 26 handlers registered + 1 spare */
+    cfg.max_uri_handlers           = 28;  /* 27 handlers registered + 1 spare */
     cfg.send_wait_timeout          = 30;
     cfg.recv_wait_timeout          = 120;  /* extended: WS ping keeps connection alive */
     cfg.uri_match_fn               = httpd_uri_match_wildcard;
@@ -1854,6 +1912,10 @@ esp_err_t ws_server_start(void)
     /* Inbound message injection */
     httpd_uri_t message_uri = { .uri = "/api/message", .method = HTTP_POST, .handler = message_post_handler };
     httpd_register_uri_handler(s_server, &message_uri);
+
+    /* MCP (Model Context Protocol) */
+    httpd_uri_t mcp_uri = { .uri = "/mcp", .method = HTTP_POST, .handler = mcp_post_handler };
+    httpd_register_uri_handler(s_server, &mcp_uri);
 
     /* WebSocket keepalive ping task (Core 0, low priority) */
     if (!s_ws_ping_task) {

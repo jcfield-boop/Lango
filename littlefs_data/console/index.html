@@ -59,13 +59,13 @@ header h1{font-size:1rem;color:#7ec8e3;font-weight:600;white-space:nowrap}
 #dev-nav button.active{color:#7ec8e3;border-bottom-color:#7ec8e3}
 #dev-nav button:hover{color:#ddd;background:#1e1e1e}
 #dev-content{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}
-#log-panel{flex:1;overflow-y:auto;padding:6px 8px;font-family:monospace;font-size:0.76rem;min-height:0}
+#log-panel{flex:1;overflow-y:auto;padding:6px 8px;font-family:monospace;font-size:0.76rem;min-height:0;display:none}
 .entry{padding:1px 0;line-height:1.5;word-break:break-word}
 .ts{color:#444;margin-right:5px;user-select:none}
 .llm{color:#7ec8e3}.tool{color:#c8e37e}.done{color:#7ee38e}
 .task{color:#b07ee3}.msg{color:#e3b97e}.err{color:#e37e7e}.ws{color:#555}
 .search{color:#7ee38e}.stream{color:#3a5a3a}
-#log-toolbar{display:flex;gap:6px;padding:4px 8px;background:#1a1a1a;border-top:1px solid #2a2a2a;flex-shrink:0}
+#log-toolbar{display:none;gap:6px;padding:4px 8px;background:#1a1a1a;border-top:1px solid #2a2a2a;flex-shrink:0}
 #file-panel,#settings-panel,#skill-panel,#cron-panel{display:none;flex:1;flex-direction:column;min-height:0;overflow-y:auto;padding:10px;gap:8px}
 textarea{flex:1;background:#111;color:#ddd;border:1px solid #333;padding:8px;font-family:monospace;font-size:0.8rem;resize:none;outline:none;border-radius:3px;min-height:200px}
 textarea:focus{border-color:#555}
@@ -89,10 +89,24 @@ input:focus{border-color:#555}
 .toggle-sl:before{position:absolute;content:"";width:12px;height:12px;left:3px;bottom:3px;background:#777;border-radius:50%;transition:.2s}
 .toggle input:checked+.toggle-sl{background:#2d5a3d}
 .toggle input:checked+.toggle-sl:before{transform:translateX(16px);background:#7ee38e}
+/* Dashboard */
+#dash-panel{display:flex;flex:1;flex-direction:column;min-height:0;overflow-y:auto;padding:10px;gap:12px}
+#dash-status{display:flex;gap:8px;flex-wrap:wrap}
+.ds-card{background:#1e1e1e;border:1px solid #333;border-radius:6px;padding:6px 10px;min-width:70px;flex:1}
+.ds-card .ds-lbl{font-size:0.65rem;color:#666;text-transform:uppercase;letter-spacing:.5px}
+.ds-card .ds-val{font-family:monospace;font-size:0.9rem;color:#7ec8e3;margin-top:2px}
+#dash-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.qa-btn{background:#1e1e1e;border:1px solid #333;border-radius:10px;padding:10px 6px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;min-height:70px;justify-content:center;transition:all .15s;-webkit-tap-highlight-color:transparent;user-select:none}
+.qa-btn:hover{background:#2a2a2a;border-color:#555}
+.qa-btn:active{background:#333;transform:scale(0.96)}
+.qa-btn .qa-icon{font-size:1.5rem;line-height:1}
+.qa-btn .qa-lbl{font-size:0.72rem;color:#aaa;text-align:center}
+.qa-btn.sent{background:#1a3a2a;border-color:#3a6a4a}
 /* Mobile: stack panes */
 @media(max-width:700px){
   #dev-pane{width:100%;border-right:none;border-top:1px solid #222;max-height:40vh}
   #main{flex-direction:column}
+  #dash-grid{grid-template-columns:repeat(2,1fr)}
 }
 </style>
 </head>
@@ -121,7 +135,8 @@ input:focus{border-color:#555}
   <!-- Dev pane -->
   <div id="dev-pane">
     <div id="dev-nav">
-      <button class="active" onclick="showTab('log',this)">Log</button>
+      <button class="active" onclick="showTab('dash',this)">&#x26A1;</button>
+      <button onclick="showTab('log',this)">Log</button>
       <button onclick="showTab('soul',this)">SOUL</button>
       <button onclick="showTab('user',this)">USER</button>
       <button onclick="showTab('memory',this)">Memory</button>
@@ -136,6 +151,15 @@ input:focus{border-color:#555}
       <div id="log-toolbar">
         <button class="hdr-btn" id="verbose-btn" onclick="toggleVerbose()" title="Show all log entries">Verbose</button>
         <button class="hdr-btn" onclick="clearLog()">&#x2715; Clear</button>
+      </div>
+      <div id="dash-panel">
+        <div id="dash-status">
+          <div class="ds-card"><div class="ds-lbl">Uptime</div><div class="ds-val" id="ds-up">--</div></div>
+          <div class="ds-card"><div class="ds-lbl">SRAM</div><div class="ds-val" id="ds-ram">--</div></div>
+          <div class="ds-card"><div class="ds-lbl">WiFi</div><div class="ds-val" id="ds-rssi">--</div></div>
+          <div class="ds-card"><div class="ds-lbl">Cost</div><div class="ds-val" id="ds-cost">--</div></div>
+        </div>
+        <div id="dash-grid"></div>
       </div>
       <div id="file-panel">
         <div class="toolbar">
@@ -217,7 +241,7 @@ var micBtn = document.getElementById('mic-btn');
 var streamBubble = null;
 var recActive = false;
 var browserRec = null;
-var curTab = 'log';
+var curTab = 'dash';
 var curFile = null;
 var curSkill = null;
 var streamingLogged = false;
@@ -518,12 +542,14 @@ function showTab(tab, btn) {
   btn.classList.add('active');
   curTab = tab;
   var isLog = tab === 'log';
-  document.getElementById('log-panel').style.display = isLog ? '' : 'none';
-  document.getElementById('log-toolbar').style.display = isLog ? '' : 'none';
-  document.getElementById('file-panel').style.display = (!isLog && tab !== 'skills' && tab !== 'crons' && tab !== 'settings') ? 'flex' : 'none';
+  document.getElementById('log-panel').style.display = isLog ? 'block' : 'none';
+  document.getElementById('log-toolbar').style.display = isLog ? 'flex' : 'none';
+  document.getElementById('dash-panel').style.display = tab === 'dash' ? 'flex' : 'none';
+  document.getElementById('file-panel').style.display = (!isLog && tab !== 'skills' && tab !== 'crons' && tab !== 'settings' && tab !== 'dash') ? 'flex' : 'none';
   document.getElementById('skill-panel').style.display = tab === 'skills' ? 'flex' : 'none';
   document.getElementById('cron-panel').style.display = tab === 'crons' ? 'flex' : 'none';
   document.getElementById('settings-panel').style.display = tab === 'settings' ? 'flex' : 'none';
+  if (tab === 'dash') { refreshDashboard(); return; }
   if (isLog) { flushLog(); return; }
   if (tab === 'skills') { loadSkillList(); return; }
   if (tab === 'crons') { loadCrons(); return; }
@@ -735,9 +761,68 @@ function doReboot() {
   addLog('err', 'Rebooting\u2026 (auto-reconnect on resume)');
 }
 
+/* ── Dashboard ── */
+var quickActions = [
+  { icon:'\u2600\uFE0F', label:'Briefing', prompt:'Run the daily morning briefing' },
+  { icon:'\uD83C\uDFC4', label:'Surf Check', prompt:'Check surf conditions at Pacifica Linda Mar for this weekend' },
+  { icon:'\uD83D\uDCC8', label:'ARM Stock', prompt:"What's the ARM stock price right now?" },
+  { icon:'\uD83D\uDCA1', label:'Lights On', prompt:'Turn on all the lights' },
+  { icon:'\uD83C\uDF19', label:'Lights Off', prompt:'Turn off all the lights' },
+  { icon:'\uD83C\uDF24\uFE0F', label:'Weather', prompt:"What's the weather in San Francisco?" },
+  { icon:'\uD83D\uDCCA', label:'System Info', prompt:'Give me a system health report' },
+  { icon:'\uD83D\uDD04', label:'Restart', action:'reboot' }
+];
+(function buildDashGrid() {
+  var g = document.getElementById('dash-grid');
+  quickActions.forEach(function(qa, i) {
+    var b = document.createElement('button');
+    b.className = 'qa-btn';
+    b.innerHTML = '<span class="qa-icon">' + qa.icon + '</span><span class="qa-lbl">' + esc(qa.label) + '</span>';
+    b.onclick = function() {
+      if (qa.action === 'reboot') { doReboot(); return; }
+      sendQuickAction(qa.prompt, b);
+    };
+    g.appendChild(b);
+  });
+})();
+
+function sendQuickAction(text, btn) {
+  if (!ws || ws.readyState !== 1) { showError('Not connected'); return; }
+  ws.send(JSON.stringify({ type:'prompt', content:text, chat_id:chatId }));
+  addUserBubble(text);
+  startStreamBubble();
+  setStatus('llm_thinking');
+  btn.classList.add('sent');
+  setTimeout(function() { btn.classList.remove('sent'); }, 1000);
+  /* Switch to chat — on mobile the chat pane is always visible;
+     on desktop just ensure the log is visible for streaming */
+}
+
+function refreshDashboard() {
+  fetch('/api/sysinfo').then(function(r) { return r.json(); }).then(function(d) {
+    var up = d.uptime_s || 0;
+    var upStr = up < 60 ? up + 's'
+      : up < 3600 ? Math.floor(up/60) + 'm'
+      : Math.floor(up/3600) + 'h ' + Math.floor((up%3600)/60) + 'm';
+    document.getElementById('ds-up').textContent = upStr;
+    document.getElementById('ds-ram').textContent = Math.round((d.heap_free||0)/1024) + ' KB';
+    var rssi = d.rssi || d.wifi_rssi;
+    if (rssi !== undefined && rssi !== null) {
+      var bars = rssi > -50 ? '\u2587\u2587\u2587\u2587' : rssi > -60 ? '\u2587\u2587\u2587\u2581' : rssi > -70 ? '\u2587\u2587\u2581\u2581' : '\u2587\u2581\u2581\u2581';
+      document.getElementById('ds-rssi').textContent = rssi + ' ' + bars;
+    } else {
+      document.getElementById('ds-rssi').textContent = '--';
+    }
+    var cost = (d.cost_millicents || 0) + (d.search_cost_millicents || 0);
+    document.getElementById('ds-cost').textContent = '$' + (cost/100000).toFixed(4);
+  }).catch(function() {});
+}
+var dashTimer = setInterval(refreshDashboard, 60000);
+
 /* ── Init ── */
 connect();
 fetchSysinfo();
+refreshDashboard();
 setInterval(fetchSysinfo, 15000);
 </script>
 </body>

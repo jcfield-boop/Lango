@@ -29,12 +29,12 @@ nav button:hover{color:#ddd;background:#2d2d2d}
 #crash-banner span{flex:1}
 #crash-banner button{background:none;border:none;color:#e3b97e;cursor:pointer;padding:2px 6px;font-size:1rem;line-height:1}
 #content{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0}
-#log-filter-row{display:flex;gap:6px;padding:4px 10px;background:#1e1e1e;border-bottom:1px solid #2d2d2d;flex-shrink:0}
+#log-filter-row{display:none;gap:6px;padding:4px 10px;background:#1e1e1e;border-bottom:1px solid #2d2d2d;flex-shrink:0}
 #log-filter{flex:1;background:#222;color:#ddd;border:1px solid #3a3a3a;padding:3px 8px;font-family:monospace;font-size:0.78rem;border-radius:3px;outline:none}
 #log-filter:focus{border-color:#555}
 #log-filter-clear{background:none;border:none;color:#555;cursor:pointer;font-size:0.85rem;padding:0 4px}
 #log-filter-clear:hover{color:#aaa}
-#log-panel{flex:1;overflow-y:auto;padding:8px 10px;min-height:0}
+#log-panel{flex:1;overflow-y:auto;padding:8px 10px;min-height:0;display:none}
 .entry{padding:1px 0;line-height:1.5;word-break:break-word;overflow-wrap:anywhere}
 .ts{color:#555;margin-right:6px;user-select:none}
 .llm{color:#7ec8e3}.tool{color:#c8e37e}.done{color:#7ee38e}
@@ -64,7 +64,7 @@ textarea:focus{border-color:#555}
 #del-skill-btn{margin-left:auto;background:#5a1f1f;border-color:#8b3333;color:#ffaaaa}
 #del-skill-btn:hover{background:#6b2020}
 #new-skill-btn{width:100%;margin-bottom:6px}
-#chat-bar{display:flex;gap:6px;padding:6px 10px;background:#222;border-top:1px solid #333;flex-shrink:0}
+#chat-bar{display:none;gap:6px;padding:6px 10px;background:#222;border-top:1px solid #333;flex-shrink:0}
 #chat-input{flex:1;background:#1a1a1a;color:#ddd;border:1px solid #444;padding:5px 8px;font-family:monospace;font-size:0.82rem;border-radius:3px;outline:none}
 #chat-input:focus{border-color:#555}
 .toggle{position:relative;display:inline-block;width:34px;height:18px;flex-shrink:0}
@@ -87,6 +87,18 @@ textarea:focus{border-color:#555}
 .crash-table .reason-panic,.crash-table .reason-int_wdt,.crash-table .reason-task_wdt{color:#e37e7e;font-weight:bold}
 .crash-table .reason-brownout{color:#e3b97e;font-weight:bold}
 #crashlog-status{color:#7ee38e;font-size:0.8rem}
+#dash-panel{flex:1;display:none;flex-direction:column;padding:14px;gap:14px;min-height:0;overflow-y:auto}
+.ds-cards{display:flex;gap:10px;flex-wrap:wrap}
+.ds-card{background:#2a2a2a;border:1px solid #444;border-radius:6px;padding:10px 14px;min-width:100px;flex:1}
+.ds-card .label{font-size:0.7rem;color:#888;text-transform:uppercase;margin-bottom:2px}
+.ds-card .val{font-size:1.1rem;color:#7ec8e3;font-weight:bold}
+#dash-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.qa-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:16px 8px;background:#2a2a2a;border:1px solid #444;border-radius:8px;cursor:pointer;transition:all 0.15s;min-height:80px;font-family:monospace;color:#ddd}
+.qa-btn:hover{background:#3a3a3a;border-color:#7ec8e3}
+.qa-btn .icon{font-size:1.6rem}
+.qa-btn .lbl{font-size:0.75rem;text-align:center}
+.qa-btn.sent{background:#1a3a1a;border-color:#7ee38e}
+@media(max-width:600px){#dash-grid{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
 <body>
@@ -102,7 +114,8 @@ textarea:focus{border-color:#555}
 </header>
 <div id="crash-banner"><span id="crash-banner-msg"></span><button onclick="dismissCrashBanner()" title="Dismiss">&#x2715;</button></div>
 <nav>
-  <button class="active" onclick="showTab('log',this)">Live Log</button>
+  <button class="active" onclick="showTab('dash',this)">&#x26A1;</button>
+  <button onclick="showTab('log',this)">Live Log</button>
   <button id="clear-log-btn" onclick="clearLog()" style="border:none;border-radius:0;padding:8px 10px;color:#666;background:transparent;font-size:0.75rem" title="Clear browser log">&#x2715;</button>
   <button id="clear-device-log-btn" onclick="clearDeviceLog()" style="border:none;border-radius:0;padding:8px 10px;color:#666;background:transparent;font-size:0.75rem" title="Clear device log ring buffer">&#x1F5D1;</button>
   <button onclick="showTab('soul',this)">SOUL.md</button>
@@ -116,6 +129,15 @@ textarea:focus{border-color:#555}
   <button onclick="showTab('settings',this)">Settings</button>
 </nav>
 <div id="content">
+  <div id="dash-panel" style="display:flex">
+    <div class="ds-cards">
+      <div class="ds-card"><div class="label">Uptime</div><div class="val" id="ds-uptime">--</div></div>
+      <div class="ds-card"><div class="label">SRAM</div><div class="val" id="ds-sram">--</div></div>
+      <div class="ds-card"><div class="label">WiFi</div><div class="val" id="ds-rssi">--</div></div>
+      <div class="ds-card"><div class="label">Searches</div><div class="val" id="ds-cost">--</div></div>
+    </div>
+    <div id="dash-grid"></div>
+  </div>
   <div id="log-filter-row">
     <input id="log-filter" type="text" placeholder="Filter logs…" oninput="filterLog(this.value)" spellcheck="false">
     <button id="log-filter-clear" onclick="clearLogFilter()" title="Clear filter">&#x2715;</button>
@@ -201,7 +223,7 @@ textarea:focus{border-color:#555}
   </div>
 </div>
 <script>
-var ws,curTab='log',curFile=null,curSkill=null,reconnectTimer=null;
+var ws,curTab='dash',curFile=null,curSkill=null,reconnectTimer=null;
 var logEl=document.getElementById('log-panel');
 var dot=document.getElementById('ws-dot');
 document.getElementById('ip').textContent=location.host;
@@ -291,14 +313,16 @@ function showTab(tab,btn){
   btn.classList.add('active');
   curTab=tab;
   var isLog=tab==='log';
+  document.getElementById('dash-panel').style.display=tab==='dash'?'flex':'none';
   document.getElementById('log-filter-row').style.display=isLog?'flex':'none';
-  document.getElementById('log-panel').style.display=isLog?'':'none';
+  document.getElementById('log-panel').style.display=isLog?'block':'none';
   document.getElementById('chat-bar').style.display=isLog?'flex':'none';
   document.getElementById('file-panel').style.display=(FILE_TABS.indexOf(tab)!==-1)?'flex':'none';
   document.getElementById('skill-panel').style.display=tab==='skills'?'flex':'none';
   document.getElementById('cron-panel').style.display=tab==='crons'?'flex':'none';
   document.getElementById('crashlog-panel').style.display=tab==='crashlog'?'flex':'none';
   document.getElementById('settings-panel').style.display=tab==='settings'?'flex':'none';
+  if(tab==='dash'){refreshDashboard();return}
   if(tab==='skills'){loadSkillList();return}
   if(tab==='crons'){loadCronList();return}
   if(tab==='crashlog'){loadCrashlog();return}
@@ -642,9 +666,58 @@ function doReboot(){
   .catch(function(){addLog('err','Reboot sent')});
 }
 
+/* ── Dashboard Quick Actions ── */
+var quickActions=[
+  {icon:'\u2600\uFE0F',label:'Briefing',action:'Run the daily morning briefing'},
+  {icon:'\uD83C\uDFC4',label:'Surf Check',action:'Check surf conditions at Pacifica Linda Mar for this weekend'},
+  {icon:'\uD83D\uDCC8',label:'ARM Stock',action:'What is the ARM stock price right now?'},
+  {icon:'\uD83D\uDCA1',label:'Lights On',action:'Turn on all the lights'},
+  {icon:'\uD83C\uDF19',label:'Lights Off',action:'Turn off all the lights'},
+  {icon:'\u26C5',label:'Weather',action:'What is the weather in San Francisco?'},
+  {icon:'\uD83D\uDCCA',label:'System Info',action:'Give me a system health report'},
+  {icon:'\uD83D\uDD04',label:'Restart',action:'__reboot__'}
+];
+(function buildDashGrid(){
+  var g=document.getElementById('dash-grid');if(!g)return;
+  quickActions.forEach(function(qa){
+    var b=document.createElement('div');b.className='qa-btn';
+    b.innerHTML='<span class="icon">'+qa.icon+'</span><span class="lbl">'+qa.label+'</span>';
+    b.onclick=function(){sendQuickAction(qa.action,b)};
+    g.appendChild(b);
+  });
+})();
+function sendQuickAction(action,btn){
+  if(action==='__reboot__'){doReboot();return}
+  if(ws&&ws.readyState===1){
+    ws.send(JSON.stringify({type:'prompt',content:action,chat_id:'ws_dash'}));
+    btn.classList.add('sent');
+    setTimeout(function(){btn.classList.remove('sent')},1000);
+    addLog('ws','> '+action);
+    /* switch to log tab to see response */
+    var logBtn=document.querySelector('nav button:nth-child(2)');
+    if(logBtn)showTab('log',logBtn);
+  } else {
+    addLog('err','WebSocket not connected');
+  }
+}
+function refreshDashboard(){
+  fetch('/api/sysinfo').then(function(r){return r.json()}).then(function(d){
+    var up=d.uptime_s||0;
+    var h=Math.floor(up/3600),m=Math.floor((up%3600)/60);
+    document.getElementById('ds-uptime').textContent=h+'h '+m+'m';
+    var sram=d.heap_free||0;
+    document.getElementById('ds-sram').textContent=Math.round(sram/1024)+'KB';
+    var rssi=d.wifi_rssi||0;
+    var bars=rssi>-50?'\u2588\u2588\u2588\u2588':rssi>-60?'\u2588\u2588\u2588':rssi>-70?'\u2588\u2588':'\u2588';
+    document.getElementById('ds-rssi').textContent=rssi+'dBm '+bars;
+    document.getElementById('ds-cost').textContent=(d.search_calls||0)+' ($'+(((d.search_cost_millicents||0)/100000).toFixed(3))+')';
+  }).catch(function(){});
+}
+refreshDashboard();
+
 connect();
 fetchSysinfo();
-setInterval(function(){fetchSysinfo();if(curTab==='crons')loadCronList();},15000);
+setInterval(function(){fetchSysinfo();if(curTab==='dash')refreshDashboard();if(curTab==='crons')loadCronList();},15000);
 </script>
 </body>
 </html>

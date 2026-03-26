@@ -201,11 +201,6 @@ static bool provider_is_ollama(void)
     return strcmp(effective_provider(), "ollama") == 0;
 }
 
-static bool provider_is_ollama(void)
-{
-    return strcmp(s_provider, "ollama") == 0;
-}
-
 /* Returns true for any provider that uses OpenAI-compatible message/tool format */
 static bool provider_uses_openai_format(void)
 {

@@ -61,6 +61,7 @@ idf_component_register(
         "config/services_config.c"
         "config/services_parser.c"
         "diag/log_buffer.c"
+        "mcp/mcp_server.c"
     INCLUDE_DIRS
         "."
     REQUIRES
