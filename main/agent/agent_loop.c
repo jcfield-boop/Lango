@@ -9,6 +9,7 @@
 #include "gateway/ws_server.h"
 #include "tools/tool_memory.h"
 #include "tools/tool_web_search.h"
+#include "tools/tool_smtp.h"
 #include "audio/tts_client.h"
 #include "audio/i2s_audio.h"
 #include "telegram/telegram_bot.h"
@@ -853,6 +854,39 @@ static void agent_loop_task(void *arg)
         ws_server_broadcast_monitor("done", msg.chat_id);
 
         if (final_text && final_text[0]) {
+            /* Auto-email long responses (>200 chars) from the websocket channel.
+             * Summaries, briefings, and reports accumulate naturally past this
+             * threshold; short conversational replies don't. Telegram already
+             * delivers to the user's phone so no need to duplicate there. */
+            size_t resp_len = strlen(final_text);
+            if (resp_len > 200 && strcmp(msg.channel, "websocket") == 0) {
+                /* Build subject from first ~60 chars of response */
+                char auto_subj[72];
+                snprintf(auto_subj, sizeof(auto_subj), "Lango: %.60s%s",
+                         final_text, resp_len > 60 ? "..." : "");
+                /* Strip newlines from subject */
+                for (char *p = auto_subj; *p; p++) if (*p == '\n' || *p == '\r') *p = ' ';
+
+                cJSON *email_in = cJSON_CreateObject();
+                if (email_in) {
+                    cJSON_AddStringToObject(email_in, "subject", auto_subj);
+                    cJSON_AddStringToObject(email_in, "body",    final_text);
+                    char *email_json = cJSON_PrintUnformatted(email_in);
+                    cJSON_Delete(email_in);
+                    if (email_json) {
+                        char email_out[128];
+                        esp_err_t mail_err = tool_smtp_execute(email_json, email_out, sizeof(email_out));
+                        if (mail_err == ESP_OK) {
+                            ESP_LOGI(TAG, "Auto-emailed long response (%u chars)", (unsigned)resp_len);
+                            ws_server_broadcast_monitor("agent", "Long response auto-emailed");
+                        } else {
+                            ESP_LOGW(TAG, "Auto-email failed: %s", email_out);
+                        }
+                        free(email_json);
+                    }
+                }
+            }
+
             /* Save to session */
             esp_err_t save_user = session_append(msg.chat_id, "user", msg.content);
             esp_err_t save_asst = session_append(msg.chat_id, "assistant", final_text);
