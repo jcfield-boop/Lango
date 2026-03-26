@@ -512,6 +512,11 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 
 ## Changelog
 
+### 2026-03-26 — Brave Search, search caching, smart LLM routing, SRAM guard tuning
+
+- **Brave Search provider** (`main/tools/tool_web_search.c`) — Web search now supports both Tavily and Brave Search, routed by API key prefix: keys starting with `tvly-` use Tavily, all others use Brave. Set via `set_search_key <key>` CLI command or SERVICES.md. Brave Search uses the `/res/v1/web/search` API with `X-Subscription-Token` auth.
+- **Search result caching** — 8-slot LRU cache in PSRAM with 5-minute TTL, keyed by FNV-1a query hash. Identical queries within the TTL window return cached results instantly (zero cost, zero latency). Cache hits shown as "cached" in the monitor panel. Particularly beneficial for morning briefings where retry/similar queries are common.
+
 ### 2026-03-26 — Smart LLM routing, SRAM guard tuning, auto-email, stream timeout
 
 - **Smart LLM routing** (`main/agent/agent_loop.c`) — Channel-aware and complexity-aware model selection. `system` channel (heartbeat, cron) always routes to cloud to avoid Ollama hangs on multi-tool chains. Text channel now detects complex requests (briefing, email, search, research, forecast, headlines) and routes those to cloud too. Voice channel (`ptt`) continues to use configurable `voice_provider`/`voice_model`.
