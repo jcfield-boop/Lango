@@ -366,6 +366,7 @@ esp_err_t tool_web_search_execute(const char *input_json, char *output, size_t o
     }
 
     ESP_LOGI(TAG, "Searching: %s", query->valuestring);
+    ws_server_broadcast_monitor_verbose("search", "Tavily");
 
     /* Check cache before hitting the API */
     uint32_t qhash = fnv1a(query->valuestring);
