@@ -880,16 +880,18 @@ static void agent_loop_task(void *arg)
 
         if (final_text && final_text[0]) {
             /* Auto-email long responses (>200 chars) from the websocket channel.
-             * Summaries, briefings, and reports accumulate naturally past this
-             * threshold; short conversational replies don't. Telegram already
-             * delivers to the user's phone so no need to duplicate there. */
+             * When emailed, TTS speaks a short local-LLM summary instead of
+             * the full response.  Telegram already delivers to the user's
+             * phone so no need to duplicate there. */
             size_t resp_len = strlen(final_text);
+            bool auto_emailed = false;
+            char *tts_summary = NULL;   /* short spoken version when emailed */
+
             if (resp_len > 200 && strcmp(msg.channel, "websocket") == 0) {
                 /* Build subject from first ~60 chars of response */
                 char auto_subj[72];
                 snprintf(auto_subj, sizeof(auto_subj), "Lango: %.60s%s",
                          final_text, resp_len > 60 ? "..." : "");
-                /* Strip newlines from subject */
                 for (char *p = auto_subj; *p; p++) if (*p == '\n' || *p == '\r') *p = ' ';
 
                 cJSON *email_in = cJSON_CreateObject();
@@ -902,8 +904,47 @@ static void agent_loop_task(void *arg)
                         char email_out[128];
                         esp_err_t mail_err = tool_smtp_execute(email_json, email_out, sizeof(email_out));
                         if (mail_err == ESP_OK) {
+                            auto_emailed = true;
                             ESP_LOGI(TAG, "Auto-emailed long response (%u chars)", (unsigned)resp_len);
                             ws_server_broadcast_monitor("agent", "Long response auto-emailed");
+
+                            /* Generate a 1-sentence spoken summary via local LLM.
+                             * Truncate input to ~800 chars to keep the call fast. */
+                            char *snippet = ps_calloc(1, 900);
+                            if (snippet) {
+                                snprintf(snippet, 900, "%.800s", final_text);
+                                cJSON *sum_msgs = cJSON_CreateArray();
+                                cJSON *sum_msg  = cJSON_CreateObject();
+                                cJSON_AddStringToObject(sum_msg, "role", "user");
+                                char *sum_prompt = ps_calloc(1, 1024);
+                                if (sum_prompt) {
+                                    snprintf(sum_prompt, 1024,
+                                        "Summarise this in ONE short spoken sentence (under 30 words, "
+                                        "no markdown, no emoji). End with: the full version has been emailed.\n\n%s",
+                                        snippet);
+                                    cJSON_AddStringToObject(sum_msg, "content", sum_prompt);
+                                    cJSON_AddItemToArray(sum_msgs, sum_msg);
+
+                                    llm_set_request_override("ollama", llm_get_local_text_model());
+                                    llm_response_t sum_resp;
+                                    memset(&sum_resp, 0, sizeof(sum_resp));
+                                    esp_err_t sum_err = llm_chat_tools(
+                                        "You create one-sentence spoken summaries.",
+                                        sum_msgs, NULL, false, &sum_resp);
+
+                                    if (sum_err == ESP_OK && sum_resp.text && sum_resp.text[0]) {
+                                        tts_summary = sum_resp.text;
+                                        sum_resp.text = NULL;
+                                        ESP_LOGI(TAG, "TTS summary: %s", tts_summary);
+                                    }
+                                    llm_response_free(&sum_resp);
+                                    free(sum_prompt);
+                                }
+                                cJSON_Delete(sum_msgs);
+                                free(snippet);
+                                /* Restore original provider for next turn */
+                                llm_clear_request_override();
+                            }
                         } else {
                             ESP_LOGW(TAG, "Auto-email failed: %s", email_out);
                         }
@@ -960,7 +1001,7 @@ static void agent_loop_task(void *arg)
                  * Full text is still sent to the browser for display. */
                 #define TTS_MAX_CHARS 1500
                 char tts_buf[TTS_MAX_CHARS + 1];
-                const char *tts_text = final_text;
+                const char *tts_text = (auto_emailed && tts_summary) ? tts_summary : final_text;
                 if (strlen(final_text) > TTS_MAX_CHARS) {
                     strncpy(tts_buf, final_text, TTS_MAX_CHARS);
                     tts_buf[TTS_MAX_CHARS] = '\0';
@@ -1052,6 +1093,7 @@ static void agent_loop_task(void *arg)
             }
 
             free(final_text);
+            free(tts_summary);
             led_indicator_set(LED_READY);
             ws_server_send_status(msg.chat_id, "idle");
 

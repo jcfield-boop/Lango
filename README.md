@@ -514,6 +514,13 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 
 ## Changelog
 
+### 2026-03-26 — Auto-email with TTS summary, bf_emma voice, qwen3:8b text model
+
+- **Auto-email spoken summary** (`main/agent/agent_loop.c`) — Long WebSocket responses (>200 chars) are emailed to the user, and instead of speaking the full text, the agent calls the local LLM to generate a one-sentence spoken summary ending with "the full version has been emailed." This prevents TTS from reading out lengthy briefings while still giving audio feedback.
+- **qwen3:8b as local text model** — Replaces `gemma3:12b` which doesn't support tool calling in Ollama. `qwen3:8b` supports function calling natively (verified), so simple local queries can now use tools (HA, Klipper, etc.) without falling to cloud. Vision turns still use `qwen3-vl:8b`.
+- **bf_emma voice** — Default TTS voice switched to British female (warm) via `local_voice: bf_emma` in SERVICES.md. All Kokoro voices confirmed working on mlx-audio.
+- **Volume default 255** — Matches floating GAIN pin (12dB). Optimal software volume with 12dB gain is ~150/255 to avoid clipping.
+
 ### 2026-03-26 — Local tool-calling fallback, HA skill, volume boost, Klipper quick action
 
 - **Three-tier local LLM fallback** (`main/agent/agent_loop.c`) — When the local text model (e.g. `gemma3:12b`) returns HTTP 400 because it doesn't support tool calling, the agent automatically retries with the primary local model (e.g. `qwen3-vl:8b` or `qwen3:8b`) which does. Only falls to cloud if both local models fail. This means fast text models can still be used for simple Q&A while tool-needing queries transparently escalate.
