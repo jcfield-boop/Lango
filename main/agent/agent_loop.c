@@ -719,6 +719,26 @@ static void agent_loop_task(void *arg)
                                                &resp);
             }
 
+            /* Local model fallback: if text model failed (e.g. gemma3 doesn't
+             * support tools), retry with the primary local model which does
+             * (e.g. qwen3-vl).  Only if they're actually different models. */
+            if (err != ESP_OK && using_local) {
+                const char *primary = llm_get_local_model();
+                const char *text_m  = llm_get_local_text_model();
+                if (!turn_has_image && strcmp(primary, text_m) != 0) {
+                    ESP_LOGW(TAG, "Local text model failed (%s), trying primary local: %s",
+                             esp_err_to_name(err), primary);
+                    ws_server_broadcast_monitor("llm", "text model failed — trying primary local");
+                    oled_display_set_message(primary);
+                    llm_set_request_override("ollama", primary);
+                    retry_done = false;
+                    err = llm_chat_tools_streaming(system_prompt, messages, tools_json,
+                                                   force_this_iter,
+                                                   ws_stream_progress, &stream_ctx,
+                                                   &resp);
+                }
+            }
+
             /* Cloud fallback: if local Ollama failed, retry with global cloud provider */
             if (err != ESP_OK && using_local) {
                 ESP_LOGW(TAG, "Local LLM failed (%s), falling back to cloud", esp_err_to_name(err));

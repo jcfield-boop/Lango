@@ -108,7 +108,7 @@
 /* Software volume scale: 0–256, where 256 = 100% (0 dB), 128 = 50% (−6 dB).
  * Lower values reduce peak amp current and prevent brownouts on weak PSUs. */
 #ifndef LANG_AUDIO_VOLUME
-#define LANG_AUDIO_VOLUME  220
+#define LANG_AUDIO_VOLUME  255
 #endif
 
 /* MAX98357A SD (shutdown) pin — optional amp power gating.
