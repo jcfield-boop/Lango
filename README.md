@@ -123,7 +123,7 @@ Most cheap UVC-compatible webcams work. For PTT mic, the webcam must also expose
 | **Vision** | USB webcam → MJPEG frame → Claude vision API → spoken description |
 | **Webcam PTT** | Hold BOOT button → speak into webcam mic → release → agent responds |
 | **Telegram** | Long-poll bot — full conversation with the same agent |
-| **WebSocket UI** | Browser voice interface at `https://langoustine.local` (WSS) |
+| **WebSocket UI** | Browser voice interface at `http://langoustine.local` with quick-action dashboard |
 | **Home Assistant** | Query entity state and call services (lights, switches, climate, etc.) |
 | **Klipper / Moonraker** | 3D printer status, temps, print progress, gcode control |
 | **Push notifications** | ntfy.sh push to phone — agent-initiated or rule-triggered |
@@ -134,6 +134,8 @@ Most cheap UVC-compatible webcams work. For PTT mic, the webcam must also expose
 | **Serial CLI** | Full REPL on UART0 (115200 baud) |
 | **Rate limiting** | Configurable LLM API rate limit (default 60/hour); `rate_limit` CLI command |
 | **WiFi onboarding** | Captive portal on first boot (no credentials) — SoftAP with setup page |
+| **MCP server** | JSON-RPC 2.0 MCP protocol at `/mcp` — exposes all 33 tools to Claude Desktop, Cursor, and other MCP clients |
+| **Quick actions** | Dashboard cards for common tasks (briefing, surf check, capture, system info) — one-tap from the web UI |
 | **Monitor panel** | Real-time event stream (LLM provider/model, tool calls, search provider) |
 
 ### Built-in agent tools
@@ -511,6 +513,12 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 ---
 
 ## Changelog
+
+### 2026-03-26 — MCP server, quick actions dashboard
+
+- **MCP server** (`main/mcp/mcp_server.c`) — JSON-RPC 2.0 endpoint at `POST /mcp` implementing the Model Context Protocol (2024-11-05). Supports `initialize`, `tools/list`, and `tools/call` methods. All 33 registered agent tools are automatically exposed with their JSON schemas — no per-tool MCP glue needed. Any MCP client (Claude Desktop, Cursor, etc.) can connect and invoke tools directly on the device. Tool output buffer: 16 KB from PSRAM.
+- **Quick actions dashboard** (`littlefs_data/console/index.html`) — Tap-to-run action cards on the main web UI: Morning Briefing, Surf Check, Capture Image, System Info, plus a custom prompt field. Each card sends a pre-built message to the agent via WebSocket. Cards are styled with emoji headers and a responsive grid layout.
+- **Dev console improvements** (`littlefs_data/console/dev.html`) — Consolidated monitor panel with auto-reconnect, connection status indicator, and improved event formatting.
 
 ### 2026-03-26 — Brave Search, search caching, smart LLM routing, SRAM guard tuning
 
