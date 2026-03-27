@@ -24,3 +24,16 @@ void heartbeat_stop(void);
  * Returns true if the agent was prompted, false if no tasks found.
  */
 bool heartbeat_trigger(void);
+
+/**
+ * Get today's executed heartbeat tasks as a text log.
+ * Writes lines like "- 06:05 Morning briefing\n" into buf.
+ * Returns number of entries (0 if none today). Resets on new day.
+ */
+int heartbeat_get_today_log(char *buf, size_t size);
+
+/**
+ * Get the next upcoming daily task (e.g. "06:00 Briefing").
+ * Writes into buf. Returns true if found, false if none pending.
+ */
+bool heartbeat_get_next_task(char *buf, size_t size);

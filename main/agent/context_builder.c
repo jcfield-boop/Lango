@@ -3,6 +3,7 @@
 #include "memory/memory_store.h"
 #include "memory/psram_alloc.h"
 #include "skills/skill_loader.h"
+#include "heartbeat/heartbeat.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -90,6 +91,11 @@ esp_err_t context_build_system_prompt(char *buf, size_t size)
         "instructions before taking any action. Skills override improvisation.\n"
         "Create new skills with write_file to /lfs/skills/<name>.md.\n");
 
+    off += snprintf(buf + off, size - off,
+        "\n## Language\n\n"
+        "Always respond in English. Never switch to another language "
+        "unless the user explicitly asks for a translation.\n");
+
     off = append_file(buf, size, off, LANG_SOUL_FILE, "Personality");
     off = append_file(buf, size, off, LANG_USER_FILE, "User Info");
 
@@ -122,6 +128,16 @@ esp_err_t context_build_system_prompt(char *buf, size_t size)
             off += snprintf(buf + off, size - off, "\n## Recent Notes\n\n%s\n", recent_buf);
         }
         free(recent_buf);
+    }
+
+    /* Today's completed heartbeat tasks (prevents duplicate work) */
+    {
+        char hb_log[512];
+        int n = heartbeat_get_today_log(hb_log, sizeof(hb_log));
+        if (n > 0) {
+            off += snprintf(buf + off, size - off,
+                            "\n## Today's Completed Tasks\n\n%s", hb_log);
+        }
     }
 
     ESP_LOGI(TAG, "System prompt built: %d bytes", (int)off);

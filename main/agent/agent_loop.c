@@ -504,7 +504,16 @@ static void agent_loop_task(void *arg)
             ws_server_broadcast_monitor("task", mon);
         }
 
-        /* OLED: show incoming message preview */
+        /* OLED: set channel + show incoming message preview */
+        {
+            const char *ch = msg.channel;
+            const char *abbr = "?";
+            if      (strcmp(ch, "websocket") == 0) abbr = "WS";
+            else if (strcmp(ch, "telegram")  == 0) abbr = "TG";
+            else if (strcmp(ch, "system")    == 0) abbr = "SYS";
+            else if (strcmp(ch, "ptt") == 0 || strcmp(msg.chat_id, "ptt") == 0) abbr = "PTT";
+            oled_display_set_channel(abbr);
+        }
         {
             char oled_msg[64];
             snprintf(oled_msg, sizeof(oled_msg), "> %.58s", msg.content ? msg.content : "");
@@ -654,6 +663,9 @@ static void agent_loop_task(void *arg)
                 ESP_LOGI(TAG, "Smart routing: local offline, using cloud");
                 ws_server_broadcast_monitor("llm", "routing: cloud (local offline)");
             }
+            /* Push local service status to OLED */
+            oled_display_set_local_status(llm_local_is_online(),
+                                          tts_local_is_online());
         }
 
         while (iteration < LANG_AGENT_MAX_TOOL_ITER) {
@@ -779,11 +791,16 @@ static void agent_loop_task(void *arg)
                 break;
             }
 
-            /* Update OLED with session token counts */
+            /* Update OLED with session token counts + rate limit */
             {
                 uint32_t in_tok, out_tok;
                 llm_get_session_stats(&in_tok, &out_tok, NULL);
                 oled_display_set_tokens(in_tok, out_tok);
+
+                char rl[22];
+                snprintf(rl, sizeof(rl), "%d/%d req/hr",
+                         agent_get_rate_count(), agent_get_rate_limit());
+                oled_display_set_rotate_line(3, rl);
             }
 
             if (!resp.tool_use) {

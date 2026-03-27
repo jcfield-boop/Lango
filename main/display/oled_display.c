@@ -27,6 +27,12 @@ static TickType_t s_alert_until = 0;
 static char s_provider_info[32] = "";
 static char s_token_info[32]    = "";
 static char s_ip_addr[20]       = "";
+static bool s_ollama_online     = false;
+static bool s_audio_online      = false;
+static char s_channel[8]        = "";
+static int  s_msg_count_today   = 0;
+static int  s_msg_count_yday    = -1;
+static char s_rotate_lines[4][22] = { "", "", "", "" };
 
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -90,11 +96,18 @@ static void draw_idle_screen(void)
                 memmove(ip_copy, prev_dot + 1, strlen(prev_dot));
             }
         }
-        /* Small 1x font IP right-aligned on row 0 */
-        int ip_len = (int)strlen(ip_copy);
-        int ip_x = 128 - ip_len * 6;
-        if (ip_x < 64) ip_x = 64;
-        ssd1306_str(ip_x, 0, ip_copy);
+        /* Small 1x font IP on row 0 */
+        ssd1306_str(64, 0, ip_copy);
+    }
+
+    /* Local service status on row 8: O+ A+ or O- A- */
+    {
+        portENTER_CRITICAL(&s_mux);
+        bool o = s_ollama_online, a = s_audio_online;
+        portEXIT_CRITICAL(&s_mux);
+        char svc[12];
+        snprintf(svc, sizeof(svc), "O%c A%c", o ? '+' : '-', a ? '+' : '-');
+        ssd1306_str(64, 8, svc);
     }
 
     /* ── Row 18: date (left) + RSSI bars (right) ─────────────────── */
@@ -112,16 +125,22 @@ static void draw_idle_screen(void)
     /* Separator line */
     ssd1306_hline(0, 28, 128, true);
 
-    /* ── Row 30: provider/model info ────────────────────────────── */
-    portENTER_CRITICAL(&s_mux);
-    char prov_copy[32];
-    strncpy(prov_copy, s_provider_info, sizeof(prov_copy) - 1);
-    prov_copy[sizeof(prov_copy) - 1] = '\0';
-    portEXIT_CRITICAL(&s_mux);
-    if (prov_copy[0]) {
-        ssd1306_str(0, 30, prov_copy);
-    } else {
-        ssd1306_str(0, 30, "Ready");
+    /* ── Row 30: rotating info line (cycles every 5s at 2Hz) ───── */
+    {
+        static int rotate_tick = 0;
+        rotate_tick++;
+        int phase = (rotate_tick / 10) % 4;  /* 5s per phase */
+
+        portENTER_CRITICAL(&s_mux);
+        char info_line[22];
+        if (s_rotate_lines[phase][0]) {
+            strncpy(info_line, s_rotate_lines[phase], 21);
+        } else {
+            strncpy(info_line, s_provider_info[0] ? s_provider_info : "Ready", 21);
+        }
+        info_line[21] = '\0';
+        portEXIT_CRITICAL(&s_mux);
+        ssd1306_str(0, 30, info_line);
     }
 
     /* ── Row 40-48: message preview or token counts ─────────────── */
@@ -191,8 +210,27 @@ static void draw_active_screen(void)
     /* Separator */
     ssd1306_hline(0, 10, 128, true);
 
-    /* Row 12-20: Status (e.g. "Thinking...", "Tool: web_search") */
-    ssd1306_str(0, 12, status_copy);
+    /* Row 12-20: [channel] Status + msg count */
+    portENTER_CRITICAL(&s_mux);
+    char chan_copy[8];
+    strncpy(chan_copy, s_channel, sizeof(chan_copy) - 1);
+    chan_copy[sizeof(chan_copy) - 1] = '\0';
+    int msg_cnt = s_msg_count_today;
+    portEXIT_CRITICAL(&s_mux);
+
+    if (chan_copy[0]) {
+        char status_line[44];
+        snprintf(status_line, sizeof(status_line), "[%s] %s", chan_copy, status_copy);
+        ssd1306_str(0, 12, status_line);
+    } else {
+        ssd1306_str(0, 12, status_copy);
+    }
+    if (msg_cnt > 0) {
+        char cnt[12];
+        snprintf(cnt, sizeof(cnt), "#%d", msg_cnt);
+        int cx = 128 - (int)strlen(cnt) * 6;
+        if (cx > 0) ssd1306_str(cx, 12, cnt);
+    }
 
     /* Separator */
     ssd1306_hline(0, 22, 128, true);
@@ -351,6 +389,8 @@ void oled_display_set_provider(const char *info)
     portENTER_CRITICAL(&s_mux);
     strncpy(s_provider_info, info, sizeof(s_provider_info) - 1);
     s_provider_info[sizeof(s_provider_info) - 1] = '\0';
+    strncpy(s_rotate_lines[0], info, 21);
+    s_rotate_lines[0][21] = '\0';
     portEXIT_CRITICAL(&s_mux);
 }
 
@@ -368,6 +408,44 @@ void oled_display_set_ip(const char *ip)
     portENTER_CRITICAL(&s_mux);
     strncpy(s_ip_addr, ip, sizeof(s_ip_addr) - 1);
     s_ip_addr[sizeof(s_ip_addr) - 1] = '\0';
+    portEXIT_CRITICAL(&s_mux);
+}
+
+void oled_display_set_local_status(bool ollama_online, bool audio_online)
+{
+    portENTER_CRITICAL(&s_mux);
+    s_ollama_online = ollama_online;
+    s_audio_online  = audio_online;
+    portEXIT_CRITICAL(&s_mux);
+}
+
+void oled_display_set_channel(const char *channel)
+{
+    if (!channel) return;
+
+    /* Get day outside critical section (time/localtime may lock internally) */
+    time_t now = time(NULL);
+    struct tm tm_now;
+    localtime_r(&now, &tm_now);
+    int yday = tm_now.tm_yday;
+
+    portENTER_CRITICAL(&s_mux);
+    strncpy(s_channel, channel, sizeof(s_channel) - 1);
+    s_channel[sizeof(s_channel) - 1] = '\0';
+    if (yday != s_msg_count_yday) {
+        s_msg_count_today = 0;
+        s_msg_count_yday  = yday;
+    }
+    s_msg_count_today++;
+    portEXIT_CRITICAL(&s_mux);
+}
+
+void oled_display_set_rotate_line(int slot, const char *text)
+{
+    if (!text || slot < 0 || slot > 3) return;
+    portENTER_CRITICAL(&s_mux);
+    strncpy(s_rotate_lines[slot], text, 21);
+    s_rotate_lines[slot][21] = '\0';
     portEXIT_CRITICAL(&s_mux);
 }
 

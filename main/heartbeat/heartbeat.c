@@ -22,6 +22,7 @@
 #include "bus/message_bus.h"
 #include "gateway/ws_server.h"
 #include "memory/psram_alloc.h"
+#include "display/oled_display.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -278,6 +279,18 @@ static void heartbeat_task_main(void *arg)
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(MIMI_HEARTBEAT_INTERVAL_MS));
         heartbeat_send();
+
+        /* Push next daily task to OLED rotate slot 1 */
+        {
+            char next[64];
+            if (heartbeat_get_next_task(next, sizeof(next))) {
+                char line[22];
+                snprintf(line, sizeof(line), "Next:%.15s", next);
+                oled_display_set_rotate_line(1, line);
+            } else {
+                oled_display_set_rotate_line(1, "No tasks pending");
+            }
+        }
     }
 }
 
@@ -327,4 +340,87 @@ void heartbeat_stop(void)
 bool heartbeat_trigger(void)
 {
     return heartbeat_send();
+}
+
+int heartbeat_get_today_log(char *buf, size_t size)
+{
+    if (!buf || size == 0) return 0;
+    buf[0] = '\0';
+
+    hb_task_t *tasks = (hb_task_t *)ps_calloc(MAX_HB_TASKS, sizeof(hb_task_t));
+    if (!tasks) return 0;
+
+    int n = parse_tasks(tasks, MAX_HB_TASKS);
+    int count = 0;
+    int off = 0;
+    int daily_idx = 0;
+
+    for (int i = 0; i < n; i++) {
+        if (tasks[i].type != HB_DAILY) continue;
+        if (daily_idx < MAX_DAILY_TASKS && s_daily_fired[daily_idx]) {
+            char short_text[80];
+            strncpy(short_text, tasks[i].text, sizeof(short_text) - 1);
+            short_text[sizeof(short_text) - 1] = '\0';
+            char *nl = strchr(short_text, '\n');
+            if (nl) *nl = '\0';
+
+            off += snprintf(buf + off, size - off, "- %02d:%02d %s\n",
+                            tasks[i].hour, tasks[i].minute, short_text);
+            count++;
+        }
+        daily_idx++;
+    }
+
+    free(tasks);
+    return count;
+}
+
+bool heartbeat_get_next_task(char *buf, size_t size)
+{
+    if (!buf || size == 0) return false;
+    buf[0] = '\0';
+
+    hb_task_t *tasks = (hb_task_t *)ps_calloc(MAX_HB_TASKS, sizeof(hb_task_t));
+    if (!tasks) return false;
+
+    int n = parse_tasks(tasks, MAX_HB_TASKS);
+    if (n == 0) { free(tasks); return false; }
+
+    time_t now_t = time(NULL);
+    struct tm now;
+    localtime_r(&now_t, &now);
+    int now_mins = now.tm_hour * 60 + now.tm_min;
+
+    int best_diff = 24 * 60;
+    int best_idx  = -1;
+    int daily_idx = 0;
+
+    for (int i = 0; i < n; i++) {
+        if (tasks[i].type != HB_DAILY) continue;
+        int target_mins = tasks[i].hour * 60 + tasks[i].minute;
+        int diff = target_mins - now_mins;
+        if (diff < -20) diff += 24 * 60;
+        if (daily_idx < MAX_DAILY_TASKS && s_daily_fired[daily_idx])
+            diff += 24 * 60;
+        if (diff < best_diff) {
+            best_diff = diff;
+            best_idx  = i;
+        }
+        daily_idx++;
+    }
+
+    if (best_idx >= 0) {
+        char short_text[41];
+        strncpy(short_text, tasks[best_idx].text, 40);
+        short_text[40] = '\0';
+        char *nl = strchr(short_text, '\n');
+        if (nl) *nl = '\0';
+        snprintf(buf, size, "%02d:%02d %s",
+                 tasks[best_idx].hour, tasks[best_idx].minute, short_text);
+        free(tasks);
+        return true;
+    }
+
+    free(tasks);
+    return false;
 }

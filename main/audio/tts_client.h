@@ -60,3 +60,6 @@ void tts_set_local_model(const char *model);
 /** Set local TTS voice name (e.g. "af_heart", "af_sky", "am_adam").
  *  Defaults to "af_heart" if not set. */
 void tts_set_local_voice(const char *voice);
+
+/** Check if local TTS is configured and not in backoff. */
+bool tts_local_is_online(void);

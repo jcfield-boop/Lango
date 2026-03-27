@@ -83,8 +83,11 @@ void llm_set_local_text_model(const char *model);
 /** Get the text-only local model; falls back to local_model if not configured. */
 const char *llm_get_local_text_model(void);
 
-/** Check if the local Ollama instance is reachable (cached 60s). */
+/** Check if the local Ollama instance is reachable (cached 15s). May block. */
 bool llm_local_health_check(void);
+
+/** Return last cached health check result (non-blocking). */
+bool llm_local_is_online(void);
 
 /** Returns true if smart routing is possible (cloud global + local configured). */
 bool llm_smart_routing_available(void);

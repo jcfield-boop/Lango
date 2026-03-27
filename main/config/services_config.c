@@ -16,6 +16,14 @@ static const char *TAG = "services_cfg";
 #define LINE_MAX       256
 #define VALUE_MAX      192
 
+/* ── Webhook secret (stored in RAM, loaded from SERVICES.md) ─── */
+static char s_webhook_secret[128] = {0};
+
+const char *services_get_webhook_secret(void)
+{
+    return s_webhook_secret[0] ? s_webhook_secret : NULL;
+}
+
 /* ── Tiny key:value parser for Markdown-ish config ───────────── */
 
 /** Trim leading/trailing whitespace in-place. Returns trimmed start pointer. */
@@ -180,6 +188,14 @@ esp_err_t services_config_load(void)
                 ESP_LOGI(TAG, "Local TTS voice: %s", val);
                 keys_applied++;
             }
+
+        /* ── Webhooks ─────────────────────────────────────────── */
+        } else if (strstr(section, "webhook")) {
+            if (strcmp(key, "webhook_secret") == 0 || strcmp(key, "secret") == 0) {
+                strncpy(s_webhook_secret, val, sizeof(s_webhook_secret) - 1);
+                ESP_LOGI(TAG, "Webhook secret loaded (%d chars)", (int)strlen(val));
+                keys_applied++;
+            }
         }
 
         /* Email, Home Assistant, Klipper sections are already handled by
@@ -268,6 +284,13 @@ esp_err_t services_config_reload(void)
                 tts_set_local_model(val); keys_applied++;
             } else if (strcmp(key, "local_voice") == 0) {
                 tts_set_local_voice(val); keys_applied++;
+            }
+
+        /* ── Webhooks ─────────────────────────────────────────── */
+        } else if (strstr(section, "webhook")) {
+            if (strcmp(key, "webhook_secret") == 0 || strcmp(key, "secret") == 0) {
+                strncpy(s_webhook_secret, val, sizeof(s_webhook_secret) - 1);
+                keys_applied++;
             }
         }
     }

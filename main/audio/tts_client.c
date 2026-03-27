@@ -650,3 +650,8 @@ void tts_set_local_voice(const char *voice)
     s_local_voice[sizeof(s_local_voice) - 1] = '\0';
     ESP_LOGI(TAG, "Local TTS voice: %s", s_local_voice);
 }
+
+bool tts_local_is_online(void)
+{
+    return s_local_url[0] && !s_local_offline;
+}

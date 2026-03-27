@@ -12,3 +12,6 @@
  */
 esp_err_t services_config_load(void);    /* startup: apply only if NVS key not set */
 esp_err_t services_config_reload(void);  /* runtime: force-apply all values (overrides NVS) */
+
+/** Get the webhook HMAC secret from SERVICES.md. Returns NULL if not configured. */
+const char *services_get_webhook_secret(void);

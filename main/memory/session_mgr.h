@@ -50,6 +50,12 @@ cJSON *session_get_history_cjson(const char *chat_id, int max_msgs);
 esp_err_t session_trim(const char *chat_id, int max_msgs);
 
 /**
+ * Summarize messages about to be dropped, save summary to daily notes,
+ * then trim. Falls back to plain trim if local LLM is unavailable.
+ */
+esp_err_t session_summarize_before_trim(const char *chat_id, int max_msgs);
+
+/**
  * Clear a session (delete the file).
  */
 esp_err_t session_clear(const char *chat_id);

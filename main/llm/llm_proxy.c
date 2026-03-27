@@ -1701,6 +1701,11 @@ bool llm_local_health_check(void)
     return s_local_online;
 }
 
+bool llm_local_is_online(void)
+{
+    return s_local_online;
+}
+
 bool llm_smart_routing_available(void)
 {
     /* Smart routing is possible when: global provider is cloud-based AND local URL+model are configured */

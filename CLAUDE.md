@@ -235,6 +235,32 @@ L/R  → GND  (left channel)
 2. Add `"tools/tool_<name>.c"` to `main/CMakeLists.txt` SRCS.
 3. Register in `main/tools/tool_registry.c`: add schema JSON and a call to `tool_registry_register()`.
 
+## OLED Display (SSD1306 128×64)
+
+I2C at 0x3C on GPIO 9/10 (shared bus with camera SCCB + PCA9685). 1KB PSRAM framebuffer, 2Hz refresh task on Core 0.
+
+**Idle screen** (LED state: READY):
+- Row 0-15: Large HH:MM | abbreviated IP | `O+ A-` local service status (Ollama/mlx-audio)
+- Row 18: date | RSSI bars
+- Row 30: **Rotating info line** (5s cycle): provider → next heartbeat task → slot 2 → rate limit
+- Row 40-48: message preview or token counts + SRAM/PSRAM stats
+- Row 56: uptime
+
+**Active screen** (LED: THINKING/SPEAKING/LISTENING):
+- Row 0: provider/model
+- Row 12: `[WS] Thinking...  #14` — channel + status + daily message count
+- Row 24-40: message preview (3 lines)
+- Row 48: token counts
+- Row 56: RSSI + uptime
+
+**Thread-safe setter API** — any task pushes data, render task only reads static state:
+- `oled_display_set_local_status(ollama, audio)` — from agent_loop after health check
+- `oled_display_set_channel("WS")` — from agent_loop on message receive (also increments daily counter)
+- `oled_display_set_rotate_line(slot, text)` — slot 0 auto-set by set_provider, slot 1 from heartbeat, slot 3 rate limit
+- No cross-module function calls from the render task (prevents init-order crashes + stack issues)
+
+Files: `main/display/oled_display.h/.c` (API + render), `main/display/ssd1306.h/.c` (I2C driver)
+
 ## Key Files
 
 | File | Purpose |

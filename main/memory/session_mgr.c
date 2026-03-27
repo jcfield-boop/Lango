@@ -1,6 +1,8 @@
 #include "session_mgr.h"
 #include "langoustine_config.h"
 #include "memory/psram_alloc.h"
+#include "memory/memory_store.h"
+#include "llm/llm_proxy.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -269,6 +271,92 @@ esp_err_t session_trim(const char *chat_id, int max_msgs)
     }
 
     return ESP_OK;
+}
+
+esp_err_t session_summarize_before_trim(const char *chat_id, int max_msgs)
+{
+    if (max_msgs <= 0) max_msgs = LANG_SESSION_MAX_MSGS;
+
+    cache_ensure(chat_id);
+    int total = cJSON_GetArraySize(s_cache_arr);
+    int to_drop = total - max_msgs;
+
+    /* Nothing to drop, or only a few messages — not worth summarizing */
+    if (to_drop <= 2) return session_trim(chat_id, max_msgs);
+
+    /* Check local LLM availability — skip summarization if down */
+    if (!llm_local_health_check()) {
+        ESP_LOGW(TAG, "Local LLM unavailable — skipping session summary for %s", chat_id);
+        return session_trim(chat_id, max_msgs);
+    }
+
+    /* Build conversation excerpt from messages about to be dropped.
+     * Cap at ~2KB to keep the summarization prompt small. */
+    char *excerpt = ps_calloc(1, 2048);
+    if (!excerpt) return session_trim(chat_id, max_msgs);
+
+    int off = 0;
+    for (int i = 0; i < to_drop && off < 1900; i++) {
+        const cJSON *msg = cJSON_GetArrayItem(s_cache_arr, i);
+        const cJSON *role    = cJSON_GetObjectItemCaseSensitive(msg, "role");
+        const cJSON *content = cJSON_GetObjectItemCaseSensitive(msg, "content");
+        if (!role || !content) continue;
+        off += snprintf(excerpt + off, 2048 - off, "%s: %.300s\n",
+                        role->valuestring, content->valuestring);
+    }
+
+    if (off == 0) {
+        free(excerpt);
+        return session_trim(chat_id, max_msgs);
+    }
+
+    /* Build summarization prompt */
+    cJSON *sum_msgs = cJSON_CreateArray();
+    cJSON *sum_msg  = cJSON_CreateObject();
+    cJSON_AddStringToObject(sum_msg, "role", "user");
+
+    char *prompt = ps_calloc(1, 2560);
+    if (!prompt) {
+        free(excerpt);
+        cJSON_Delete(sum_msgs);
+        return session_trim(chat_id, max_msgs);
+    }
+    snprintf(prompt, 2560,
+        "Summarise these conversation messages in 2-3 concise sentences. "
+        "Focus on key facts, decisions, and preferences expressed. "
+        "Do not include greetings or filler.\n\n%s", excerpt);
+    cJSON_AddStringToObject(sum_msg, "content", prompt);
+    cJSON_AddItemToArray(sum_msgs, sum_msg);
+
+    /* Call local LLM */
+    llm_set_request_override("ollama", llm_get_local_text_model());
+    llm_response_t resp;
+    memset(&resp, 0, sizeof(resp));
+    esp_err_t err = llm_chat_tools(
+        "You extract key information from conversations into brief summaries.",
+        sum_msgs, NULL, false, &resp);
+
+    if (err == ESP_OK && resp.text && resp.text[0]) {
+        /* Prepend chat_id context and save to daily notes */
+        char *note = ps_calloc(1, 1024);
+        if (note) {
+            snprintf(note, 1024, "[Session %s summary] %s", chat_id, resp.text);
+            memory_append_today(note);
+            ESP_LOGI(TAG, "Session %s: saved summary (%d dropped msgs)", chat_id, to_drop);
+            free(note);
+        }
+    } else {
+        ESP_LOGW(TAG, "Session summary LLM call failed for %s: %s",
+                 chat_id, esp_err_to_name(err));
+    }
+
+    llm_response_free(&resp);
+    llm_clear_request_override();
+    cJSON_Delete(sum_msgs);
+    free(prompt);
+    free(excerpt);
+
+    return session_trim(chat_id, max_msgs);
 }
 
 esp_err_t session_clear(const char *chat_id)

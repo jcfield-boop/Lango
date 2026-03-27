@@ -21,12 +21,14 @@
 #include <stdlib.h>
 #include <dirent.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <time.h>
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_timer.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
+#include "mbedtls/md.h"
 #include "esp_littlefs.h"
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
@@ -68,6 +70,39 @@ static ws_client_t s_clients[LANG_WS_MAX_CLIENTS];
 static SemaphoreHandle_t s_clients_lock;  /* SRAM mutex — protects s_clients[] */
 static SemaphoreHandle_t s_send_lock;     /* SRAM mutex — serializes httpd_ws_send_frame_async calls */
 static esp_err_t send_frame_locked(int fd, httpd_ws_frame_t *frame); /* forward decl */
+
+/* ── PSRAM monitor event ring (16KB) — persists across WS disconnects ── */
+#define MONITOR_RING_SIZE  (16 * 1024)
+static char   *s_monitor_ring = NULL;
+static size_t  s_monitor_head = 0;
+static size_t  s_monitor_fill = 0;
+
+static void monitor_ring_append(const char *line, size_t len)
+{
+    if (!s_monitor_ring || len == 0) return;
+    for (size_t i = 0; i < len; i++) {
+        s_monitor_ring[s_monitor_head] = line[i];
+        s_monitor_head = (s_monitor_head + 1) % MONITOR_RING_SIZE;
+    }
+    /* Newline separator */
+    s_monitor_ring[s_monitor_head] = '\n';
+    s_monitor_head = (s_monitor_head + 1) % MONITOR_RING_SIZE;
+    s_monitor_fill += len + 1;
+    if (s_monitor_fill > MONITOR_RING_SIZE) s_monitor_fill = MONITOR_RING_SIZE;
+}
+
+static void monitor_ring_get(char *out, size_t max_len)
+{
+    if (!out || max_len == 0) return;
+    out[0] = '\0';
+    if (!s_monitor_ring || s_monitor_fill == 0) return;
+    size_t start = (s_monitor_fill < MONITOR_RING_SIZE) ? 0 : s_monitor_head;
+    size_t copy  = (s_monitor_fill < max_len - 1) ? s_monitor_fill : max_len - 1;
+    for (size_t i = 0; i < copy; i++) {
+        out[i] = s_monitor_ring[(start + i) % MONITOR_RING_SIZE];
+    }
+    out[copy] = '\0';
+}
 
 static ws_client_t *find_client_by_fd(int fd)
 {
@@ -732,6 +767,7 @@ static const char *name_to_path(const char *name)
     if (name && strcmp(name, "cron")          == 0) return "/lfs/cron.json";
     if (name && strcmp(name, "console-index") == 0) return "/lfs/console/index.html";
     if (name && strcmp(name, "console-dev")   == 0) return "/lfs/console/dev.html";
+    if (name && strcmp(name, "quickactions")  == 0) return "/lfs/config/quickactions.json";
     if (name && strcmp(name, "crashlog")      == 0) return "/lfs/memory/crashlog.md";
     return NULL;
 }
@@ -742,16 +778,28 @@ static esp_err_t file_get_handler(httpd_req_t *req)
 {
     if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
 
-    char query[32] = {0};
-    char name[16]  = {0};
+    char query[128] = {0};
+    char name[16]   = {0};
+    char raw_path[96] = {0};
 
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
         httpd_query_key_value(query, "name", name, sizeof(name));
+        httpd_query_key_value(query, "path", raw_path, sizeof(raw_path));
     }
 
     const char *path = name_to_path(name);
+
+    /* Fallback: if name lookup failed, accept an explicit /lfs/ path */
+    if (!path && raw_path[0]) {
+        if (strncmp(raw_path, "/lfs/", 5) != 0 || strstr(raw_path, "..")) {
+            httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Path not allowed");
+            return ESP_OK;
+        }
+        path = raw_path;
+    }
+
     if (!path) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unknown file name");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unknown file name or path");
         return ESP_OK;
     }
 
@@ -779,16 +827,39 @@ static esp_err_t file_post_handler(httpd_req_t *req)
 {
     if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
 
-    char query[32] = {0};
-    char name[16]  = {0};
+    char query[128] = {0};
+    char name[16]   = {0};
+    char raw_path[96] = {0};
 
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
         httpd_query_key_value(query, "name", name, sizeof(name));
+        httpd_query_key_value(query, "path", raw_path, sizeof(raw_path));
     }
 
     const char *path = name_to_path(name);
+
+    /* Fallback: if name lookup failed, accept an explicit /lfs/ path */
+    if (!path && raw_path[0]) {
+        /* Security: must start with /lfs/, no ".." traversal, block /lfs/sessions/ */
+        if (strncmp(raw_path, "/lfs/", 5) != 0 || strstr(raw_path, "..") ||
+            strncmp(raw_path, "/lfs/sessions/", 14) == 0) {
+            httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Path not allowed");
+            return ESP_OK;
+        }
+        /* Auto-create parent directory (LittleFS single-level) */
+        char dir[96];
+        strncpy(dir, raw_path, sizeof(dir) - 1);
+        dir[sizeof(dir) - 1] = '\0';
+        char *slash = strrchr(dir, '/');
+        if (slash && slash != dir) {
+            *slash = '\0';
+            mkdir(dir, 0755);
+        }
+        path = raw_path;
+    }
+
     if (!path) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unknown file name");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unknown file name or path");
         return ESP_OK;
     }
 
@@ -1508,13 +1579,29 @@ static esp_err_t logs_handler(httpd_req_t *req)
 {
     if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
 
-    char *buf = ps_malloc(LOG_RING_SIZE + 64);
-    if (!buf) { httpd_resp_send_500(req); return ESP_OK; }
-    log_buffer_get(buf, LOG_RING_SIZE + 64);
+    /* Check for ?type=monitor to return the PSRAM monitor ring */
+    char query[32] = {0};
+    char type[16]  = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        httpd_query_key_value(query, "type", type, sizeof(type));
+    }
+
     httpd_resp_set_type(req, "text/plain");
     apply_cors(req);
-    httpd_resp_sendstr(req, buf);
-    free(buf);
+
+    if (strcmp(type, "monitor") == 0) {
+        char *buf = ps_malloc(MONITOR_RING_SIZE + 64);
+        if (!buf) { httpd_resp_send_500(req); return ESP_OK; }
+        monitor_ring_get(buf, MONITOR_RING_SIZE + 64);
+        httpd_resp_sendstr(req, buf);
+        free(buf);
+    } else {
+        char *buf = ps_malloc(LOG_RING_SIZE + 64);
+        if (!buf) { httpd_resp_send_500(req); return ESP_OK; }
+        log_buffer_get(buf, LOG_RING_SIZE + 64);
+        httpd_resp_sendstr(req, buf);
+        free(buf);
+    }
     return ESP_OK;
 }
 
@@ -1630,10 +1717,42 @@ static esp_err_t speaker_test_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── HMAC-SHA256 verification for webhooks ─────────────────── */
+
+static bool verify_webhook_hmac(const char *body, size_t body_len, const char *sig_header)
+{
+    const char *secret = services_get_webhook_secret();
+    if (!secret) return false;
+
+    /* Header format: "sha256=<hex>" */
+    if (strncmp(sig_header, "sha256=", 7) != 0) return false;
+    const char *expected_hex = sig_header + 7;
+    if (strlen(expected_hex) != 64) return false;
+
+    /* Compute HMAC-SHA256 */
+    unsigned char hmac[32];
+    mbedtls_md_context_t ctx;
+    mbedtls_md_init(&ctx);
+    const mbedtls_md_info_t *md_info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    mbedtls_md_setup(&ctx, md_info, 1);
+    mbedtls_md_hmac_starts(&ctx, (const unsigned char *)secret, strlen(secret));
+    mbedtls_md_hmac_update(&ctx, (const unsigned char *)body, body_len);
+    mbedtls_md_hmac_finish(&ctx, hmac);
+    mbedtls_md_free(&ctx);
+
+    /* Compare as hex */
+    char computed_hex[65];
+    for (int i = 0; i < 32; i++) {
+        sprintf(computed_hex + i * 2, "%02x", hmac[i]);
+    }
+    computed_hex[64] = '\0';
+
+    return (memcmp(computed_hex, expected_hex, 64) == 0);
+}
+
 static esp_err_t message_post_handler(httpd_req_t *req)
 {
-    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
-
+    /* Read body first — needed for both HMAC verification and JSON parsing */
     #define MSG_BODY_MAX 8192
     char *body = ps_malloc(MSG_BODY_MAX);
     if (!body) { httpd_resp_send_500(req); return ESP_OK; }
@@ -1645,6 +1764,27 @@ static esp_err_t message_post_handler(httpd_req_t *req)
     if (rcv <= 0) {
         free(body);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body");
+        return ESP_OK;
+    }
+
+    /* Auth: Bearer token OR webhook HMAC signature */
+    bool authed = request_is_authed(req);
+    if (!authed) {
+        /* Check for webhook HMAC signature */
+        char sig_hdr[128] = {0};
+        if (httpd_req_get_hdr_value_str(req, "X-Hub-Signature-256", sig_hdr, sizeof(sig_hdr)) == ESP_OK) {
+            authed = verify_webhook_hmac(body, (size_t)rcv, sig_hdr);
+            if (authed) {
+                ESP_LOGI(TAG, "/api/message: webhook HMAC verified");
+            } else {
+                ESP_LOGW(TAG, "/api/message: webhook HMAC invalid");
+            }
+        }
+    }
+
+    if (!authed) {
+        free(body);
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
         return ESP_OK;
     }
 
@@ -1662,23 +1802,38 @@ static esp_err_t message_post_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    cJSON *jchan = cJSON_GetObjectItem(root, "channel");
-    cJSON *jchat = cJSON_GetObjectItem(root, "chat_id");
+    cJSON *jchan   = cJSON_GetObjectItem(root, "channel");
+    cJSON *jchat   = cJSON_GetObjectItem(root, "chat_id");
+    cJSON *jaction = cJSON_GetObjectItem(root, "action");
     const char *channel = (cJSON_IsString(jchan) && jchan->valuestring[0])
                           ? jchan->valuestring : LANG_CHAN_SYSTEM;
     const char *chat_id = (cJSON_IsString(jchat) && jchat->valuestring[0])
                           ? jchat->valuestring : "api";
 
-    lang_msg_t msg = {0};
-    strncpy(msg.channel, channel, sizeof(msg.channel) - 1);
-    strncpy(msg.chat_id, chat_id, sizeof(msg.chat_id) - 1);
-    msg.content = strdup(jmsg->valuestring);
+    /* Build message content — optionally prefixed with action/skill directive */
+    char *content = NULL;
+    if (cJSON_IsString(jaction) && jaction->valuestring[0]) {
+        size_t len = strlen(jaction->valuestring) + strlen(jmsg->valuestring) + 64;
+        content = malloc(len);
+        if (content) {
+            snprintf(content, len, "Run the %s skill: %s",
+                     jaction->valuestring, jmsg->valuestring);
+        }
+    }
+    if (!content) {
+        content = strdup(jmsg->valuestring);
+    }
     cJSON_Delete(root);
 
-    if (!msg.content) {
+    if (!content) {
         httpd_resp_send_500(req);
         return ESP_OK;
     }
+
+    lang_msg_t msg = {0};
+    strncpy(msg.channel, channel, sizeof(msg.channel) - 1);
+    strncpy(msg.chat_id, chat_id, sizeof(msg.chat_id) - 1);
+    msg.content = content;
 
     if (message_bus_push_inbound(&msg) != ESP_OK) {
         free(msg.content);
@@ -1764,6 +1919,14 @@ esp_err_t ws_server_start(void)
         return ESP_ERR_NO_MEM;
     }
     memset(s_clients, 0, sizeof(s_clients));
+
+    /* Allocate PSRAM monitor ring for persistent diagnostics */
+    if (!s_monitor_ring) {
+        s_monitor_ring = ps_calloc(1, MONITOR_RING_SIZE);
+        if (s_monitor_ring) {
+            ESP_LOGI(TAG, "Monitor ring: %dKB PSRAM allocated", MONITOR_RING_SIZE / 1024);
+        }
+    }
 
     {
         nvs_handle_t nvs;
@@ -2040,6 +2203,18 @@ esp_err_t ws_server_send_with_tts(const char *chat_id, const char *text,
 
 esp_err_t ws_server_broadcast_monitor(const char *event, const char *msg_text)
 {
+    /* Append to PSRAM monitor ring (persists even without WS clients) */
+    {
+        time_t now = time(NULL);
+        struct tm tm;
+        localtime_r(&now, &tm);
+        char line[320];
+        int n = snprintf(line, sizeof(line), "%02d:%02d:%02d[%s] %s",
+                         tm.tm_hour, tm.tm_min, tm.tm_sec,
+                         event ? event : "", msg_text ? msg_text : "");
+        if (n > 0) monitor_ring_append(line, (size_t)n);
+    }
+
     if (!s_server) return ESP_ERR_INVALID_STATE;
 
     cJSON *j = cJSON_CreateObject();
