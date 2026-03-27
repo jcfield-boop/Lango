@@ -514,6 +514,14 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 
 ## Changelog
 
+### 2026-03-26 — Local tool-calling fallback, HA skill, volume boost, Klipper quick action
+
+- **Three-tier local LLM fallback** (`main/agent/agent_loop.c`) — When the local text model (e.g. `gemma3:12b`) returns HTTP 400 because it doesn't support tool calling, the agent automatically retries with the primary local model (e.g. `qwen3-vl:8b` or `qwen3:8b`) which does. Only falls to cloud if both local models fail. This means fast text models can still be used for simple Q&A while tool-needing queries transparently escalate.
+- **Home Assistant skill** (`littlefs_data/skills/home-assistant.md`) — New agent skill teaching entity discovery, bulk light control (`entity_id: "all"`), and common service call patterns for lights, switches, and climate.
+- **Klipper quick action** — Added "Print Status" card to the web dashboard quick actions grid; taps the klipper-monitor skill to show printer state, progress, temperatures, and time remaining.
+- **Default volume 255** — Software volume bumped from 220/255 (86%) to 255/255 (100%). Hardware GAIN remains at 3 dB (GND). Can be further boosted by floating the MAX98357A GAIN pin (+9 dB).
+- **Available Kokoro voices** — Tested on mlx-audio: `af_heart`, `af_sky`, `af_bella`, `am_adam`, `am_michael`, `bf_emma`, `bm_george` all confirmed working. Set via `local_voice:` in SERVICES.md.
+
 ### 2026-03-26 — MCP server, quick actions dashboard
 
 - **MCP server** (`main/mcp/mcp_server.c`) — JSON-RPC 2.0 endpoint at `POST /mcp` implementing the Model Context Protocol (2024-11-05). Supports `initialize`, `tools/list`, and `tools/call` methods. All 33 registered agent tools are automatically exposed with their JSON schemas — no per-tool MCP glue needed. Any MCP client (Claude Desktop, Cursor, etc.) can connect and invoke tools directly on the device. Tool output buffer: 16 KB from PSRAM.
