@@ -544,6 +544,10 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
                 s = (s * (int32_t)(fade_samples - pos)) / (int32_t)fade_samples;
             }
 
+            /* Clamp to 16-bit range — prevents wrap-around distortion
+             * when hot TTS output × volume exceeds ±32767. */
+            if (s > 32767)  s = 32767;
+            if (s < -32768) s = -32768;
             vol_buf[i] = (int16_t)s;
         }
         sample_offset += (uint32_t)chunk_samples;

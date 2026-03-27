@@ -1586,9 +1586,14 @@ static esp_err_t say_post_handler(httpd_req_t *req)
              (int)(strlen(text) > 60 ? 60 : strlen(text)), text,
              strlen(text) > 60 ? "..." : "");
 
-    /* Spawn task with 16KB SRAM stack (enough for TLS handshake) */
+    /* Spawn task: 8KB for local HTTP TTS, 16KB if cloud TLS needed.
+     * Try 8KB first (covers plain-HTTP mlx-audio), fall back to 16KB. */
     BaseType_t ok = xTaskCreatePinnedToCore(
-        say_async_task, "say", 16 * 1024, text, 5, NULL, 0);
+        say_async_task, "say", 8 * 1024, text, 5, NULL, 0);
+    if (ok != pdPASS) {
+        ok = xTaskCreatePinnedToCore(
+            say_async_task, "say", 16 * 1024, text, 5, NULL, 0);
+    }
     if (ok != pdPASS) {
         free(text);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Task create failed");
