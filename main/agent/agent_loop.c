@@ -571,6 +571,7 @@ static void agent_loop_task(void *arg)
         bool retry_done = false;
         bool oom_restart = false;
         bool capture_image_called = false;
+        bool say_tool_used = false;
         esp_err_t last_err = ESP_OK;
         bool is_telegram = (strcmp(msg.channel, LANG_CHAN_TELEGRAM) == 0);
         int32_t tg_placeholder_id = -1;
@@ -865,6 +866,23 @@ static void agent_loop_task(void *arg)
                 }
             }
 
+            /* Check if say tool was called — it plays audio immediately,
+             * so we should exit the loop and skip final TTS generation. */
+            for (int ci = 0; ci < resp.call_count; ci++) {
+                if (strcmp(resp.calls[ci].name, "say") == 0) {
+                    say_tool_used = true;
+                    /* Extract spoken text for browser display */
+                    cJSON *inp = cJSON_Parse(resp.calls[ci].input);
+                    if (inp) {
+                        cJSON *t = cJSON_GetObjectItemCaseSensitive(inp, "text");
+                        if (cJSON_IsString(t) && t->valuestring[0])
+                            final_text = strdup(t->valuestring);
+                        cJSON_Delete(inp);
+                    }
+                    break;
+                }
+            }
+
             cJSON *tool_results = build_tool_results(&resp, &msg, tool_output, TOOL_OUTPUT_SIZE);
 
             if (capture_image_called) {
@@ -877,6 +895,14 @@ static void agent_loop_task(void *arg)
             cJSON_AddItemToArray(messages, result_msg);
 
             llm_response_free(&resp);
+
+            /* say tool already completed the action — don't call LLM again */
+            if (say_tool_used) {
+                ESP_LOGI(TAG, "say tool used — skipping further LLM iterations");
+                ws_server_broadcast_monitor("tool", "say tool used — skipping final TTS");
+                break;
+            }
+
             iteration++;
         }
 
@@ -995,6 +1021,11 @@ static void agent_loop_task(void *arg)
                         final_text = NULL;
                     }
                 }
+            } else if (say_tool_used) {
+                /* say tool already played audio through the speaker —
+                 * send text to browser for display but skip TTS generation. */
+                ESP_LOGI(TAG, "say tool already spoke — sending text-only to browser");
+                ws_server_send_with_tts(msg.chat_id, final_text, NULL, NULL);
             } else if (strcmp(msg.channel, LANG_CHAN_SYSTEM) == 0) {
                 /* System/heartbeat: skip TTS entirely — just deliver text.
                  * TTS + I2S playback causes brownout resets from amp current. */

@@ -55,8 +55,8 @@ static const char *TAG = "wake_word";
 #define WW_MAX_RECORD_MS        8000
 
 /* Default tuning values (can be overridden via NVS) */
-#define WW_DEFAULT_GAIN       3.0f
-#define WW_DEFAULT_THRESHOLD  0.85f
+#define WW_DEFAULT_GAIN       4.0f    /* 10.0 clipped signal; 3.0 too low; 4.0 balanced */
+#define WW_DEFAULT_THRESHOLD  0.50f   /* was 0.85 — more sensitive for room-distance use */
 #define WW_AFE_GAIN           1.0f   /* AFE's own gain — keep at 1.0, we apply software gain */
 
 /* NVS namespace and keys for persistent wake word config */
@@ -224,18 +224,18 @@ static void feed_task(void *arg)
          * starves IDLE0 and triggers the task watchdog. */
         vTaskDelay(1);
 
-        /* Periodic diagnostic every 10 s (verbose only) */
+        /* Periodic diagnostic every 30s — visible at INFO level so we can
+         * confirm the AFE pipeline is alive without enabling verbose logs. */
         TickType_t now = xTaskGetTickCount();
-        if ((now - last_diag) > pdMS_TO_TICKS(10000)) {
+        if ((now - last_diag) > pdMS_TO_TICKS(30000)) {
             int32_t dc_offset = sum_count ? (sum_val / (int32_t)sum_count) : 0;
-            ESP_LOGD(TAG, "Feed diag: %"PRIu32" feeds, %"PRIu32" fails, "
-                     "min=%d max=%d dc=%"PRId32" gain=%.1f",
+            ESP_LOGI(TAG, "Feed: %"PRIu32" ok, %"PRIu32" fail, peak=[%d,%d] dc=%"PRId32" gain=%.1f",
                      feed_count, fail_count,
                      (int)min_val, (int)peak_val, dc_offset,
                      (double)s_sw_gain);
 
             if (first_diag && total_samples >= 16) {
-                ESP_LOGD(TAG, "Raw samples[0..15]: %d %d %d %d %d %d %d %d "
+                ESP_LOGI(TAG, "Raw samples[0..15]: %d %d %d %d %d %d %d %d "
                          "%d %d %d %d %d %d %d %d",
                          buf[0], buf[1], buf[2], buf[3],
                          buf[4], buf[5], buf[6], buf[7],
@@ -251,7 +251,6 @@ static void feed_task(void *arg)
                      feed_count, fail_count,
                      (int)min_val, (int)peak_val, dc_offset,
                      (double)s_sw_gain);
-            /* ww_feed diag kept in ESP_LOGD only — too noisy for web UI */
             feed_count = 0;
             fail_count = 0;
             peak_val   = 0;
@@ -346,19 +345,15 @@ static void detect_task(void *arg)
         /* Periodic detect diagnostic every 10 s (verbose only) */
         {
             TickType_t now_d = xTaskGetTickCount();
-            if ((now_d - last_detect_diag) > pdMS_TO_TICKS(10000)) {
-                ESP_LOGD(TAG, "Detect diag: %"PRIu32" fetches, %"PRIu32" speech frames, "
-                         "wakeup=%d, recording=%d, vol=%.0fdB",
+            if ((now_d - last_detect_diag) > pdMS_TO_TICKS(30000)) {
+                ESP_LOGI(TAG, "Detect: %"PRIu32" fetches, %"PRIu32" speech, vol=%.0fdB rec=%d",
                          detect_count, speech_frames,
-                         (int)res->wakeup_state, (int)recording,
-                         res->data_volume);
+                         res->data_volume, (int)recording);
                 char diag[140];
                 snprintf(diag, sizeof(diag),
-                         "fetches=%"PRIu32" speech=%"PRIu32" wakeup=%d rec=%d vol=%.0fdB",
+                         "fetches=%"PRIu32" speech=%"PRIu32" rec=%d vol=%.0fdB",
                          detect_count, speech_frames,
-                         (int)res->wakeup_state, (int)recording,
-                         res->data_volume);
-                /* ww_detect diag kept in ESP_LOGD only — too noisy for web UI */
+                         (int)recording, res->data_volume);
                 detect_count     = 0;
                 speech_frames    = 0;
                 last_detect_diag = now_d;
@@ -447,10 +442,25 @@ static void detect_task(void *arg)
 
 esp_err_t wake_word_init(void)
 {
-    /* Load runtime-tunable params from NVS (or use defaults) */
+    /* Load runtime-tunable params from NVS (or use defaults).
+     * Override stale NVS values that are less sensitive than the new defaults
+     * (old defaults were gain=3.0, threshold=0.85 which were too conservative). */
     s_sw_gain      = ww_nvs_load_float(WW_NVS_KEY_GAIN,  WW_DEFAULT_GAIN);
     s_wn_threshold = ww_nvs_load_float(WW_NVS_KEY_THRESH, WW_DEFAULT_THRESHOLD);
-    ESP_LOGI(TAG, "WW config: sw_gain=%.2f threshold=%.3f (from NVS or default)",
+    /* Force default gain if NVS value is stale (too low or clipping-high) */
+    if (s_sw_gain < WW_DEFAULT_GAIN || s_sw_gain > 8.0f) {
+        ESP_LOGW(TAG, "NVS gain %.1f out of range — resetting to %.1f",
+                 (double)s_sw_gain, (double)WW_DEFAULT_GAIN);
+        s_sw_gain = WW_DEFAULT_GAIN;
+        ww_nvs_save_float(WW_NVS_KEY_GAIN, s_sw_gain);
+    }
+    if (s_wn_threshold > WW_DEFAULT_THRESHOLD) {
+        ESP_LOGW(TAG, "NVS threshold %.3f > default %.3f — upgrading",
+                 (double)s_wn_threshold, (double)WW_DEFAULT_THRESHOLD);
+        s_wn_threshold = WW_DEFAULT_THRESHOLD;
+        ww_nvs_save_float(WW_NVS_KEY_THRESH, s_wn_threshold);
+    }
+    ESP_LOGI(TAG, "WW config: sw_gain=%.2f threshold=%.3f",
              (double)s_sw_gain, (double)s_wn_threshold);
 
     /* Load models from the "model" flash partition (must exist in partitions CSV) */
@@ -468,6 +478,12 @@ esp_err_t wake_word_init(void)
     if (!cfg) {
         ESP_LOGE(TAG, "afe_config_init failed");
         return ESP_FAIL;
+    }
+
+    /* Force WakeNet on — AFE_MODE_LOW_COST may disable it in some ESP-SR versions */
+    if (!cfg->wakenet_init) {
+        ESP_LOGW(TAG, "WakeNet was disabled by afe_config_init — forcing on");
+        cfg->wakenet_init = true;
     }
 
     /* Keep AFE's own gain at 1.0 — we apply software gain in feed_task
