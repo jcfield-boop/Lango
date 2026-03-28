@@ -19,10 +19,22 @@ CONFIG_SPIRAM_SIZE=16777216
 # PSRAM as the primary heap and keeps ~512KB SRAM free for the things
 # that genuinely require fast/DMA-capable memory.
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
-# Reserve 256KB internal SRAM for DMA-capable allocations (WiFi, I2S,
-# USB) and FreeRTOS objects even when PSRAM is the default heap.
-CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=262144
+# Reserve 128KB internal SRAM for DMA-capable allocations (I2S, USB)
+# and FreeRTOS task stacks. Reduced from 256KB because WiFi/lwIP now
+# allocates from PSRAM (SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y).
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=131072
 CONFIG_SPIRAM_MEMTEST=n
+
+# Execute code + read-only data from PSRAM (copied from flash at boot).
+# OPI PSRAM is ~7x faster than quad flash (150 vs 20 MB/s), and crucially
+# code execution is NOT interrupted during flash write operations (NVS,
+# OTA, LittleFS saves). Costs ~500ms boot time and ~1-2MB PSRAM.
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+
+# WiFi/lwIP: allocate RX/TX buffers from PSRAM instead of SRAM.
+# Frees ~25-50KB internal SRAM for task stacks and DMA.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
 # MbedTLS: use PSRAM for TLS buffers + smaller output buffer
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y

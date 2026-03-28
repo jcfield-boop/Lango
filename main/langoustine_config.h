@@ -44,7 +44,7 @@
 #define LANG_WIFI_RETRY_MAX_MS       30000
 
 /* Agent Loop */
-#define LANG_AGENT_STACK             (40 * 1024)
+#define LANG_AGENT_STACK             (28 * 1024)
 #define LANG_AGENT_PRIO              6
 #define LANG_AGENT_CORE              1
 #define LANG_AGENT_MAX_HISTORY       60

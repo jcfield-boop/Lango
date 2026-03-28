@@ -500,13 +500,15 @@ void app_main(void)
                 LANG_OUTBOUND_PRIO, NULL, 0) == pdPASS)
                 ? ESP_OK : ESP_FAIL);
 
-            /* Start network-dependent services */
+            /* Start network-dependent services.
+             * WS server first (small stack) before agent (large stack) to
+             * avoid SRAM fragmentation preventing allocation of either. */
+            ESP_ERROR_CHECK(ws_server_start());
             ESP_ERROR_CHECK(agent_loop_start());
             ESP_ERROR_CHECK(telegram_bot_start());
             cron_service_start();
             heartbeat_start();
             rule_engine_start();
-            ESP_ERROR_CHECK(ws_server_start());
 
             /* All services up — mark OTA slot valid so rollback is cancelled.
              * Doing this here (after WiFi + services) means a firmware that
