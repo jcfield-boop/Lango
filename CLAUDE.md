@@ -253,7 +253,7 @@ L/R  → GND  (left channel)
 
 ## Adding a New Tool
 
-1. Create `main/tools/tool_<name>.c` and `.h` following the pattern of any existing tool (e.g. `tool_get_time.c`): implement `tool_<name>_execute(input_json, output, output_size)`.
+1. Create `main/tools/tool_<name>.c` and `.h` following the pattern of any existing tool (e.g. `tool_weather.c`): implement `tool_<name>_execute(input_json, output, output_size)`.
 2. Add `"tools/tool_<name>.c"` to `main/CMakeLists.txt` SRCS.
 3. Register in `main/tools/tool_registry.c`: add schema JSON and a call to `tool_registry_register()`.
 
