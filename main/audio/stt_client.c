@@ -412,7 +412,7 @@ esp_err_t stt_client_init(void)
     if (!s_session.valid) {
         esp_err_t err = http_session_init(&s_session, s_endpoint,
                                           http_event_cb,
-                                          20 * 1000, 4096, 4096);
+                                          10 * 1000, 4096, 4096);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "STT http_session_init failed: %s", esp_err_to_name(err));
         }
@@ -487,7 +487,7 @@ esp_err_t stt_transcribe(const uint8_t *audio, size_t audio_len,
     /* Reuse persistent session (lazy init fallback if init was skipped) */
     if (!s_session.valid) {
         http_session_init(&s_session, s_endpoint, http_event_cb,
-                          20 * 1000, 4096, 4096);
+                          10 * 1000, 4096, 4096);
     }
     if (!s_session.valid) {
         free(body);
@@ -522,6 +522,7 @@ esp_err_t stt_transcribe(const uint8_t *audio, size_t audio_len,
             rb.len = 0;  /* reset response buffer for retry */
             if (rb.data) rb.data[0] = '\0';
             ret = esp_http_client_perform(s_session.handle);
+            ESP_LOGI(TAG, "STT cloud retry: %s", esp_err_to_name(ret));
         }
     }
 
@@ -531,6 +532,11 @@ esp_err_t stt_transcribe(const uint8_t *audio, size_t audio_len,
 
     if (ret != ESP_OK) {
         snprintf(out->error, sizeof(out->error), "HTTP error: %s", esp_err_to_name(ret));
+        {
+            char emsg[80];
+            snprintf(emsg, sizeof(emsg), "STT cloud failed after retry: %s", esp_err_to_name(ret));
+            ws_server_broadcast_monitor("stt", emsg);
+        }
         free(rb.data);
         return ret;
     }
