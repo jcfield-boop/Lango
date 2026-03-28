@@ -613,8 +613,9 @@ static void agent_loop_task(void *arg)
         bool is_voice           = (strcmp(msg.chat_id, "ptt") == 0);
 
         if (is_voice && llm_voice_routing_available()) {
-            /* Voice → dedicated fast cloud model */
+            /* Voice → dedicated fast cloud model, tight token limit */
             llm_set_request_override(llm_get_voice_provider(), llm_get_voice_model());
+            llm_set_voice_max_tokens(400);
             using_voice_cloud = true;
             {
                 char route_msg[64];
@@ -722,10 +723,14 @@ static void agent_loop_task(void *arg)
                                            ws_stream_progress, &stream_ctx,
                                            &resp);
 
-            if (err == ESP_ERR_HTTP_CONNECT && !retry_done) {
+            if (err != ESP_OK && !retry_done) {
                 retry_done = true;
-                ws_server_broadcast_monitor("error", "LLM: connection failed, retrying in 2s...");
-                vTaskDelay(pdMS_TO_TICKS(2000));
+                {
+                    char rmsg[80];
+                    snprintf(rmsg, sizeof(rmsg), "LLM: %s — retrying in 1s...", esp_err_to_name(err));
+                    ws_server_broadcast_monitor("error", rmsg);
+                }
+                vTaskDelay(pdMS_TO_TICKS(1000));
                 err = llm_chat_tools_streaming(system_prompt, messages, tools_json,
                                                force_this_iter,
                                                ws_stream_progress, &stream_ctx,
@@ -773,6 +778,7 @@ static void agent_loop_task(void *arg)
                          esp_err_to_name(err));
                 ws_server_broadcast_monitor("llm", "voice cloud failed — falling back to global");
                 llm_clear_request_override();
+                llm_set_voice_max_tokens(0);
                 using_voice_cloud = false;
                 retry_done = false;
                 err = llm_chat_tools_streaming(system_prompt, messages, tools_json,
@@ -908,8 +914,9 @@ static void agent_loop_task(void *arg)
 
         cJSON_Delete(messages);
 
-        /* Always clear per-request override after the loop */
+        /* Always clear per-request overrides after the loop */
         llm_clear_request_override();
+        llm_set_voice_max_tokens(0);
 
         if (!final_text && iteration >= LANG_AGENT_MAX_TOOL_ITER) {
             char emsg[64];

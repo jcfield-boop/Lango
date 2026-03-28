@@ -104,6 +104,11 @@ bool llm_voice_routing_available(void);
 const char *llm_get_voice_provider(void);
 const char *llm_get_voice_model(void);
 
+/** Set/clear a reduced max_tokens for voice-channel requests (e.g. 400).
+ *  When > 0, overrides LANG_LLM_MAX_TOKENS for the current request. */
+void llm_set_voice_max_tokens(int n);
+int  llm_get_voice_max_tokens(void);
+
 /* ── Tool Use Support ──────────────────────────────────────────── */
 
 typedef struct {

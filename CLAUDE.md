@@ -72,13 +72,14 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 **Local pipeline** (fully on-device Mac at `192.168.0.51`):
 - STT: mlx-audio Whisper at `<base_url>/v1/audio/transcriptions` — raw WAV sent (Opus encoding bypassed)
 - TTS: mlx-audio Kokoro at `<base_url>/v1/audio/speech` — model + voice configurable via SERVICES.md
-- LLM: Ollama at `<local_url>/v1/chat/completions` — text/Telegram channel only; voice → cloud. Uses `qwen2.5:14b` for reliable tool calling
+- LLM: Ollama at `<local_url>/v1/chat/completions` — text/Telegram channel only; voice → cloud. Uses `gemma3:12b` for text (non-thinking), `qwen3-vl:8b` for vision
 - Cloud fallback: Groq (STT/TTS), OpenRouter (LLM) when local services unavailable
 
 **Channel-aware LLM routing** (in `agent_loop.c`):
-- `chat_id == "ptt"` → voice channel → routes to `voice_provider`/`voice_model` (default: `openrouter`/`openai/gpt-4o-mini`)
+- `chat_id == "ptt"` → voice channel → routes to `voice_provider`/`voice_model` (default: `openrouter`/`openai/gpt-4o-mini`) with `max_tokens=400`
 - All other channels → text channel → routes to local Ollama if available, else cloud
 - Voice responses also get VOICE MODE injection: natural spoken English, no markdown, ≤3 sentences
+- All LLM requests use `temperature=0.7` for focused, efficient generation
 
 **Boot warmup tasks** (prevent cold-start latency):
 - `stt_warmup_task`: 8s after boot, POSTs silent 20ms WAV to mlx-audio → pre-loads Whisper
@@ -148,6 +149,27 @@ NVS values take priority over SERVICES.md on initial load; `services_config_relo
 - Download speed ~10-20 KB/s over WiFi; 2MB firmware takes ~150-200s
 - Script auto-retries once on error; detects successful reboot even if status broadcast is missed
 - LittleFS changes (SERVICES.md etc.) are NOT flashed by OTA script — use web UI Save or serial flash at `0xa30000`
+
+## TLS & Latency Optimization
+
+**Persistent HTTP sessions** (`main/llm/http_session.c`) keep TLS connections alive across requests, avoiding ~300-500ms handshake overhead per call. Three persistent sessions are maintained:
+- **STT** (Groq Whisper): 20s timeout, 4KB buffers
+- **TTS** (Groq PlayAI): 20s timeout, 8KB RX buffer
+- **LLM** (OpenRouter): 60s timeout, 4KB buffers — lazy-initialized on first cloud call
+
+All sessions auto-retry on any error (reset + re-perform). Plaintext Ollama requests use fresh clients (no TLS to save).
+
+**mbedTLS configuration** (`sdkconfig.defaults.esp32s3`):
+- `EXTERNAL_MEM_ALLOC=y` — TLS buffers in PSRAM (not SRAM)
+- `DYNAMIC_BUFFER=y` + `DYNAMIC_FREE_CONFIG_DATA=y` — buffers allocated only during active I/O
+- `CLIENT_SSL_SESSION_TICKETS=y` + `ESP_TLS_CLIENT_SESSION_TICKETS=y` — session ticket resumption
+- Input buffer 16KB, output buffer 4KB
+
+**Timeout strategy**: per-I/O-operation timeouts, not total. Local LAN: 5s (STT), 15s (TTS). Cloud: 20s (STT/TTS), 60s (LLM). Local backoff after failure: 30s. VAD silence: 500ms.
+
+**STT optimization**: `language=en` + `response_format=text` sent to Whisper — skips language detection (~0.5-1s) and reduces response size.
+
+**Voice-mode LLM**: `max_tokens=400` (vs 4096 for text), `temperature=0.7`, `speed=1.1` on TTS.
 
 ## Weather Tool
 

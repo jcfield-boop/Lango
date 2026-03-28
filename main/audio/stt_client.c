@@ -31,7 +31,7 @@ static char s_model[STT_MODEL_MAX]       = LANG_DEFAULT_STT_MODEL;
 static char s_local_url[STT_LOCAL_URL_MAX] = {0};
 static bool s_local_offline = false;
 static int64_t s_local_fail_us = 0;
-#define LOCAL_BACKOFF_US   (60 * 1000000LL)  /* skip local for 60s after failure */
+#define LOCAL_BACKOFF_US   (30 * 1000000LL)  /* skip local for 30s after failure */
 
 /* Persistent HTTP session — created once in stt_client_init() */
 static http_session_t s_session = {0};
@@ -123,7 +123,16 @@ static uint8_t *build_multipart(const uint8_t *audio, size_t audio_len,
         "--%s\r\n"
         "Content-Disposition: form-data; name=\"response_format\"\r\n"
         "\r\n"
-        "json\r\n",
+        "text\r\n",
+        STT_BOUNDARY);
+
+    /* language=en skips Whisper auto-detection (~0.5-1s saved) */
+    char hdr_lang[256];
+    int hdr_lang_len = snprintf(hdr_lang, sizeof(hdr_lang),
+        "--%s\r\n"
+        "Content-Disposition: form-data; name=\"language\"\r\n"
+        "\r\n"
+        "en\r\n",
         STT_BOUNDARY);
 
     char trailer[64];
@@ -131,7 +140,7 @@ static uint8_t *build_multipart(const uint8_t *audio, size_t audio_len,
         "--%s--\r\n", STT_BOUNDARY);
 
     *total_len = (size_t)hdr_file_len + audio_len + (size_t)hdr_model_len
-               + (size_t)hdr_fmt_len + (size_t)trailer_len;
+               + (size_t)hdr_fmt_len + (size_t)hdr_lang_len + (size_t)trailer_len;
 
     uint8_t *body = ps_malloc(*total_len + 1);
     if (!body) return NULL;
@@ -141,6 +150,7 @@ static uint8_t *build_multipart(const uint8_t *audio, size_t audio_len,
     memcpy(body + off, audio,     audio_len);      off += audio_len;
     memcpy(body + off, hdr_model, hdr_model_len);  off += hdr_model_len;
     memcpy(body + off, hdr_fmt,   hdr_fmt_len);    off += hdr_fmt_len;
+    memcpy(body + off, hdr_lang,  hdr_lang_len);   off += hdr_lang_len;
     memcpy(body + off, trailer,   trailer_len);    off += trailer_len;
     body[off] = '\0';
 
@@ -225,9 +235,33 @@ static esp_err_t stt_transcribe_local(const uint8_t *audio, size_t audio_len,
         return ESP_FAIL;
     }
 
-    /* Parse JSON — may be NDJSON (mlx-audio streams); take last complete JSON */
+    /* Parse response — response_format=text returns plain string,
+     * but some servers may still return JSON; handle both gracefully. */
+    if (rb.len > 0 && rb.data[0] != '{') {
+        /* Plain text response — trim leading/trailing whitespace */
+        char *txt = rb.data;
+        while (*txt == ' ' || *txt == '\n' || *txt == '\r') txt++;
+        size_t tlen = strlen(txt);
+        while (tlen > 0 && (txt[tlen-1] == ' ' || txt[tlen-1] == '\n' || txt[tlen-1] == '\r'))
+            txt[--tlen] = '\0';
+        if (tlen > 0) {
+            strncpy(out->text, txt, sizeof(out->text) - 1);
+            ESP_LOGI(TAG, "Local STT in %lldms: \"%s\"", elapsed_ms, out->text);
+            {
+                char ok_msg[80];
+                snprintf(ok_msg, sizeof(ok_msg), "STT done in %lldms", elapsed_ms);
+                ws_server_broadcast_monitor_verbose("stt", ok_msg);
+            }
+            free(rb.data);
+            return ESP_OK;
+        }
+        free(rb.data);
+        strncpy(out->error, "Empty local STT result", sizeof(out->error) - 1);
+        return ESP_FAIL;
+    }
+
+    /* JSON fallback — server ignored response_format=text, or NDJSON stream */
     char *json_start = rb.data;
-    /* If NDJSON, find the last line with "text" */
     char *last_text_line = NULL;
     char *line = rb.data;
     while (*line) {
@@ -242,7 +276,7 @@ static esp_err_t stt_transcribe_local(const uint8_t *audio, size_t audio_len,
     free(rb.data);
 
     if (!root) {
-        strncpy(out->error, "Invalid JSON from local STT", sizeof(out->error) - 1);
+        strncpy(out->error, "Invalid response from local STT", sizeof(out->error) - 1);
         s_local_offline = true;
         s_local_fail_us = esp_timer_get_time();
         return ESP_FAIL;
@@ -378,7 +412,7 @@ esp_err_t stt_client_init(void)
     if (!s_session.valid) {
         esp_err_t err = http_session_init(&s_session, s_endpoint,
                                           http_event_cb,
-                                          60 * 1000, 4096, 4096);
+                                          20 * 1000, 4096, 4096);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "STT http_session_init failed: %s", esp_err_to_name(err));
         }
@@ -453,7 +487,7 @@ esp_err_t stt_transcribe(const uint8_t *audio, size_t audio_len,
     /* Reuse persistent session (lazy init fallback if init was skipped) */
     if (!s_session.valid) {
         http_session_init(&s_session, s_endpoint, http_event_cb,
-                          60 * 1000, 4096, 4096);
+                          20 * 1000, 4096, 4096);
     }
     if (!s_session.valid) {
         free(body);
@@ -511,44 +545,71 @@ esp_err_t stt_transcribe(const uint8_t *audio, size_t audio_len,
 
     ESP_LOGI(TAG, "STT HTTP %d, response: %u bytes", status, (unsigned)rb.len);
 
-    /* Parse JSON response */
-    cJSON *root = cJSON_Parse(rb.data);
-    free(rb.data);
-
-    if (!root) {
-        strncpy(out->error, "Invalid JSON response from STT", sizeof(out->error) - 1);
+    if (status != 200) {
+        /* Error response — try to extract JSON error message */
+        cJSON *root = cJSON_Parse(rb.data);
+        free(rb.data);
+        if (root) {
+            cJSON *err = cJSON_GetObjectItem(root, "error");
+            cJSON *msg = err ? cJSON_GetObjectItem(err, "message") : NULL;
+            if (cJSON_IsString(msg) && msg->valuestring[0]) {
+                snprintf(out->error, sizeof(out->error), "STT API %d: %s", status, msg->valuestring);
+            } else {
+                snprintf(out->error, sizeof(out->error), "STT API error: HTTP %d", status);
+            }
+            cJSON_Delete(root);
+        } else {
+            snprintf(out->error, sizeof(out->error), "STT API error: HTTP %d", status);
+            free(rb.data);
+        }
         return ESP_FAIL;
     }
 
-    esp_err_t result = ESP_FAIL;
-    if (status == 200) {
-        cJSON *text_item = cJSON_GetObjectItem(root, "text");
-        if (cJSON_IsString(text_item) && text_item->valuestring[0]) {
-            strncpy(out->text, text_item->valuestring, sizeof(out->text) - 1);
-            result = ESP_OK;
-            /* Verbose log: show what Groq heard */
+    /* Parse response — response_format=text returns plain string,
+     * but fall back to JSON parsing if server returns JSON anyway. */
+    if (rb.len > 0 && rb.data[0] != '{') {
+        /* Plain text response */
+        char *txt = rb.data;
+        while (*txt == ' ' || *txt == '\n' || *txt == '\r') txt++;
+        size_t tlen = strlen(txt);
+        while (tlen > 0 && (txt[tlen-1] == ' ' || txt[tlen-1] == '\n' || txt[tlen-1] == '\r'))
+            txt[--tlen] = '\0';
+        if (tlen > 0) {
+            strncpy(out->text, txt, sizeof(out->text) - 1);
             {
                 char stt_out[160];
-                snprintf(stt_out, sizeof(stt_out), "Transcribed: \"%.140s\"",
-                         text_item->valuestring);
+                snprintf(stt_out, sizeof(stt_out), "Transcribed: \"%.140s\"", out->text);
                 ws_server_broadcast_monitor_verbose("stt", stt_out);
             }
-        } else {
-            strncpy(out->error, "Empty transcription result", sizeof(out->error) - 1);
+            free(rb.data);
+            return ESP_OK;
         }
-    } else {
-        /* Extract error message */
-        cJSON *err  = cJSON_GetObjectItem(root, "error");
-        cJSON *msg  = err ? cJSON_GetObjectItem(err, "message") : NULL;
-        if (cJSON_IsString(msg) && msg->valuestring[0]) {
-            snprintf(out->error, sizeof(out->error), "STT API %d: %s", status, msg->valuestring);
-        } else {
-            snprintf(out->error, sizeof(out->error), "STT API error: HTTP %d", status);
-        }
+        free(rb.data);
+        strncpy(out->error, "Empty transcription result", sizeof(out->error) - 1);
+        return ESP_FAIL;
     }
 
+    /* JSON fallback */
+    cJSON *root = cJSON_Parse(rb.data);
+    free(rb.data);
+    if (!root) {
+        strncpy(out->error, "Invalid response from STT", sizeof(out->error) - 1);
+        return ESP_FAIL;
+    }
+    cJSON *text_item = cJSON_GetObjectItem(root, "text");
+    if (cJSON_IsString(text_item) && text_item->valuestring[0]) {
+        strncpy(out->text, text_item->valuestring, sizeof(out->text) - 1);
+        {
+            char stt_out[160];
+            snprintf(stt_out, sizeof(stt_out), "Transcribed: \"%.140s\"", text_item->valuestring);
+            ws_server_broadcast_monitor_verbose("stt", stt_out);
+        }
+        cJSON_Delete(root);
+        return ESP_OK;
+    }
     cJSON_Delete(root);
-    return result;
+    strncpy(out->error, "Empty transcription result", sizeof(out->error) - 1);
+    return ESP_FAIL;
 }
 
 void stt_set_api_key(const char *key)

@@ -49,7 +49,7 @@ static const char *TAG = "wake_word";
 /* ms of VAD silence after speech to trigger end-of-utterance.
  * 700ms feels natural — short enough to be responsive, long enough not to
  * cut off mid-sentence.  1500ms was too conservative for voice assistant use. */
-#define WW_VAD_SILENCE_MS        700
+#define WW_VAD_SILENCE_MS        500
 
 /* Max recording duration (safety limit) */
 #define WW_MAX_RECORD_MS        8000

@@ -1,4 +1,5 @@
 #include "llm_proxy.h"
+#include "llm/http_session.h"
 #include "langoustine_config.h"
 #include "proxy/http_proxy.h"
 #include "gateway/ws_server.h"
@@ -49,6 +50,13 @@ static char s_voice_model[LLM_MODEL_MAX_LEN] = {0};
 static char s_override_provider[16] = {0};
 static char s_override_model[LLM_MODEL_MAX_LEN] = {0};
 static bool s_override_active = false;
+static int  s_voice_max_tokens = 0; /* 0 = use LANG_LLM_MAX_TOKENS */
+
+/* Persistent cloud LLM session — avoids ~300-500ms TLS handshake per call.
+ * Lazy-initialized on first cloud request. SRAM cost ~2KB (mbedTLS context);
+ * TLS buffers in PSRAM via CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC. */
+static http_session_t s_cloud_session = {0};
+static char s_cloud_url[256] = {0};  /* stable URL for session lifetime */
 
 /* Cached local health check */
 static bool s_local_online = false;
@@ -317,7 +325,7 @@ static esp_err_t llm_http_direct(const char *post_data, resp_buf_t *rb, int *out
         .url = llm_api_url(),
         .event_handler = http_event_handler,
         .user_data = rb,
-        .timeout_ms = provider_is_plaintext() ? 240 * 1000 : 120 * 1000,
+        .timeout_ms = provider_is_plaintext() ? 240 * 1000 : 60 * 1000,
         .buffer_size = 4096,
         .buffer_size_tx = 4096,
         .crt_bundle_attach = provider_is_plaintext() ? NULL : esp_crt_bundle_attach,
@@ -642,13 +650,13 @@ esp_err_t llm_chat_tools(const char *system_prompt,
     /* Build request body (non-streaming) */
     cJSON *body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "model", effective_model());
+    int max_tok = (s_voice_max_tokens > 0) ? s_voice_max_tokens : MIMI_LLM_MAX_TOKENS;
     if (provider_is_openai()) {
-        /* OpenAI uses the newer max_completion_tokens parameter */
-        cJSON_AddNumberToObject(body, "max_completion_tokens", MIMI_LLM_MAX_TOKENS);
+        cJSON_AddNumberToObject(body, "max_completion_tokens", max_tok);
     } else {
-        /* Anthropic and OpenRouter both use max_tokens */
-        cJSON_AddNumberToObject(body, "max_tokens", MIMI_LLM_MAX_TOKENS);
+        cJSON_AddNumberToObject(body, "max_tokens", max_tok);
     }
+    cJSON_AddNumberToObject(body, "temperature", 0.7);
 
     if (provider_uses_openai_format()) {
         cJSON *openai_msgs = convert_messages_openai(system_prompt, messages);
@@ -1385,11 +1393,13 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
     /* Build request body (identical to non-streaming + stream:true) */
     cJSON *body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "model", effective_model());
+    int max_tok = (s_voice_max_tokens > 0) ? s_voice_max_tokens : MIMI_LLM_MAX_TOKENS;
     if (provider_is_openai()) {
-        cJSON_AddNumberToObject(body, "max_completion_tokens", MIMI_LLM_MAX_TOKENS);
+        cJSON_AddNumberToObject(body, "max_completion_tokens", max_tok);
     } else {
-        cJSON_AddNumberToObject(body, "max_tokens", MIMI_LLM_MAX_TOKENS);
+        cJSON_AddNumberToObject(body, "max_tokens", max_tok);
     }
+    cJSON_AddNumberToObject(body, "temperature", 0.7);
     cJSON_AddBoolToObject(body, "stream", true);
     if (provider_is_ollama()) {
         /* Keep model loaded for 10 min after last request (Ollama default is 5 min) */
@@ -1453,22 +1463,43 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
         st->stream_deadline_us = esp_timer_get_time() + (int64_t)hard_ms * 1000;
     }
 
-    /* Configure HTTP client with SSE event handler */
-    esp_http_client_config_t config = {
-        .url              = llm_api_url(),
-        .event_handler    = sse_http_event_handler,
-        .user_data        = st,
-        .timeout_ms       = provider_is_plaintext() ? 240 * 1000 : 120 * 1000,
-        .buffer_size      = 4096,
-        .buffer_size_tx   = 4096,
-        .crt_bundle_attach = provider_is_plaintext() ? NULL : esp_crt_bundle_attach,
-    };
+    /* Use persistent session for cloud TLS (saves ~300-500ms handshake),
+     * fresh client for plaintext Ollama (no TLS overhead to save). */
+    bool use_session = !provider_is_plaintext();
+    esp_http_client_handle_t client = NULL;
 
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) {
-        sse_state_free(st);
-        free(post_data);
-        return ESP_FAIL;
+    if (use_session) {
+        /* Lazy-init the cloud session on first use, or reset if URL changed */
+        const char *url = llm_api_url();
+        if (!s_cloud_session.valid || strcmp(s_cloud_url, url) != 0) {
+            if (s_cloud_session.valid) http_session_deinit(&s_cloud_session);
+            strncpy(s_cloud_url, url, sizeof(s_cloud_url) - 1);
+            http_session_init(&s_cloud_session, s_cloud_url,
+                              sse_http_event_handler, 60 * 1000, 4096, 4096);
+        }
+        if (!s_cloud_session.valid) {
+            sse_state_free(st);
+            free(post_data);
+            return ESP_FAIL;
+        }
+        http_session_set_ctx(&s_cloud_session, st);
+        client = s_cloud_session.handle;
+    } else {
+        /* Plaintext (Ollama) — fresh client, no TLS */
+        esp_http_client_config_t config = {
+            .url              = llm_api_url(),
+            .event_handler    = sse_http_event_handler,
+            .user_data        = st,
+            .timeout_ms       = 240 * 1000,
+            .buffer_size      = 4096,
+            .buffer_size_tx   = 4096,
+        };
+        client = esp_http_client_init(&config);
+        if (!client) {
+            sse_state_free(st);
+            free(post_data);
+            return ESP_FAIL;
+        }
     }
 
     esp_http_client_set_method(client, HTTP_METHOD_POST);
@@ -1490,9 +1521,14 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
     }
     esp_http_client_set_post_field(client, post_data, strlen(post_data));
 
-    esp_err_t err = esp_http_client_perform(client);
-    int status    = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
+    esp_err_t err;
+    if (use_session) {
+        err = http_session_perform(&s_cloud_session);
+    } else {
+        err = esp_http_client_perform(client);
+    }
+    int status = esp_http_client_get_status_code(client);
+    if (!use_session) esp_http_client_cleanup(client);
     free(post_data);
 
     if (err != ESP_OK) {
@@ -1734,6 +1770,9 @@ bool llm_voice_routing_available(void)
 
 const char *llm_get_voice_provider(void) { return s_voice_provider; }
 const char *llm_get_voice_model(void)    { return s_voice_model; }
+
+void llm_set_voice_max_tokens(int n) { s_voice_max_tokens = n; }
+int  llm_get_voice_max_tokens(void)  { return s_voice_max_tokens; }
 
 /* ── Ollama boot warmup ─────────────────────────────────────────── */
 

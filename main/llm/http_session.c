@@ -76,8 +76,8 @@ esp_err_t http_session_perform(http_session_t *s)
     if (!s || !s->valid || !s->handle) return ESP_ERR_INVALID_STATE;
 
     esp_err_t ret = esp_http_client_perform(s->handle);
-    if (ret == ESP_ERR_HTTP_CONNECT || ret == ESP_ERR_HTTP_CONNECTION_CLOSED) {
-        ESP_LOGW(TAG, "Connection lost (%s), resetting and retrying",
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Request failed (%s), resetting session and retrying",
                  esp_err_to_name(ret));
         http_session_reset(s);
         if (s->valid) {

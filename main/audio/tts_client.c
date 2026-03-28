@@ -53,7 +53,7 @@ static char s_local_model[TTS_LOCAL_MODEL_MAX] = "mlx-community/Kokoro-82M-bf16"
 static char s_local_voice[TTS_LOCAL_VOICE_MAX] = "af_heart";
 static bool s_local_offline = false;
 static int64_t s_local_fail_us = 0;
-#define LOCAL_BACKOFF_US   (60 * 1000000LL)  /* skip local for 60s after failure */
+#define LOCAL_BACKOFF_US   (30 * 1000000LL)  /* skip local for 30s after failure */
 #define TTS_WU_TIMEOUT_MS  90000             /* Kokoro cold-load can take up to ~60s */
 
 /* Persistent HTTP session — created once in tts_client_init() */
@@ -272,7 +272,7 @@ esp_err_t tts_client_init(void)
     if (!s_session.valid) {
         esp_err_t err = http_session_init(&s_session, s_endpoint,
                                           http_event_cb,
-                                          60 * 1000, 8192, 4096);
+                                          20 * 1000, 8192, 4096);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "TTS http_session_init failed: %s", esp_err_to_name(err));
         }
@@ -307,6 +307,7 @@ static esp_err_t tts_generate_local(const char *text, bin_buf_t *bb)
     cJSON_AddStringToObject(req, "input", text);
     cJSON_AddStringToObject(req, "voice", s_local_voice);
     cJSON_AddStringToObject(req, "response_format", "wav");
+    cJSON_AddNumberToObject(req, "speed", 1.1);
 
     char *body = cJSON_PrintUnformatted(req);
     cJSON_Delete(req);
@@ -316,7 +317,7 @@ static esp_err_t tts_generate_local(const char *text, bin_buf_t *bb)
         .url            = url,
         .event_handler  = http_event_cb,
         .user_data      = bb,
-        .timeout_ms     = 60000,  /* local LAN — 60s for long text (Kokoro ~2-3s/sentence warm) */
+        .timeout_ms     = 15000,  /* local LAN — 15s (Kokoro ~2-3s/sentence warm) */
         .buffer_size    = 8192,
         .buffer_size_tx = 4096,
     };
@@ -366,6 +367,7 @@ esp_err_t tts_generate(const char *text, char *id_out)
     cJSON_AddStringToObject(req, "input",           text);
     cJSON_AddStringToObject(req, "voice",           s_voice[0] ? s_voice : LANG_DEFAULT_TTS_VOICE);
     cJSON_AddStringToObject(req, "response_format", "wav");
+    cJSON_AddNumberToObject(req, "speed",           1.1);
 
     char *body = cJSON_PrintUnformatted(req);
     cJSON_Delete(req);
@@ -418,7 +420,7 @@ esp_err_t tts_generate(const char *text, char *id_out)
         /* Reuse persistent session (lazy init fallback if init was skipped) */
         if (!s_session.valid) {
             http_session_init(&s_session, s_endpoint, http_event_cb,
-                              60 * 1000, 8192, 4096);
+                              20 * 1000, 8192, 4096);
         }
         if (!s_session.valid) {
             free(body);
