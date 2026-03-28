@@ -183,7 +183,7 @@ static esp_err_t stt_transcribe_local(const uint8_t *audio, size_t audio_len,
         .url            = url,
         .event_handler  = http_event_cb,
         .user_data      = &rb,
-        .timeout_ms     = 10000,  /* local LAN — generous for transcription */
+        .timeout_ms     = 5000,   /* 5s per I/O op — LAN should respond in <3s */
         .buffer_size    = 4096,
         .buffer_size_tx = 4096,
     };
@@ -192,6 +192,7 @@ static esp_err_t stt_transcribe_local(const uint8_t *audio, size_t audio_len,
 
     esp_http_client_set_method(client, HTTP_METHOD_POST);
     esp_http_client_set_header(client, "Content-Type", ct);
+    esp_http_client_set_header(client, "Connection", "close");
     esp_http_client_set_post_field(client, (const char *)body, (int)body_len);
 
     ESP_LOGI(TAG, "STT local: POST %s (%u audio bytes)", url, (unsigned)audio_len);
@@ -470,10 +471,11 @@ esp_err_t stt_transcribe(const uint8_t *audio, size_t audio_len,
 
     esp_err_t ret = esp_http_client_perform(s_session.handle);
 
-    /* If connection was stale, reset session and retry with headers re-applied.
-     * http_session_reset() creates a fresh handle — old headers/body are lost. */
-    if (ret == ESP_ERR_HTTP_CONNECT || ret == ESP_ERR_HTTP_CONNECTION_CLOSED) {
-        ESP_LOGW(TAG, "STT connection lost (%s), resetting and retrying", esp_err_to_name(ret));
+    /* If first attempt fails for any reason (stale socket, write error, TLS reset),
+     * reset session and retry with a fresh handle. Common after local STT timeout
+     * leaves network state messy, or after long idle periods. */
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "STT cloud failed (%s), resetting session and retrying", esp_err_to_name(ret));
         ws_server_broadcast_monitor_verbose("stt", "Connection lost, retrying...");
         http_session_reset(&s_session);
         if (s_session.valid) {
