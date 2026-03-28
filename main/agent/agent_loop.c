@@ -271,7 +271,12 @@ static cJSON *build_tool_results(const llm_response_t *resp, const lang_msg_t *m
         if (all_alloc) {
         for (int i = 0; i < n; i++) {
             ctxs[i].output = ps_malloc(TOOL_OUTPUT_SIZE);
-            if (!ctxs[i].output) { all_alloc = false; break; }
+            if (!ctxs[i].output) {
+                /* Free any already-allocated buffers before falling back */
+                for (int j = 0; j < i; j++) { free(ctxs[j].output); ctxs[j].output = NULL; }
+                all_alloc = false;
+                break;
+            }
             ctxs[i].output[0] = '\0';
         }
         }
@@ -881,7 +886,7 @@ static void agent_loop_task(void *arg)
                     cJSON *inp = cJSON_Parse(resp.calls[ci].input);
                     if (inp) {
                         cJSON *t = cJSON_GetObjectItemCaseSensitive(inp, "text");
-                        if (cJSON_IsString(t) && t->valuestring[0])
+                        if (cJSON_IsString(t) && t->valuestring && t->valuestring[0])
                             final_text = strdup(t->valuestring);
                         cJSON_Delete(inp);
                     }
@@ -965,15 +970,21 @@ static void agent_loop_task(void *arg)
                                 snprintf(snippet, 900, "%.800s", final_text);
                                 cJSON *sum_msgs = cJSON_CreateArray();
                                 cJSON *sum_msg  = cJSON_CreateObject();
-                                cJSON_AddStringToObject(sum_msg, "role", "user");
-                                char *sum_prompt = ps_calloc(1, 1024);
+                                char *sum_prompt = NULL;
+                                if (sum_msgs && sum_msg) {
+                                    cJSON_AddStringToObject(sum_msg, "role", "user");
+                                    /* Add sum_msg to array immediately so cJSON_Delete(sum_msgs) frees both */
+                                    cJSON_AddItemToArray(sum_msgs, sum_msg);
+                                    sum_msg = NULL;  /* owned by sum_msgs now */
+                                    sum_prompt = ps_calloc(1, 1024);
+                                }
                                 if (sum_prompt) {
                                     snprintf(sum_prompt, 1024,
                                         "Summarise this in ONE short spoken sentence (under 30 words, "
                                         "no markdown, no emoji). End with: the full version has been emailed.\n\n%s",
                                         snippet);
-                                    cJSON_AddStringToObject(sum_msg, "content", sum_prompt);
-                                    cJSON_AddItemToArray(sum_msgs, sum_msg);
+                                    cJSON *msg_item = cJSON_GetArrayItem(sum_msgs, 0);
+                                    cJSON_AddStringToObject(msg_item, "content", sum_prompt);
 
                                     llm_set_request_override("ollama", llm_get_local_text_model());
                                     llm_response_t sum_resp;
@@ -990,6 +1001,7 @@ static void agent_loop_task(void *arg)
                                     llm_response_free(&sum_resp);
                                     free(sum_prompt);
                                 }
+                                cJSON_Delete(sum_msg);   /* NULL if transferred to array */
                                 cJSON_Delete(sum_msgs);
                                 free(snippet);
                                 /* Restore original provider for next turn */

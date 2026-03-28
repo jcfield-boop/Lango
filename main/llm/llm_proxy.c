@@ -1355,10 +1355,15 @@ static esp_err_t sse_state_to_response(sse_state_t *st, llm_response_t *resp)
         strncpy(call->name, st->tc[i].name, sizeof(call->name) - 1);
         if (st->tc[i].args.data && st->tc[i].args.len > 0) {
             call->input     = strdup(st->tc[i].args.data);
-            call->input_len = st->tc[i].args.len;
+            call->input_len = call->input ? st->tc[i].args.len : 0;
         } else {
             call->input     = strdup("{}");
-            call->input_len = 2;
+            call->input_len = call->input ? 2 : 0;
+        }
+        if (!call->input) {
+            ESP_LOGW("llm", "strdup OOM for tool call input");
+            call->input     = NULL;
+            call->input_len = 0;
         }
         resp->call_count++;
     }

@@ -56,6 +56,7 @@ static int xml_extract_tag(const char *xml, size_t xml_len,
     snprintf(close_tag, sizeof(close_tag), "</%s>", tag);
 
     /* Find opening tag from *pos */
+    if (*pos >= xml_len) return 0;  /* bounds guard against size_t underflow */
     const char *start = (const char *)memmem(xml + *pos, xml_len - *pos,
                                               open_tag, strlen(open_tag));
     if (!start) return 0;
