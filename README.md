@@ -514,6 +514,14 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 
 ## Changelog
 
+### 2026-04-05 — LLM stream zombie-loop fix, wake-word speaker playback, local STT fix
+
+- **LLM stream hard-timeout now actually aborts** (`main/llm/llm_proxy.c`) — ESP-IDF's `http_on_body` discards the event handler's return value, so returning `ESP_FAIL` on deadline expiry did nothing; `esp_http_client_perform()` kept polling forever. Fix: force the client's socket timeout to 1ms from inside the handler so the next `recv()` fails and `perform()` unwinds cleanly. Device had been stuck in a zombie LLM call for days — no cron, no Telegram, no WebSocket responses.
+- **Wake-word / PTT responses now play through the I2S speaker** (`main/agent/agent_loop.c`) — the playback gate was keying on `channel != "system"`, but wake-word queries come in with `channel="websocket"`, `chat_id="ptt"`. Switched the gate to the existing `is_voice` flag so cloud voice responses actually reach MAX98357A.
+- **I2S play-task stack moved to PSRAM** (`main/audio/i2s_audio.c`) — lazy-created 4KB task stack kept failing to allocate from SRAM under fragmentation (15KB free but no contiguous block). Task only does I2S DMA writes (no flash/LittleFS/NVS access), so `xTaskCreatePinnedToCoreWithCaps(..., MALLOC_CAP_SPIRAM)` is safe here.
+- **Local mlx-audio STT fixed** (`main/audio/stt_client.c`) — every local transcription returned HTTP 500; mlx-audio server logs showed `401 Unauthorized` from HuggingFace Hub when resolving the bare `whisper-large-v3-turbo` model ID. Switched the local backend to the fully-qualified `mlx-community/whisper-large-v3-turbo`. Cloud STT (Groq) still uses the original shorthand.
+- **Prompt-prefix cache ordering** (`main/agent/context_builder.c`) — moved the volatile timestamp from the first line of the system prompt to the final section so LLM providers can cache the (now stable) prefix across turns.
+
 ### 2026-03-26 — Auto-email with TTS summary, bf_emma voice, qwen3:8b text model
 
 - **Auto-email spoken summary** (`main/agent/agent_loop.c`) — Long WebSocket responses (>200 chars) are emailed to the user, and instead of speaking the full text, the agent calls the local LLM to generate a one-sentence spoken summary ending with "the full version has been emailed." This prevents TTS from reading out lengthy briefings while still giving audio feedback.

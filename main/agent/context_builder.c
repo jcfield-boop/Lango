@@ -32,15 +32,12 @@ esp_err_t context_build_system_prompt(char *buf, size_t size)
 {
     size_t off = 0;
 
-    /* Inject current date/time from NTP-synced system clock */
-    {
-        time_t now = time(NULL);
-        struct tm local;
-        localtime_r(&now, &local);
-        char timebuf[64];
-        strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S %Z (%A)", &local);
-        off += snprintf(buf + off, size - off, "**Current date/time: %s**\n\n", timebuf);
-    }
+    /* ── Static prefix (cacheable by LLM providers) ───────────────
+     * OpenAI: automatic prefix caching for identical first 256+ tokens
+     * Ollama: KV cache reuse requires byte-identical prefix
+     * Anthropic: cache_control markers on static blocks
+     * IMPORTANT: All static content MUST come before any dynamic content.
+     * Moving the timestamp here would break prefix caching on every turn. */
 
     off += snprintf(buf + off, size - off,
         "# Langoustine\n\n"
@@ -67,9 +64,9 @@ esp_err_t context_build_system_prompt(char *buf, size_t size)
         "For anything that changes over time — stock prices, sports scores, weather, news,\n"
         "exchange rates — ALWAYS use web_search. Your training data is stale.\n\n"
         "## Scheduling Rules (cron_add)\n"
-        "- The current time is already provided above — use it directly.\n"
+        "- The current time is in the 'Current Time' section at the end of this prompt.\n"
         "- For relative times: use seconds_from_now (e.g. 300 for 5 minutes).\n"
-        "- For absolute times: compute the epoch offset from the current time above.\n\n"
+        "- For absolute times: compute the epoch offset from the current time.\n\n"
         "## File Paths\n"
         "- /lfs/config/USER.md — user profile (name, timezone, preferences)\n"
         "- /lfs/config/SOUL.md — personality (read-only)\n"
@@ -138,6 +135,21 @@ esp_err_t context_build_system_prompt(char *buf, size_t size)
             off += snprintf(buf + off, size - off,
                             "\n## Today's Completed Tasks\n\n%s", hb_log);
         }
+    }
+
+    /* ── Dynamic timestamp (MUST be last in system prompt) ────────
+     * Placed after all static + semi-static content so that LLM
+     * provider prefix caching (OpenAI auto-cache, Ollama KV cache,
+     * Anthropic cache_control) can reuse the static prefix across
+     * turns. Only the tail changes each turn. */
+    {
+        time_t now = time(NULL);
+        struct tm local;
+        localtime_r(&now, &local);
+        char timebuf[64];
+        strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S %Z (%A)", &local);
+        off += snprintf(buf + off, size - off,
+                        "\n## Current Time\n\n%s\n", timebuf);
     }
 
     ESP_LOGI(TAG, "System prompt built: %d bytes", (int)off);

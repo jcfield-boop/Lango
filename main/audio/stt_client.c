@@ -176,7 +176,9 @@ static esp_err_t stt_transcribe_local(const uint8_t *audio, size_t audio_len,
     snprintf(url, sizeof(url), "%s/v1/audio/transcriptions", s_local_url);
 
     const char *use_mime  = (mime && mime[0]) ? mime : "audio/webm;codecs=opus";
-    const char *use_model = s_model[0] ? s_model : "whisper-large-v3-turbo";
+    /* mlx-audio resolves model IDs via HuggingFace Hub — must be fully-qualified
+     * (org/repo). Groq's shorthand "whisper-large-v3-turbo" returns 401 from HF. */
+    const char *use_model = "mlx-community/whisper-large-v3-turbo";
 
     size_t body_len = 0;
     uint8_t *body = build_multipart(audio, audio_len, use_mime, use_model, &body_len);

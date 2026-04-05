@@ -1128,17 +1128,18 @@ static void agent_loop_task(void *arg)
                     ws_server_send_with_tts(msg.chat_id, final_text, tts_id, img_url);
 
 #if LANG_I2S_AUDIO_ENABLED
-                    /* Play TTS audio through local MAX98357A speaker.
-                     * Skip for system/heartbeat — amp current causes brownout resets. */
-                    if (strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0) {
+                    /* Play TTS audio through the MAX98357A speaker only for
+                     * voice interactions (wake word / PTT, chat_id="ptt").
+                     * WebSocket text queries stay text-only (say tool handles
+                     * its own playback independently). Skip system channel
+                     * entirely — amp current causes brownout resets. */
+                    if (is_voice) {
                         const uint8_t *wav_buf = NULL;
                         size_t wav_len = 0;
                         if (tts_cache_get(tts_id, &wav_buf, &wav_len) == ESP_OK) {
                             ESP_LOGI(TAG, "Playing TTS via I2S speaker (%u bytes, async)", (unsigned)wav_len);
                             i2s_audio_play_wav_async(wav_buf, wav_len);
                         }
-                    } else {
-                        ESP_LOGI(TAG, "Skipping I2S playback for system channel");
                     }
 #endif
                 } else if (img_url && strcmp(msg.channel, "websocket") == 0) {

@@ -10,6 +10,7 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "soc/i2s_struct.h"
@@ -27,6 +28,7 @@ static volatile bool s_play_cancel = false;
 static TaskHandle_t     s_play_task    = NULL;
 static const uint8_t   *s_play_wav     = NULL;
 static size_t           s_play_wav_len = 0;
+static void i2s_play_task(void *arg);  /* forward decl for early init */
 
 
 void i2s_audio_set_volume(uint8_t vol)
@@ -610,8 +612,10 @@ esp_err_t i2s_audio_play_wav_async(const uint8_t *wav_data, size_t len)
     if (!s_tx_handle) return ESP_ERR_INVALID_STATE;
 
     if (!s_play_task) {
-        BaseType_t ret = xTaskCreatePinnedToCore(
-            i2s_play_task, "i2s_play", 8192, NULL, 4, &s_play_task, 0);
+        /* Stack in PSRAM: task only does I2S DMA writes (no flash/LittleFS/NVS). */
+        BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
+            i2s_play_task, "i2s_play", 4096, NULL, 4, &s_play_task, 0,
+            MALLOC_CAP_SPIRAM);
         if (ret != pdPASS) {
             ESP_LOGE(TAG, "Failed to create I2S play task");
             return ESP_ERR_NO_MEM;

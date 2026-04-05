@@ -1266,9 +1266,17 @@ static esp_err_t sse_http_event_handler(esp_http_client_event_t *evt)
     /* Hard total-stream timeout: abort if we've been streaming too long.
      * The per-chunk timeout_ms in esp_http_client_config only covers the gap
      * between chunks, so a slow-but-steady model (e.g. qwen3-vl) can stream
-     * for 800+ seconds without triggering it. This deadline catches that. */
+     * for 800+ seconds without triggering it. This deadline catches that.
+     *
+     * IMPORTANT: ESP-IDF ignores the handler return value for ON_DATA events
+     * (http_on_body in esp_http_client.c returns 0 unconditionally after
+     * dispatching). Returning ESP_FAIL alone does NOT abort perform().
+     * We must also force the socket timeout to 1ms so the next
+     * transport_read() fails, breaking the perform() loop. */
     if (st->stream_deadline_us > 0 && esp_timer_get_time() > st->stream_deadline_us) {
         ESP_LOGW("llm", "LLM stream hard timeout — aborting");
+        esp_http_client_set_timeout_ms(evt->client, 1);
+        st->stream_deadline_us = 0;  /* fire once, not per-chunk */
         return ESP_FAIL;
     }
 
