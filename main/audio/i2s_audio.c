@@ -612,9 +612,10 @@ esp_err_t i2s_audio_play_wav_async(const uint8_t *wav_data, size_t len)
     if (!s_tx_handle) return ESP_ERR_INVALID_STATE;
 
     if (!s_play_task) {
-        /* Stack in PSRAM: task only does I2S DMA writes (no flash/LittleFS/NVS). */
+        /* Stack in PSRAM: task only does I2S DMA writes (no flash/LittleFS/NVS).
+         * 4KB was too tight — i2s_audio_play_wav() pushes past the canary. */
         BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
-            i2s_play_task, "i2s_play", 4096, NULL, 4, &s_play_task, 0,
+            i2s_play_task, "i2s_play", 8192, NULL, 4, &s_play_task, 0,
             MALLOC_CAP_SPIRAM);
         if (ret != pdPASS) {
             ESP_LOGE(TAG, "Failed to create I2S play task");

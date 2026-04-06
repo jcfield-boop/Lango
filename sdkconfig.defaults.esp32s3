@@ -127,3 +127,8 @@ CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 # Default log level: INFO. Keep MAXIMUM at DEBUG so runtime log_level commands still work.
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
+# sys_evt task stack: default 2304 can overflow on WiFi disconnect bursts
+# (reason=34 disassoc) while cleaning up httpd sockets. Would like 4096 but
+# SRAM is too tight — agent(28K)+telegram(8K)+heartbeat(4K) leaves no room.
+# Keeping default 2304 until SRAM budget improves.

@@ -11,8 +11,10 @@
  * Recurring tasks ([30m] and [daily]) never need file edits —
  * scheduling is tracked in RAM, saving flash wear.
  *
- * NOTE: heartbeat_send() does LittleFS I/O which requires a SRAM stack
- * much larger than the FreeRTOS Timer Service task provides (~2KB).
+ * NOTE: heartbeat_send() does LittleFS I/O (fopen on /lfs/).
+ * Stack is allocated from PSRAM via xTaskCreatePinnedToCoreWithCaps —
+ * safe with SPIRAM_FETCH_INSTRUCTIONS=y + SPIRAM_RODATA=y (ESP-IDF 6.0
+ * handles flash-write cache coherency for PSRAM stacks on ESP32-S3).
  * We use a dedicated task instead of xTimerCreate to avoid stack overflow
  * in the Tmr Svc task.
  */
@@ -33,6 +35,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 
 static const char *TAG = "heartbeat";
 
@@ -41,7 +44,7 @@ static const char *TAG = "heartbeat";
 #define MAX_HB_TASKS     12
 #define HB_TEXT_LEN      384
 #define HB_PROMPT_SIZE   2048
-#define HB_TASK_STACK    4096   /* SRAM — needs room for LittleFS + flash I/O */
+#define HB_TASK_STACK    4096   /* PSRAM — LittleFS I/O is safe with XIP enabled */
 
 typedef enum {
     HB_INTERVAL,    /* [30m]  — every heartbeat cycle */
@@ -310,13 +313,17 @@ esp_err_t heartbeat_start(void)
         return ESP_OK;
     }
 
-    BaseType_t ok = xTaskCreate(
+    /* Stack in PSRAM: SRAM too fragmented after agent(28K)+telegram(8K).
+     * Safe with SPIRAM_FETCH_INSTRUCTIONS=y (ESP-IDF 6.0 ESP32-S3). */
+    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
         heartbeat_task_main,
         "heartbeat",
         HB_TASK_STACK,
         NULL,
         2,              /* low priority — same as LED task */
-        &s_heartbeat_task
+        &s_heartbeat_task,
+        0,              /* Core 0 (non-AI core) */
+        MALLOC_CAP_SPIRAM
     );
 
     if (ok != pdPASS || !s_heartbeat_task) {

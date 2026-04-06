@@ -140,7 +140,7 @@ Most cheap UVC-compatible webcams work. For PTT mic, the webcam must also expose
 
 ### Built-in agent tools
 
-`web_search` · `get_current_time` · `read_file` · `write_file` · `edit_file` · `list_dir` · `search_files` · `http_request` · `send_email` · `cron_add/list/remove` · `ha_request` · `klipper_request` · `gpio_read/write/mode` · `wifi_scan` · `rss_fetch` · `device_temp` · `system_info` · `memory_write` · `memory_read` · `memory_append_today` · `rule_create/list/delete` · `capture_image` · `send_notification` · `get_weather` · `device_restart` · `session_clear`
+`web_search` · `read_file` · `write_file` · `edit_file` · `list_dir` · `search_files` · `http_request` · `send_email` · `cron_add/list/remove` · `ha_request` · `klipper_request` · `gpio_read/write/mode` · `wifi_scan` · `rss_fetch` · `device_temp` · `system_info` · `memory_write` · `memory_read` · `memory_append_today` · `rule_create/list/delete` · `capture_image` · `send_notification` · `get_weather` · `noaa_buoy` · `device_restart` · `session_clear` · `say`
 
 ---
 
@@ -433,7 +433,7 @@ Edit `SOUL.md` to change personality. Edit `USER.md` to set your name and timezo
 
 ## Adding a tool
 
-1. Create `main/tools/tool_<name>.c` and `.h` following the pattern of any existing tool (e.g. `tool_get_time.c`).
+1. Create `main/tools/tool_<name>.c` and `.h` following the pattern of any existing tool (e.g. `tool_weather.c`).
 2. Implement `tool_<name>_execute(input_json, output, output_size)`.
 3. Add `"tools/tool_<name>.c"` to `main/CMakeLists.txt`.
 4. Include the header and register with `tool_registry_register()` in `main/tools/tool_registry.c`.
@@ -513,6 +513,12 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 ---
 
 ## Changelog
+
+### 2026-04-05 — SRAM budget fix, heartbeat to PSRAM, I2S play-task stack bump
+
+- **Heartbeat task moved to PSRAM** (`main/heartbeat/heartbeat.c`) — SRAM fragmentation after agent (28 KB) + telegram (8 KB) + cron + CLI left no contiguous block for the 4 KB heartbeat stack. Switched to `xTaskCreatePinnedToCoreWithCaps(..., MALLOC_CAP_SPIRAM)`. Safe with `SPIRAM_FETCH_INSTRUCTIONS=y` + `SPIRAM_RODATA=y` (ESP-IDF 6.0 handles flash-write cache coherency for PSRAM stacks on ESP32-S3).
+- **I2S play-task stack 4 KB → 8 KB** (`main/audio/i2s_audio.c`) — `i2s_audio_play_wav()` pushed past the 4 KB canary during WAV playback. Stack already in PSRAM (moved in previous commit), just needed more room.
+- **sys_evt stack documentation** (`sdkconfig.defaults.esp32s3`) — Default 2304-byte sys\_evt stack can overflow on WiFi disconnect bursts (reason=34 disassoc), but bumping to 4096 exhausts contiguous SRAM at boot. Documented the tradeoff; keeping default until SRAM budget improves.
 
 ### 2026-04-05 — LLM stream zombie-loop fix, wake-word speaker playback, local STT fix
 
