@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 
 static const char *TAG = "audio_pipeline";
 
@@ -183,13 +184,15 @@ esp_err_t audio_pipeline_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    /* STT task pinned to Core 1 */
-    BaseType_t ret = xTaskCreatePinnedToCore(
+    /* STT task pinned to Core 1.  Stack in PSRAM — safe with XIP enabled.
+     * Frees 24KB SRAM for WiFi/DNS/HTTP allocations. */
+    BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
         audio_stt_task, "stt_task",
-        24 * 1024, NULL,  /* 24KB: needs >18KB (opus+http); 28KB starved TLS heap (MBEDTLS_ERR_SSL_ALLOC_FAILED) */
+        24 * 1024, NULL,  /* 24KB: needs >18KB (opus+http) */
         7,   /* STT_PRIO: higher than agent (6) to prevent starvation */
         &s_stt_task_handle,
-        LANG_STT_CORE);
+        LANG_STT_CORE,
+        MALLOC_CAP_SPIRAM);
 
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create STT task");

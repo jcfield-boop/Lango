@@ -1244,12 +1244,15 @@ esp_err_t agent_loop_init(void)
 
 esp_err_t agent_loop_start(void)
 {
-    /* Pin to Core 1 (AI pipeline core); stack must be in SRAM (accesses LittleFS/NVS) */
-    BaseType_t ret = xTaskCreatePinnedToCore(
+    /* Pin to Core 1 (AI pipeline core).  Stack in PSRAM — safe with
+     * SPIRAM_FETCH_INSTRUCTIONS=y + SPIRAM_RODATA=y (ESP-IDF 6.0 ESP32-S3).
+     * Frees ~28KB of precious SRAM for WiFi/DNS/HTTP allocations. */
+    BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
         agent_loop_task, "agent_loop",
         LANG_AGENT_STACK, NULL,
         LANG_AGENT_PRIO, NULL,
-        LANG_AGENT_CORE);
+        LANG_AGENT_CORE,
+        MALLOC_CAP_SPIRAM);
 
     if (ret == pdPASS) {
         ESP_LOGI(TAG, "agent_loop task created on Core %d (stack=%u bytes)",

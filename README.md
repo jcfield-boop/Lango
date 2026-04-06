@@ -514,6 +514,21 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 
 ## Changelog
 
+### 2026-04-06 — SRAM crisis: move task stacks to PSRAM (7 KB → 89 KB free)
+
+- **Agent, STT, Telegram, outbound, cron stacks moved to PSRAM** — Five major task stacks (totalling ~72 KB) migrated from SRAM to PSRAM via `xTaskCreatePinnedToCoreWithCaps(..., MALLOC_CAP_SPIRAM)`. Safe with `SPIRAM_FETCH_INSTRUCTIONS=y` + `SPIRAM_RODATA=y` on ESP-IDF 6.0. Device had been stuck for hours: only 7 KB SRAM remained at boot, causing `getaddrinfo()` to return `EAI_MEMORY` (error 202) — DNS resolution failed, HTTP server couldn't accept connections, Telegram polling died. After migration: **89 KB free SRAM at idle**.
+- **Tasks moved:** `agent_loop` (28 KB), `stt_task` (24 KB), `tg_poll` (8 KB), `outbound` (8 KB), `cron` (4 KB). Wake word tasks (`ww_feed`, `ww_detect`) remain in SRAM — ESP-SR reads flash model data and requires internal stacks.
+
+### 2026-04-05 — Crash fix, resilience hardening, morning briefing
+
+- **HTTP session use-after-free fix** (`main/llm/llm_proxy.c`) — After `http_session_perform()` internally resets (new handle created), the caller's `client` pointer was stale. Accessing the freed handle caused a `LoadProhibited` crash (EXCVADDR=0x00000008). Fix: re-read `s_cloud_session.handle` after perform returns.
+- **Cloud stream timeout 90 s → 120 s** (`main/llm/llm_proxy.c`) — Previous 90 s deadline was too aggressive for multi-tool heartbeat turns that chain 4-5 LLM calls.
+- **SSE handler NULL guard** (`main/llm/llm_proxy.c`) — Added `!st` check in the ON_DATA handler to prevent null dereference on spurious events.
+- **Tool timeout error text** (`main/agent/agent_loop.c`) — Parallel tool timeouts now fill the result buffer with an error message instead of leaving it empty, so the LLM doesn't retry blindly.
+- **Fallback push notification on system task failure** (`main/agent/agent_loop.c`) — When a heartbeat or cron task fails after all retries, a push notification is sent via ntfy.sh with the failure reason.
+- **Agent-idle wait before heartbeat dispatch** (`main/heartbeat/heartbeat.c`) — Heartbeat now waits up to 60 s for the agent to finish its current turn before dispatching, avoiding queue pile-up behind stuck turns.
+- **Default model fix** — Changed from `openrouter/auto` (returns 404) to `openai/gpt-4o-mini` in `langoustine_config.h` and `SERVICES.md`.
+
 ### 2026-04-05 — SRAM budget fix, heartbeat to PSRAM, I2S play-task stack bump
 
 - **Heartbeat task moved to PSRAM** (`main/heartbeat/heartbeat.c`) — SRAM fragmentation after agent (28 KB) + telegram (8 KB) + cron + CLI left no contiguous block for the 4 KB heartbeat stack. Switched to `xTaskCreatePinnedToCoreWithCaps(..., MALLOC_CAP_SPIRAM)`. Safe with `SPIRAM_FETCH_INSTRUCTIONS=y` + `SPIRAM_RODATA=y` (ESP-IDF 6.0 handles flash-write cache coherency for PSRAM stacks on ESP32-S3).

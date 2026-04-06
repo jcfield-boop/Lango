@@ -493,11 +493,12 @@ void app_main(void)
             esp_sntp_init();
             ESP_LOGI(TAG, "SNTP started (syncing in background)");
 
-            /* Outbound dispatch on Core 0 */
-            ESP_ERROR_CHECK((xTaskCreatePinnedToCore(
+            /* Outbound dispatch on Core 0 — stack in PSRAM (safe with XIP) */
+            ESP_ERROR_CHECK((xTaskCreatePinnedToCoreWithCaps(
                 outbound_dispatch_task, "outbound",
                 LANG_OUTBOUND_STACK, NULL,
-                LANG_OUTBOUND_PRIO, NULL, 0) == pdPASS)
+                LANG_OUTBOUND_PRIO, NULL, 0,
+                MALLOC_CAP_SPIRAM) == pdPASS)
                 ? ESP_OK : ESP_FAIL);
 
             /* Start network-dependent services.

@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "nvs.h"
@@ -514,10 +515,13 @@ esp_err_t telegram_bot_init(void)
 
 esp_err_t telegram_bot_start(void)
 {
-    BaseType_t ret = xTaskCreate(
+    /* Stack in PSRAM — safe with XIP.  Frees 8KB SRAM. */
+    BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
         telegram_poll_task, "tg_poll",
         MIMI_TG_POLL_STACK, NULL,
-        MIMI_TG_POLL_PRIO, NULL);
+        MIMI_TG_POLL_PRIO, NULL,
+        0,  /* Core 0 (network core) */
+        MALLOC_CAP_SPIRAM);
 
     return (ret == pdPASS) ? ESP_OK : ESP_FAIL;
 }

@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_heap_caps.h"
 #include "cJSON.h"
 
 static const char *TAG = "cron";
@@ -402,13 +403,16 @@ esp_err_t cron_service_start(void)
         }
     }
 
-    BaseType_t ok = xTaskCreate(
+    /* Stack in PSRAM — safe with XIP.  Frees 4KB SRAM. */
+    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
         cron_task_main,
         "cron",
         4096,
         NULL,
         4,
-        &s_cron_task
+        &s_cron_task,
+        1,  /* Core 1 (AI pipeline core) */
+        MALLOC_CAP_SPIRAM
     );
     if (ok != pdPASS || !s_cron_task) {
         ESP_LOGE(TAG, "Failed to create cron task");
