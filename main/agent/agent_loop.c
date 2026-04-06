@@ -647,14 +647,15 @@ static void agent_loop_task(void *arg)
              *
              * Vision check: if capture_image ran this turn, use the vision model.
              * Otherwise use local_text_model (fast, text-only, e.g. gemma3:12b). */
+            /* Only route to cloud for genuinely complex multi-tool chains.
+             * "forecast" removed: local Ollama handles get_weather tool fine.
+             * "headlines" removed: single web_search tool call, not complex. */
             bool is_complex = (strcasestr(msg.content, "briefing")  != NULL ||
                                strcasestr(msg.content, "web search") != NULL ||
                                strcasestr(msg.content, "search for") != NULL ||
                                strcasestr(msg.content, " email")     != NULL ||
                                strcasestr(msg.content, "send email") != NULL ||
-                               strcasestr(msg.content, "research")   != NULL ||
-                               strcasestr(msg.content, "forecast")   != NULL ||
-                               strcasestr(msg.content, "headlines")  != NULL);
+                               strcasestr(msg.content, "research")   != NULL);
 
             if (is_complex) {
                 ESP_LOGI(TAG, "Smart routing: complex request → cloud");
@@ -739,10 +740,10 @@ static void agent_loop_task(void *arg)
                 retry_done = true;
                 {
                     char rmsg[80];
-                    snprintf(rmsg, sizeof(rmsg), "LLM: %s — retrying in 1s...", esp_err_to_name(err));
+                    snprintf(rmsg, sizeof(rmsg), "LLM: %s — retrying...", esp_err_to_name(err));
                     ws_server_broadcast_monitor("error", rmsg);
                 }
-                vTaskDelay(pdMS_TO_TICKS(1000));
+                vTaskDelay(pdMS_TO_TICKS(250));  /* brief pause, then retry */
                 err = llm_chat_tools_streaming(system_prompt, messages, tools_json,
                                                force_this_iter,
                                                ws_stream_progress, &stream_ctx,

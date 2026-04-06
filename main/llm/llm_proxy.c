@@ -61,7 +61,7 @@ static char s_cloud_url[256] = {0};  /* stable URL for session lifetime */
 /* Cached local health check */
 static bool s_local_online = false;
 static int64_t s_local_check_us = 0;
-#define LOCAL_HEALTH_CACHE_US  (15LL * 1000000LL)  /* 15 seconds — short enough to catch model eviction */
+#define LOCAL_HEALTH_CACHE_US  (30LL * 1000000LL)  /* 30 seconds — balances freshness vs per-turn latency */
 
 static uint32_t s_total_input_tokens    = 0;
 static uint32_t s_total_output_tokens   = 0;
@@ -1735,7 +1735,7 @@ bool llm_local_health_check(void)
 
     esp_http_client_config_t cfg = {
         .url = url,
-        .timeout_ms = 3000,
+        .timeout_ms = 1500,   /* 1.5s — avoid blocking interactive queries */
         .method = HTTP_METHOD_GET,
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);

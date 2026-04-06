@@ -16,7 +16,7 @@ static const char *TAG = "tool_weather";
 
 #define WEATHER_NVS_NS  "weather_config"
 #define WEATHER_NVS_KEY "location"
-#define WEATHER_BUF_SIZE (20 * 1024)  /* wttr.in j1 responses are typically 12-16KB */
+#define WEATHER_BUF_SIZE (48 * 1024)  /* wttr.in j1 responses are 35-40KB (8 hourly slots × 3 days) */
 
 typedef struct {
     char *data;
@@ -94,9 +94,9 @@ esp_err_t tool_weather_execute(const char *input_json, char *output, size_t outp
                 encoded[ei++] = location[i];
             }
         }
-        snprintf(url, sizeof(url), "https://wttr.in/%s?format=j1", encoded);
+        snprintf(url, sizeof(url), "http://wttr.in/%s?format=j1", encoded);
     } else {
-        snprintf(url, sizeof(url), "https://wttr.in/?format=j1");
+        snprintf(url, sizeof(url), "http://wttr.in/?format=j1");
     }
 
     /* Allocate response buffer in PSRAM (>4KB) */
@@ -112,8 +112,7 @@ esp_err_t tool_weather_execute(const char *input_json, char *output, size_t outp
     esp_http_client_config_t cfg = {
         .url               = url,
         .method            = HTTP_METHOD_GET,
-        .timeout_ms        = 10000,
-        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms        = 8000,   /* 8s — plain HTTP, no TLS overhead */
         .event_handler     = weather_event_cb,
         .user_data         = &resp,
     };
@@ -139,12 +138,20 @@ esp_err_t tool_weather_execute(const char *input_json, char *output, size_t outp
     ESP_LOGI(TAG, "wttr.in %s → HTTP %d (%d bytes)", url, status, resp.len);
     ws_server_broadcast_monitor_verbose("tool", "get_weather → ok");
 
-    /* Parse JSON */
+    /* Parse JSON — detect truncation */
+    bool truncated = (resp.len >= resp.cap - 1);
     cJSON *root = cJSON_Parse(resp.data);
     free(resp.data);
 
     if (!root) {
-        snprintf(output, output_size, "Error: failed to parse weather JSON");
+        if (truncated) {
+            snprintf(output, output_size,
+                     "Error: weather response truncated at %d bytes (buffer=%d). "
+                     "Try asking for just current conditions.", resp.len, resp.cap);
+        } else {
+            snprintf(output, output_size, "Error: failed to parse weather JSON (%d bytes)",
+                     resp.len);
+        }
         return ESP_FAIL;
     }
 
