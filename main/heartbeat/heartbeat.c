@@ -20,6 +20,7 @@
  */
 #include "heartbeat/heartbeat.h"
 #include "langoustine_config.h"
+#include "agent/agent_loop.h"
 #include "memory/session_mgr.h"
 #include "bus/message_bus.h"
 #include "gateway/ws_server.h"
@@ -249,6 +250,20 @@ static bool heartbeat_send(void)
 
     off += snprintf(prompt + off, HB_PROMPT_SIZE - off,
                     "\nKeep responses concise. Just do the tasks, no meta-commentary.");
+
+    /* Wait for agent to be idle before dispatching — avoids queueing heartbeat
+     * tasks behind a stuck or long-running turn.  Max 60s wait, then send anyway
+     * (the message bus will queue it). */
+    {
+        int wait_count = 0;
+        while (agent_loop_is_busy() && wait_count < 60) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            wait_count++;
+        }
+        if (wait_count > 0) {
+            ESP_LOGI(TAG, "Waited %ds for agent idle before heartbeat dispatch", wait_count);
+        }
+    }
 
     /* Clear stale session history so the agent doesn't reference old errors.
      * Each heartbeat cycle should start with a clean context. */

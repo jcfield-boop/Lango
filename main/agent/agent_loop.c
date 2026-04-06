@@ -10,6 +10,7 @@
 #include "tools/tool_memory.h"
 #include "tools/tool_web_search.h"
 #include "tools/tool_smtp.h"
+#include "tools/tool_notify.h"
 #include "audio/tts_client.h"
 #include "audio/i2s_audio.h"
 #include "telegram/telegram_bot.h"
@@ -315,8 +316,14 @@ static cJSON *build_tool_results(const llm_response_t *resp, const lang_msg_t *m
             /* Wait for all spawned tasks — 25s per task (below 30s WDT) */
             for (int i = 0; i < tasks_spawned; i++) {
                 if (!ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(25000))) {
-                    ESP_LOGW(TAG, "tool_par[%d] timed out after 25s — proceeding with empty result", i);
+                    ESP_LOGW(TAG, "tool_par[%d] timed out after 25s", i);
                     ws_server_broadcast_monitor("error", "tool_par timeout (25s) — partial results");
+                    /* Fill empty results with error so LLM knows what failed
+                     * instead of seeing an empty string and retrying blindly */
+                    if (i < n && ctxs[i].output && ctxs[i].output[0] == '\0') {
+                        snprintf(ctxs[i].output, TOOL_OUTPUT_SIZE,
+                                 "Error: tool execution timed out after 25 seconds");
+                    }
                 }
             }
 
@@ -818,11 +825,12 @@ static void agent_loop_task(void *arg)
             if (!resp.tool_use) {
                 if (resp.text && resp.text_len > 0) {
                     final_text = strdup(resp.text);
-                    llm_response_free(&resp);
                     if (!final_text) {
+                        /* Log BEFORE freeing resp so text_len is still valid */
                         ESP_LOGE(TAG, "strdup OOM for final_text (%d bytes)", (int)resp.text_len);
                         oom_restart = true;
                     }
+                    llm_response_free(&resp);
                     break;
                 }
                 bool do_recovery = resp.truncated && !recovery_tried;
@@ -1193,6 +1201,22 @@ static void agent_loop_task(void *arg)
                     }
                 }
             }
+
+            /* Fallback push notification for system task failures.
+             * If a heartbeat/cron task fails (e.g. morning briefing), the user
+             * has no way to know unless we push a notification. */
+            if (strcmp(msg.channel, LANG_CHAN_SYSTEM) == 0) {
+                char notify_json[384];
+                snprintf(notify_json, sizeof(notify_json),
+                    "{\"message\":\"Task '%.30s' failed: %.80s\","
+                    "\"title\":\"Lango Task Failure\",\"priority\":\"high\","
+                    "\"tags\":\"warning\"}",
+                    msg.chat_id, err_text);
+                char notify_out[128];
+                tool_notify_execute(notify_json, notify_out, sizeof(notify_out));
+                ESP_LOGW(TAG, "System task failure notified via push: %s", notify_out);
+            }
+
             ws_server_send_status(msg.chat_id, "idle");
         }
 

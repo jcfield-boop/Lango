@@ -1261,7 +1261,7 @@ static void sse_process_line(sse_state_t *st, const char *line, int len)
 static esp_err_t sse_http_event_handler(esp_http_client_event_t *evt)
 {
     sse_state_t *st = (sse_state_t *)evt->user_data;
-    if (evt->event_id != HTTP_EVENT_ON_DATA) return ESP_OK;
+    if (evt->event_id != HTTP_EVENT_ON_DATA || !st) return ESP_OK;
 
     /* Hard total-stream timeout: abort if we've been streaming too long.
      * The per-chunk timeout_ms in esp_http_client_config only covers the gap
@@ -1468,11 +1468,13 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
     st->progress_cb  = progress_cb;
     st->progress_ctx = progress_ctx;
 
-    /* Hard stream deadline: 3 min for local plaintext, 90s for cloud TLS.
+    /* Hard stream deadline: 3 min for local plaintext, 120s for cloud TLS.
      * Prevents slow vision/reasoning models from blocking the agent task
-     * indefinitely — the per-chunk timeout_ms does not bound total duration. */
+     * indefinitely — the per-chunk timeout_ms does not bound total duration.
+     * 120s (was 90s) gives multi-tool briefing iterations more headroom
+     * while the 5-min agent turn timeout guards against true zombies. */
     {
-        int hard_ms = provider_is_plaintext() ? (3 * 60 * 1000) : (90 * 1000);
+        int hard_ms = provider_is_plaintext() ? (3 * 60 * 1000) : (120 * 1000);
         st->stream_deadline_us = esp_timer_get_time() + (int64_t)hard_ms * 1000;
     }
 
@@ -1537,10 +1539,13 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
     esp_err_t err;
     if (use_session) {
         err = http_session_perform(&s_cloud_session);
+        /* Re-read handle: session may have reset internally (new handle).
+         * Using the stale `client` pointer after a reset → use-after-free crash. */
+        client = s_cloud_session.handle;
     } else {
         err = esp_http_client_perform(client);
     }
-    int status = esp_http_client_get_status_code(client);
+    int status = client ? esp_http_client_get_status_code(client) : 0;
     if (!use_session) esp_http_client_cleanup(client);
     free(post_data);
 
