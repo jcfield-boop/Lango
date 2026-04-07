@@ -282,10 +282,11 @@ function connect() {
       }
       /* Chat-filtered events */
       if (d.chat_id && d.chat_id !== chatId) return;
-      if      (d.type === 'token')   { handleToken(d.content); }
-      else if (d.type === 'message') handleMessage(d.content, d.tts_id, d.image_url);
-      else if (d.type === 'status')  { setStatus(d.stage); }
-      else if (d.type === 'error')   { showError(d.code + ': ' + (d.message || '')); addLog('err', d.code + ': ' + d.message); }
+      if      (d.type === 'token')     { handleToken(d.content); }
+      else if (d.type === 'message')   handleMessage(d.content, d.tts_id, d.image_url);
+      else if (d.type === 'tts_ready') handleTTSReady(d.tts_id);
+      else if (d.type === 'status')    { setStatus(d.stage); }
+      else if (d.type === 'error')     { showError(d.code + ': ' + (d.message || '')); addLog('err', d.code + ': ' + d.message); }
     } catch(e) {}
   };
 }
@@ -386,6 +387,26 @@ function handleMessage(text, ttsId, imageUrl) {
     if (ttsAutoPlay) playTTS(ttsId);
   }
   transcript.scrollTop = transcript.scrollHeight;
+}
+
+/* Handle tts_ready follow-up — audio generated after text was already shown */
+function handleTTSReady(ttsId) {
+  if (!ttsId) return;
+  addLog('msg', '[tts] audio ready: ' + ttsId);
+  /* Find the last assistant bubble and add a play button */
+  var rows = transcript.querySelectorAll('.msg-row.asst');
+  if (rows.length > 0) {
+    var row = rows[rows.length - 1];
+    if (!row.querySelector('.tts-play')) {
+      var btn = document.createElement('button');
+      btn.className = 'tts-play';
+      btn.title = 'Play audio';
+      btn.textContent = '\u25B6 Listen';
+      (function(id) { btn.onclick = function() { playTTS(id); }; })(ttsId);
+      row.appendChild(btn);
+    }
+    if (ttsAutoPlay) playTTS(ttsId);
+  }
 }
 
 /* ── TTS: fetch Groq WAV from device cache ── */

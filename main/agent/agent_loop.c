@@ -1122,9 +1122,7 @@ static void agent_loop_task(void *arg)
                 /* Push response preview to OLED display */
                 oled_display_set_message(tts_text ? tts_text : final_text);
 
-                esp_err_t tts_err = tts_generate(tts_text, tts_id);
-
-                /* Only include image URL if a capture actually succeeded (file exists) */
+                /* Only include image URL if a capture actually succeeded */
                 const char *img_url = NULL;
                 if (capture_image_called) {
                     struct stat img_st;
@@ -1132,9 +1130,34 @@ static void agent_loop_task(void *arg)
                         img_url = "/camera/latest.jpg";
                     }
                 }
+
+                /* Send text to browser IMMEDIATELY — don't block on TTS.
+                 * This prevents the browser from timing out while TTS
+                 * generates (local Kokoro can take 5-40s). */
+                if (strcmp(msg.channel, "websocket") == 0) {
+                    ws_server_send_with_tts(msg.chat_id, final_text, NULL, img_url);
+                    ESP_LOGI(TAG, "Sent text to browser (TTS pending)");
+                }
+
+                /* Generate TTS (may take seconds for local Kokoro) */
+                esp_err_t tts_err = tts_generate(tts_text, tts_id);
+
                 if (tts_err == ESP_OK && tts_id[0]) {
-                    /* Send message with tts_id so browser auto-plays */
-                    ws_server_send_with_tts(msg.chat_id, final_text, tts_id, img_url);
+                    /* Send tts_id as a follow-up so browser can fetch audio.
+                     * For non-WS channels (Telegram), send the combined message. */
+                    if (strcmp(msg.channel, "websocket") == 0) {
+                        ws_server_send_with_tts(msg.chat_id, NULL, tts_id, NULL);
+                    } else {
+                        lang_msg_t out = {0};
+                        strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
+                        strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
+                        out.content = final_text;
+                        if (message_bus_push_outbound(&out) != ESP_OK) {
+                            free(final_text);
+                        } else {
+                            final_text = NULL;
+                        }
+                    }
 
 #if LANG_I2S_AUDIO_ENABLED
                     /* Play TTS audio through the MAX98357A speaker only for
@@ -1151,11 +1174,8 @@ static void agent_loop_task(void *arg)
                         }
                     }
 #endif
-                } else if (img_url && strcmp(msg.channel, "websocket") == 0) {
-                    /* No TTS but have an image — send directly so image_url is included */
-                    ws_server_send_with_tts(msg.chat_id, final_text, NULL, img_url);
-                } else {
-                    /* No TTS, no image — send via outbound queue (handles Telegram etc.) */
+                } else if (strcmp(msg.channel, "websocket") != 0) {
+                    /* Non-WS, no TTS — send via outbound queue (Telegram etc.) */
                     lang_msg_t out = {0};
                     strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
                     strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);

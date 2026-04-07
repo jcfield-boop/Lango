@@ -2147,7 +2147,8 @@ esp_err_t ws_server_send(const char *chat_id, const char *text)
     return ret;
 }
 
-/* Send {"type":"message","content":"...","tts_id":"<id>"} */
+/* Send {"type":"message","content":"...","tts_id":"<id>"} or
+ * {"type":"tts_ready","tts_id":"<id>"} when text is NULL (follow-up audio). */
 esp_err_t ws_server_send_with_tts(const char *chat_id, const char *text,
                                   const char *tts_id, const char *image_url)
 {
@@ -2167,11 +2168,20 @@ esp_err_t ws_server_send_with_tts(const char *chat_id, const char *text,
     }
     xSemaphoreGive(s_clients_lock);
 
-    if (fd < 0) return ESP_ERR_NOT_FOUND;
+    if (fd < 0) {
+        ESP_LOGD(TAG, "No WS client for chat_id=%s", chat_id ? chat_id : "null");
+        return ESP_ERR_NOT_FOUND;
+    }
 
     cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "type", "message");
-    cJSON_AddStringToObject(resp, "content", text);
+    if (text) {
+        /* Full message with text (and optionally tts_id) */
+        cJSON_AddStringToObject(resp, "type", "message");
+        cJSON_AddStringToObject(resp, "content", text);
+    } else {
+        /* TTS-only follow-up — text was already sent */
+        cJSON_AddStringToObject(resp, "type", "tts_ready");
+    }
     cJSON_AddStringToObject(resp, "chat_id", chat_id);
     if (tts_id && tts_id[0]) {
         cJSON_AddStringToObject(resp, "tts_id", tts_id);
@@ -2194,6 +2204,7 @@ esp_err_t ws_server_send_with_tts(const char *chat_id, const char *text,
     free(json_str);
 
     if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "WS send failed for %s: %s", chat_id, esp_err_to_name(ret));
         xSemaphoreTake(s_clients_lock, portMAX_DELAY);
         remove_client(fd);
         xSemaphoreGive(s_clients_lock);
