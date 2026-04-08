@@ -9,7 +9,7 @@
 #include "cJSON.h"
 #include "memory/memory_store.h"
 #include "gateway/ws_server.h"
-#include "mimi_config.h"
+#include "langoustine_config.h"
 
 static const char *TAG = "tool_mem";
 
@@ -137,8 +137,8 @@ esp_err_t tool_memory_write_execute(const char *input_json,
     }
 
     /* Read current MEMORY.md, append new entry, write back.
-     * Buffer is MIMI_MEMORY_MAX_BYTES + 600 headroom for the new entry. */
-    #define MEM_BUF_SIZE (MIMI_MEMORY_MAX_BYTES + 600)
+     * Buffer is LANG_MEMORY_MAX_BYTES + 600 headroom for the new entry. */
+    #define MEM_BUF_SIZE (LANG_MEMORY_MAX_BYTES + 600)
     char *mem_buf = ps_malloc(MEM_BUF_SIZE);
     if (!mem_buf) {
         cJSON_Delete(root);

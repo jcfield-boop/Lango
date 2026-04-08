@@ -1,5 +1,5 @@
 #include "http_proxy.h"
-#include "mimi_config.h"
+#include "langoustine_config.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -27,20 +27,20 @@ static uint16_t s_proxy_port     = 0;
 esp_err_t http_proxy_init(void)
 {
     /* Start with build-time defaults */
-    if (MIMI_SECRET_PROXY_HOST[0] != '\0' && MIMI_SECRET_PROXY_PORT[0] != '\0') {
-        strncpy(s_proxy_host, MIMI_SECRET_PROXY_HOST, sizeof(s_proxy_host) - 1);
-        s_proxy_port = (uint16_t)atoi(MIMI_SECRET_PROXY_PORT);
+    if (LANG_SECRET_PROXY_HOST[0] != '\0' && LANG_SECRET_PROXY_PORT[0] != '\0') {
+        strncpy(s_proxy_host, LANG_SECRET_PROXY_HOST, sizeof(s_proxy_host) - 1);
+        s_proxy_port = (uint16_t)atoi(LANG_SECRET_PROXY_PORT);
     }
 
     /* NVS overrides take highest priority (set via CLI) */
     nvs_handle_t nvs;
-    if (nvs_open(MIMI_NVS_PROXY, NVS_READONLY, &nvs) == ESP_OK) {
+    if (nvs_open(LANG_NVS_PROXY, NVS_READONLY, &nvs) == ESP_OK) {
         char tmp[64] = {0};
         size_t len = sizeof(tmp);
-        if (nvs_get_str(nvs, MIMI_NVS_KEY_PROXY_HOST, tmp, &len) == ESP_OK && tmp[0]) {
+        if (nvs_get_str(nvs, LANG_NVS_KEY_PROXY_HOST, tmp, &len) == ESP_OK && tmp[0]) {
             strncpy(s_proxy_host, tmp, sizeof(s_proxy_host) - 1);
             uint16_t port = 0;
-            if (nvs_get_u16(nvs, MIMI_NVS_KEY_PROXY_PORT, &port) == ESP_OK && port) {
+            if (nvs_get_u16(nvs, LANG_NVS_KEY_PROXY_PORT, &port) == ESP_OK && port) {
                 s_proxy_port = port;
             }
         }
@@ -58,14 +58,14 @@ esp_err_t http_proxy_init(void)
 esp_err_t http_proxy_set(const char *host, uint16_t port)
 {
     nvs_handle_t nvs;
-    esp_err_t err = nvs_open(MIMI_NVS_PROXY, NVS_READWRITE, &nvs);
+    esp_err_t err = nvs_open(LANG_NVS_PROXY, NVS_READWRITE, &nvs);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "NVS open failed: %s", esp_err_to_name(err));
         return err;
     }
-    err = nvs_set_str(nvs, MIMI_NVS_KEY_PROXY_HOST, host);
+    err = nvs_set_str(nvs, LANG_NVS_KEY_PROXY_HOST, host);
     if (err != ESP_OK) { ESP_LOGE(TAG, "NVS write host failed"); nvs_close(nvs); return err; }
-    err = nvs_set_u16(nvs, MIMI_NVS_KEY_PROXY_PORT, port);
+    err = nvs_set_u16(nvs, LANG_NVS_KEY_PROXY_PORT, port);
     if (err != ESP_OK) { ESP_LOGE(TAG, "NVS write port failed"); nvs_close(nvs); return err; }
     nvs_commit(nvs);
     nvs_close(nvs);
@@ -79,13 +79,13 @@ esp_err_t http_proxy_set(const char *host, uint16_t port)
 esp_err_t http_proxy_clear(void)
 {
     nvs_handle_t nvs;
-    esp_err_t err = nvs_open(MIMI_NVS_PROXY, NVS_READWRITE, &nvs);
+    esp_err_t err = nvs_open(LANG_NVS_PROXY, NVS_READWRITE, &nvs);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "NVS open failed: %s", esp_err_to_name(err));
         return err;
     }
-    nvs_erase_key(nvs, MIMI_NVS_KEY_PROXY_HOST);
-    nvs_erase_key(nvs, MIMI_NVS_KEY_PROXY_PORT);
+    nvs_erase_key(nvs, LANG_NVS_KEY_PROXY_HOST);
+    nvs_erase_key(nvs, LANG_NVS_KEY_PROXY_PORT);
     nvs_commit(nvs);
     nvs_close(nvs);
 

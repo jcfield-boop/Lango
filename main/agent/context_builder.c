@@ -96,35 +96,30 @@ esp_err_t context_build_system_prompt(char *buf, size_t size)
     off = append_file(buf, size, off, LANG_SOUL_FILE, "Personality");
     off = append_file(buf, size, off, LANG_USER_FILE, "User Info");
 
-    /* Skills summary */
-    char *skills_buf = malloc(2048);
-    if (skills_buf) {
-        size_t skills_len = skill_loader_build_summary(skills_buf, 2048);
+    /* Single shared PSRAM temp buffer for skills, memory, and recent notes.
+     * LANG_MEMORY_MAX_BYTES (16KB) is the largest — reuse for all three. */
+    char *tmp_buf = ps_malloc(LANG_MEMORY_MAX_BYTES);
+    if (tmp_buf) {
+        /* Skills summary (uses ~2KB of the 16KB buffer) */
+        size_t skills_len = skill_loader_build_summary(tmp_buf, 2048);
         if (skills_len > 0) {
             off += snprintf(buf + off, size - off,
                 "\n## Available Skills\n\n"
                 "REQUIRED: call read_file before acting on any matching request:\n%s\n",
-                skills_buf);
+                tmp_buf);
         }
-        free(skills_buf);
-    }
 
-    /* Long-term memory from PSRAM-allocated buffer */
-    char *mem_buf = ps_malloc(LANG_MEMORY_MAX_BYTES);
-    if (mem_buf) {
-        if (memory_read_long_term(mem_buf, LANG_MEMORY_MAX_BYTES) == ESP_OK && mem_buf[0]) {
-            off += snprintf(buf + off, size - off, "\n## Long-term Memory\n\n%s\n", mem_buf);
+        /* Long-term memory */
+        if (memory_read_long_term(tmp_buf, LANG_MEMORY_MAX_BYTES) == ESP_OK && tmp_buf[0]) {
+            off += snprintf(buf + off, size - off, "\n## Long-term Memory\n\n%s\n", tmp_buf);
         }
-        free(mem_buf);
-    }
 
-    /* Recent daily notes */
-    char *recent_buf = ps_malloc(2048);
-    if (recent_buf) {
-        if (memory_read_recent(recent_buf, 2048, 3) == ESP_OK && recent_buf[0]) {
-            off += snprintf(buf + off, size - off, "\n## Recent Notes\n\n%s\n", recent_buf);
+        /* Recent daily notes */
+        if (memory_read_recent(tmp_buf, 2048, 3) == ESP_OK && tmp_buf[0]) {
+            off += snprintf(buf + off, size - off, "\n## Recent Notes\n\n%s\n", tmp_buf);
         }
-        free(recent_buf);
+
+        free(tmp_buf);
     }
 
     /* Today's completed heartbeat tasks (prevents duplicate work) */

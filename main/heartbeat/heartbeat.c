@@ -96,7 +96,7 @@ static bool daily_is_due(const hb_task_t *task, const struct tm *now, int daily_
 
 static int parse_tasks(hb_task_t *tasks, int max)
 {
-    FILE *f = fopen(MIMI_HEARTBEAT_FILE, "r");
+    FILE *f = fopen(LANG_HEARTBEAT_FILE, "r");
     if (!f) return 0;
 
     char line[512];
@@ -245,7 +245,7 @@ static bool heartbeat_send(void)
     if (has_oneshots) {
         off += snprintf(prompt + off, HB_PROMPT_SIZE - off,
                         "\nFor any [ ] one-shot tasks in %s, mark them [x] with "
-                        "edit_file after completing.\n", MIMI_HEARTBEAT_FILE);
+                        "edit_file after completing.\n", LANG_HEARTBEAT_FILE);
     }
 
     off += snprintf(prompt + off, HB_PROMPT_SIZE - off,
@@ -295,7 +295,7 @@ static void heartbeat_task_main(void *arg)
     (void)arg;
 
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(MIMI_HEARTBEAT_INTERVAL_MS));
+        vTaskDelay(pdMS_TO_TICKS(LANG_HEARTBEAT_INTERVAL_MS));
         heartbeat_send();
 
         /* Push next daily task to OLED rotate slot 1 */
@@ -317,7 +317,7 @@ static void heartbeat_task_main(void *arg)
 esp_err_t heartbeat_init(void)
 {
     ESP_LOGI(TAG, "Heartbeat service initialized (file: %s, interval: %ds)",
-             MIMI_HEARTBEAT_FILE, MIMI_HEARTBEAT_INTERVAL_MS / 1000);
+             LANG_HEARTBEAT_FILE, LANG_HEARTBEAT_INTERVAL_MS / 1000);
     return ESP_OK;
 }
 
@@ -346,7 +346,7 @@ esp_err_t heartbeat_start(void)
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Heartbeat started (every %d min)", MIMI_HEARTBEAT_INTERVAL_MS / 60000);
+    ESP_LOGI(TAG, "Heartbeat started (every %d min)", LANG_HEARTBEAT_INTERVAL_MS / 60000);
     return ESP_OK;
 }
 

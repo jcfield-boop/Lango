@@ -1,5 +1,5 @@
 #include "tools/tool_files.h"
-#include "mimi_config.h"
+#include "langoustine_config.h"
 #include "memory/psram_alloc.h"
 
 #include <stdio.h>

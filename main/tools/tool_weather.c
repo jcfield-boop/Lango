@@ -11,6 +11,8 @@
 #include "cJSON.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "tool_weather";
 
@@ -126,14 +128,42 @@ esp_err_t tool_weather_execute(const char *input_json, char *output, size_t outp
 
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
 
     if (err != ESP_OK || status != 200) {
+        esp_http_client_cleanup(client);
         free(resp.data);
         snprintf(output, output_size, "Error: wttr.in request failed (HTTP %d, %s)",
                  status, esp_err_to_name(err));
         return ESP_FAIL;
     }
+
+    /* wttr.in sometimes returns "null" (4 bytes) or empty — retry once */
+    if (resp.len < 100) {
+        ESP_LOGW(TAG, "wttr.in returned only %d bytes, retrying...", resp.len);
+        resp.len = 0;
+        resp.data[0] = '\0';
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        err = esp_http_client_perform(client);
+        status = esp_http_client_get_status_code(client);
+        if (err != ESP_OK || status != 200) {
+            esp_http_client_cleanup(client);
+            free(resp.data);
+            snprintf(output, output_size, "Error: wttr.in retry failed (HTTP %d, %s)",
+                     status, esp_err_to_name(err));
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "wttr.in retry → %d bytes", resp.len);
+        if (resp.len < 100) {
+            esp_http_client_cleanup(client);
+            free(resp.data);
+            snprintf(output, output_size,
+                     "Error: wttr.in service returning empty/null (got %d bytes after retry). "
+                     "The weather service may be temporarily down.", resp.len);
+            return ESP_FAIL;
+        }
+    }
+
+    esp_http_client_cleanup(client);
 
     ESP_LOGI(TAG, "wttr.in %s → HTTP %d (%d bytes)", url, status, resp.len);
     ws_server_broadcast_monitor_verbose("tool", "get_weather → ok");

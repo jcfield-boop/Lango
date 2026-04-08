@@ -6,7 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "mimi_config.h"
+#include "langoustine_config.h"
 
 /**
  * Initialize the LLM proxy. Reads API key and model from build-time secrets, then NVS.
@@ -121,7 +121,7 @@ typedef struct {
 typedef struct {
     char *text;                                  /* accumulated text blocks */
     size_t text_len;
-    llm_tool_call_t calls[MIMI_MAX_TOOL_CALLS];
+    llm_tool_call_t calls[LANG_MAX_TOOL_CALLS];
     int call_count;
     bool tool_use;                               /* stop_reason == "tool_use" */
     bool truncated;                              /* finish_reason == "length" (max_tokens hit) */

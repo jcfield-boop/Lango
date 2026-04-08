@@ -1,5 +1,5 @@
 #include "wifi_manager.h"
-#include "mimi_config.h"
+#include "langoustine_config.h"
 #include "gateway/ws_server.h"
 
 #include <string.h>
@@ -57,23 +57,23 @@ static void event_handler(void *arg, esp_event_base_t event_base,
             ESP_LOGW(TAG, "Disconnected (reason=%d:%s)", disc->reason, wifi_reason_to_str(disc->reason));
         }
         ws_server_broadcast_monitor("error", "WiFi disconnected");
-        if (s_retry_count < MIMI_WIFI_MAX_RETRY) {
+        if (s_retry_count < LANG_WIFI_MAX_RETRY) {
             /* Exponential backoff: 1s, 2s, 4s, 8s, ... capped at 30s */
-            uint32_t delay_ms = MIMI_WIFI_RETRY_BASE_MS << s_retry_count;
-            if (delay_ms > MIMI_WIFI_RETRY_MAX_MS) {
-                delay_ms = MIMI_WIFI_RETRY_MAX_MS;
+            uint32_t delay_ms = LANG_WIFI_RETRY_BASE_MS << s_retry_count;
+            if (delay_ms > LANG_WIFI_RETRY_MAX_MS) {
+                delay_ms = LANG_WIFI_RETRY_MAX_MS;
             }
             ESP_LOGW(TAG, "Disconnected, retry %d/%d in %" PRIu32 "ms",
-                     s_retry_count + 1, MIMI_WIFI_MAX_RETRY, delay_ms);
+                     s_retry_count + 1, LANG_WIFI_MAX_RETRY, delay_ms);
             char retry_msg[32];
             snprintf(retry_msg, sizeof(retry_msg), "WiFi retry %d/%d",
-                     s_retry_count + 1, MIMI_WIFI_MAX_RETRY);
+                     s_retry_count + 1, LANG_WIFI_MAX_RETRY);
             ws_server_broadcast_monitor("ws", retry_msg);
             vTaskDelay(pdMS_TO_TICKS(delay_ms));
             esp_wifi_connect();
             s_retry_count++;
         } else {
-            ESP_LOGE(TAG, "Failed to connect after %d retries, will retry in 60s", MIMI_WIFI_MAX_RETRY);
+            ESP_LOGE(TAG, "Failed to connect after %d retries, will retry in 60s", LANG_WIFI_MAX_RETRY);
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
             if (!s_reconnect_timer) {
                 esp_timer_create_args_t targs = {
@@ -140,11 +140,11 @@ esp_err_t wifi_manager_start(void)
 
     /* NVS overrides take highest priority (set via CLI) */
     nvs_handle_t nvs;
-    if (nvs_open(MIMI_NVS_WIFI, NVS_READONLY, &nvs) == ESP_OK) {
+    if (nvs_open(LANG_NVS_WIFI, NVS_READONLY, &nvs) == ESP_OK) {
         size_t len = sizeof(wifi_cfg.sta.ssid);
-        if (nvs_get_str(nvs, MIMI_NVS_KEY_SSID, (char *)wifi_cfg.sta.ssid, &len) == ESP_OK) {
+        if (nvs_get_str(nvs, LANG_NVS_KEY_SSID, (char *)wifi_cfg.sta.ssid, &len) == ESP_OK) {
             len = sizeof(wifi_cfg.sta.password);
-            nvs_get_str(nvs, MIMI_NVS_KEY_PASS, (char *)wifi_cfg.sta.password, &len);
+            nvs_get_str(nvs, LANG_NVS_KEY_PASS, (char *)wifi_cfg.sta.password, &len);
             found = true;
         }
         nvs_close(nvs);
@@ -152,9 +152,9 @@ esp_err_t wifi_manager_start(void)
 
     /* Fall back to build-time secrets */
     if (!found) {
-        if (MIMI_SECRET_WIFI_SSID[0] != '\0') {
-            strncpy((char *)wifi_cfg.sta.ssid, MIMI_SECRET_WIFI_SSID, sizeof(wifi_cfg.sta.ssid) - 1);
-            strncpy((char *)wifi_cfg.sta.password, MIMI_SECRET_WIFI_PASS, sizeof(wifi_cfg.sta.password) - 1);
+        if (LANG_SECRET_WIFI_SSID[0] != '\0') {
+            strncpy((char *)wifi_cfg.sta.ssid, LANG_SECRET_WIFI_SSID, sizeof(wifi_cfg.sta.ssid) - 1);
+            strncpy((char *)wifi_cfg.sta.password, LANG_SECRET_WIFI_PASS, sizeof(wifi_cfg.sta.password) - 1);
             found = true;
         }
     }
@@ -206,9 +206,9 @@ const char *wifi_manager_get_ip(void)
 esp_err_t wifi_manager_set_credentials(const char *ssid, const char *password)
 {
     nvs_handle_t nvs;
-    ESP_ERROR_CHECK(nvs_open(MIMI_NVS_WIFI, NVS_READWRITE, &nvs));
-    ESP_ERROR_CHECK(nvs_set_str(nvs, MIMI_NVS_KEY_SSID, ssid));
-    ESP_ERROR_CHECK(nvs_set_str(nvs, MIMI_NVS_KEY_PASS, password));
+    ESP_ERROR_CHECK(nvs_open(LANG_NVS_WIFI, NVS_READWRITE, &nvs));
+    ESP_ERROR_CHECK(nvs_set_str(nvs, LANG_NVS_KEY_SSID, ssid));
+    ESP_ERROR_CHECK(nvs_set_str(nvs, LANG_NVS_KEY_PASS, password));
     ESP_ERROR_CHECK(nvs_commit(nvs));
     nvs_close(nvs);
     ESP_LOGI(TAG, "WiFi credentials saved for SSID: %s", ssid);

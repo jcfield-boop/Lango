@@ -1,5 +1,5 @@
 #include "rule_engine.h"
-#include "mimi_config.h"
+#include "langoustine_config.h"
 #include "tools/tool_registry.h"
 #include "gateway/ws_server.h"
 #include "bus/message_bus.h"

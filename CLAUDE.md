@@ -112,7 +112,7 @@ lango> config_show          # shows all values with source (NVS/build)
 lango> config_reset         # wipes all NVS overrides
 ```
 
-All constants live in `main/langoustine_config.h` under the `LANG_` prefix. Verbatim-copied modules that haven't been fully renamed use `MIMI_` aliases defined in the same file and in `main/mimi_config.h` (a one-line stub that includes `langoustine_config.h`).
+All constants live in `main/langoustine_config.h` under the `LANG_` prefix.
 
 ### NVS Namespaces
 `wifi_config`, `llm_config`, `tg_config`, `stt_config`, `tts_config`, `proxy_config`, `search_config`

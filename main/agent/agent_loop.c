@@ -381,20 +381,22 @@ static cJSON *build_tool_results(const llm_response_t *resp, const lang_msg_t *m
             snprintf(oled_tool, sizeof(oled_tool), "Tool: %s", call->name);
             oled_display_set_message(oled_tool);
         }
+        int64_t t0 = esp_timer_get_time();
         tool_registry_execute(call->name, tool_input, tool_output, tool_output_size);
+        int tool_ms = (int)((esp_timer_get_time() - t0) / 1000);
         free(patched_input);
 
         int tool_out_len = (int)strlen(tool_output);
-        ESP_LOGI(TAG, "Tool %s result: %d bytes", call->name, tool_out_len);
+        ESP_LOGI(TAG, "Tool %s result: %d bytes in %dms", call->name, tool_out_len, tool_ms);
 
         if (strncmp(tool_output, "Error:", 6) == 0) {
             char emsg[160];
-            snprintf(emsg, sizeof(emsg), "[%s] %.100s", call->name, tool_output);
+            snprintf(emsg, sizeof(emsg), "[%s] %.100s (%dms)", call->name, tool_output, tool_ms);
             ws_server_broadcast_monitor("error", emsg);
         } else {
             char preview[128];
-            snprintf(preview, sizeof(preview), "[%s] %d bytes: %.40s%s",
-                     call->name, tool_out_len, tool_output,
+            snprintf(preview, sizeof(preview), "[%s] %d bytes (%dms): %.40s%s",
+                     call->name, tool_out_len, tool_ms, tool_output,
                      tool_out_len > 40 ? "..." : "");
             for (char *p = preview; *p; p++) if (*p == '\n' || *p == '\r') *p = ' ';
             ws_server_broadcast_monitor("tool", preview);

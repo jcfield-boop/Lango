@@ -1,5 +1,5 @@
 #include "telegram_bot.h"
-#include "mimi_config.h"
+#include "langoustine_config.h"
 #include "bus/message_bus.h"
 #include "proxy/http_proxy.h"
 #include "gateway/ws_server.h"
@@ -18,7 +18,7 @@
 
 static const char *TAG = "telegram";
 
-static char s_bot_token[128] = MIMI_SECRET_TG_TOKEN;
+static char s_bot_token[128] = LANG_SECRET_TG_TOKEN;
 static int64_t s_update_offset = 0;
 static int64_t s_last_saved_offset = -1;
 static int64_t s_last_offset_save_us = 0;
@@ -100,7 +100,7 @@ static void save_update_offset_if_needed(bool force)
     }
 
     nvs_handle_t nvs;
-    if (nvs_open(MIMI_NVS_TG, NVS_READWRITE, &nvs) != ESP_OK) {
+    if (nvs_open(LANG_NVS_TG, NVS_READWRITE, &nvs) != ESP_OK) {
         return;
     }
 
@@ -139,7 +139,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 static char *tg_api_call_via_proxy(const char *path, const char *post_data)
 {
     proxy_conn_t *conn = proxy_conn_open("api.telegram.org", 443,
-                                          (MIMI_TG_POLL_TIMEOUT_S + 5) * 1000);
+                                          (LANG_TG_POLL_TIMEOUT_S + 5) * 1000);
     if (!conn) return NULL;
 
     /* Build HTTP request */
@@ -175,7 +175,7 @@ static char *tg_api_call_via_proxy(const char *path, const char *post_data)
     char *buf = ps_calloc(1, cap);
     if (!buf) { proxy_conn_close(conn); return NULL; }
 
-    int timeout = (MIMI_TG_POLL_TIMEOUT_S + 5) * 1000;
+    int timeout = (LANG_TG_POLL_TIMEOUT_S + 5) * 1000;
     while (1) {
         if (len + 1024 >= cap) {
             cap *= 2;
@@ -219,7 +219,7 @@ static char *tg_api_call_direct(const char *method, const char *post_data)
         .url = url,
         .event_handler = http_event_handler,
         .user_data = &resp,
-        .timeout_ms = (MIMI_TG_POLL_TIMEOUT_S + 5) * 1000,
+        .timeout_ms = (LANG_TG_POLL_TIMEOUT_S + 5) * 1000,
         .buffer_size = 2048,
         .buffer_size_tx = 2048,
         .crt_bundle_attach = esp_crt_bundle_attach,
@@ -312,7 +312,7 @@ static void save_allowed_ids_to_nvs(void)
         if (n > 0) off += n;
     }
     nvs_handle_t nvs;
-    if (nvs_open(MIMI_NVS_TG, NVS_READWRITE, &nvs) == ESP_OK) {
+    if (nvs_open(LANG_NVS_TG, NVS_READWRITE, &nvs) == ESP_OK) {
         nvs_set_str(nvs, TG_ALLOWED_IDS_NVS_KEY, buf);
         nvs_commit(nvs);
         nvs_close(nvs);
@@ -442,7 +442,7 @@ static void telegram_poll_task(void *arg)
         char params[128];
         snprintf(params, sizeof(params),
                  "getUpdates?offset=%" PRId64 "&timeout=%d",
-                 s_update_offset, MIMI_TG_POLL_TIMEOUT_S);
+                 s_update_offset, LANG_TG_POLL_TIMEOUT_S);
 
         char *resp = tg_api_call(params, NULL);
         if (resp) {
@@ -463,10 +463,10 @@ esp_err_t telegram_bot_init(void)
 {
     /* NVS overrides take highest priority (set via CLI) */
     nvs_handle_t nvs;
-    if (nvs_open(MIMI_NVS_TG, NVS_READONLY, &nvs) == ESP_OK) {
+    if (nvs_open(LANG_NVS_TG, NVS_READONLY, &nvs) == ESP_OK) {
         char tmp[128] = {0};
         size_t len = sizeof(tmp);
-        if (nvs_get_str(nvs, MIMI_NVS_KEY_TG_TOKEN, tmp, &len) == ESP_OK && tmp[0]) {
+        if (nvs_get_str(nvs, LANG_NVS_KEY_TG_TOKEN, tmp, &len) == ESP_OK && tmp[0]) {
             strncpy(s_bot_token, tmp, sizeof(s_bot_token) - 1);
         }
 
@@ -503,7 +503,7 @@ esp_err_t telegram_bot_init(void)
         nvs_close(nvs);
     }
 
-    /* s_bot_token is already initialized from MIMI_SECRET_TG_TOKEN as fallback */
+    /* s_bot_token is already initialized from LANG_SECRET_TG_TOKEN as fallback */
 
     if (s_bot_token[0]) {
         ESP_LOGI(TAG, "Telegram bot token loaded (len=%d)", (int)strlen(s_bot_token));
@@ -518,8 +518,8 @@ esp_err_t telegram_bot_start(void)
     /* Stack in PSRAM — safe with XIP.  Frees 8KB SRAM. */
     BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
         telegram_poll_task, "tg_poll",
-        MIMI_TG_POLL_STACK, NULL,
-        MIMI_TG_POLL_PRIO, NULL,
+        LANG_TG_POLL_STACK, NULL,
+        LANG_TG_POLL_PRIO, NULL,
         0,  /* Core 0 (network core) */
         MALLOC_CAP_SPIRAM);
 
@@ -586,8 +586,8 @@ esp_err_t telegram_send_message(const char *chat_id, const char *text)
 
     while (offset < text_len) {
         size_t chunk = text_len - offset;
-        if (chunk > MIMI_TG_MAX_MSG_LEN) {
-            chunk = MIMI_TG_MAX_MSG_LEN;
+        if (chunk > LANG_TG_MAX_MSG_LEN) {
+            chunk = LANG_TG_MAX_MSG_LEN;
         }
 
         /* Build JSON body */
@@ -738,12 +738,12 @@ esp_err_t telegram_edit_message(const char *chat_id, int32_t message_id, const c
     cJSON_AddNumberToObject(body, "message_id", (double)message_id);
 
     size_t text_len = strlen(text);
-    if (text_len > MIMI_TG_MAX_MSG_LEN) {
+    if (text_len > LANG_TG_MAX_MSG_LEN) {
         /* Truncate with ellipsis suffix */
-        char *trunc = malloc(MIMI_TG_MAX_MSG_LEN + 4);
+        char *trunc = malloc(LANG_TG_MAX_MSG_LEN + 4);
         if (trunc) {
-            memcpy(trunc, text, MIMI_TG_MAX_MSG_LEN);
-            memcpy(trunc + MIMI_TG_MAX_MSG_LEN, "...", 4);
+            memcpy(trunc, text, LANG_TG_MAX_MSG_LEN);
+            memcpy(trunc + LANG_TG_MAX_MSG_LEN, "...", 4);
             cJSON_AddStringToObject(body, "text", trunc);
             free(trunc);
         } else {
@@ -779,12 +779,12 @@ esp_err_t telegram_edit_message(const char *chat_id, int32_t message_id, const c
 esp_err_t telegram_set_token(const char *token)
 {
     nvs_handle_t nvs;
-    esp_err_t err = nvs_open(MIMI_NVS_TG, NVS_READWRITE, &nvs);
+    esp_err_t err = nvs_open(LANG_NVS_TG, NVS_READWRITE, &nvs);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "NVS open failed: %s", esp_err_to_name(err));
         return err;
     }
-    err = nvs_set_str(nvs, MIMI_NVS_KEY_TG_TOKEN, token);
+    err = nvs_set_str(nvs, LANG_NVS_KEY_TG_TOKEN, token);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "NVS write failed: %s", esp_err_to_name(err));
         nvs_close(nvs);

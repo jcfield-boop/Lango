@@ -33,6 +33,8 @@
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
 #include "esp_app_desc.h"
+#include "agent/agent_loop.h"
+#include "tools/tool_device_temp.h"
 #include "nvs.h"
 #include "cJSON.h"
 #include "freertos/semphr.h"
@@ -1163,11 +1165,18 @@ static esp_err_t sysinfo_handler(httpd_req_t *req)
     /* FreeRTOS task count */
     UBaseType_t task_count = uxTaskGetNumberOfTasks();
 
+    /* Chip temperature (shared handle via tool_device_temp) */
+    float chip_temp_c = 0.0f;
+    device_temp_get_celsius(&chip_temp_c);
+
+    /* Agent daily message count */
+    int msg_count = agent_get_rate_count();
+
     /* Running OTA partition */
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_app_desc_t *app = esp_app_get_description();
 
-    char buf[800];
+    char buf[900];
     snprintf(buf, sizeof(buf),
              "{\"heap_free\":%u,\"heap_min\":%u,\"heap_block\":%u,\"psram_free\":%u,\"psram_min\":%u"
              ",\"lfs_total\":%u,\"lfs_used\":%u"
@@ -1175,6 +1184,7 @@ static esp_err_t sysinfo_handler(httpd_req_t *req)
              ",\"search_calls\":%u,\"search_cost_millicents\":%u"
              ",\"uptime_s\":%lu,\"reset_reason\":\"%s\""
              ",\"wifi_rssi\":%d,\"task_count\":%u"
+             ",\"chip_temp_c\":%.1f,\"msg_count\":%d"
              ",\"ota_partition\":\"%s\",\"firmware_version\":\"%s\""
              ",\"uac_mic_connected\":%s}",
              (unsigned)heap_free, (unsigned)heap_min, (unsigned)heap_block,
@@ -1184,6 +1194,7 @@ static esp_err_t sysinfo_handler(httpd_req_t *req)
              (unsigned)search_calls, (unsigned)search_cost_mc,
              uptime_s, reset_str,
              (int)rssi, (unsigned)task_count,
+             chip_temp_c, msg_count,
              running ? running->label : "unknown",
              app ? app->version : "unknown",
              uac_connected ? "true" : "false");

@@ -1,5 +1,5 @@
 #include "tool_web_search.h"
-#include "mimi_config.h"
+#include "langoustine_config.h"
 #include "gateway/ws_server.h"
 #include "memory/psram_alloc.h"
 
@@ -89,16 +89,16 @@ void web_search_reset_turn(void)
 esp_err_t tool_web_search_init(void)
 {
     /* Start with build-time default */
-    if (MIMI_SECRET_SEARCH_KEY[0] != '\0') {
-        strncpy(s_search_key, MIMI_SECRET_SEARCH_KEY, sizeof(s_search_key) - 1);
+    if (LANG_SECRET_SEARCH_KEY[0] != '\0') {
+        strncpy(s_search_key, LANG_SECRET_SEARCH_KEY, sizeof(s_search_key) - 1);
     }
 
     /* NVS overrides take highest priority (set via CLI) */
     nvs_handle_t nvs;
-    if (nvs_open(MIMI_NVS_SEARCH, NVS_READONLY, &nvs) == ESP_OK) {
+    if (nvs_open(LANG_NVS_SEARCH, NVS_READONLY, &nvs) == ESP_OK) {
         char tmp[128] = {0};
         size_t len = sizeof(tmp);
-        if (nvs_get_str(nvs, MIMI_NVS_KEY_API_KEY, tmp, &len) == ESP_OK && tmp[0]) {
+        if (nvs_get_str(nvs, LANG_NVS_KEY_API_KEY, tmp, &len) == ESP_OK && tmp[0]) {
             strncpy(s_search_key, tmp, sizeof(s_search_key) - 1);
         }
         nvs_close(nvs);
@@ -126,7 +126,7 @@ void tool_web_search_get_stats(uint32_t *calls, uint32_t *cost_millicents)
 static esp_err_t search_tavily(const char *query, const char *api_key,
                                char *output, size_t output_size)
 {
-    char *buf = ps_malloc(MIMI_TAVILY_BUF_SIZE);
+    char *buf = ps_malloc(LANG_TAVILY_BUF_SIZE);
     if (!buf) return ESP_ERR_NO_MEM;
 
     /* Tavily API v2: key in Authorization header (works for tvly- and re- keys).
@@ -184,7 +184,7 @@ static esp_err_t search_tavily(const char *query, const char *api_key,
             } else {
                 int rd;
                 while ((rd = esp_http_client_read(client, buf + total,
-                                                   MIMI_TAVILY_BUF_SIZE - total - 1)) > 0) {
+                                                   LANG_TAVILY_BUF_SIZE - total - 1)) > 0) {
                     total += rd;
                 }
                 buf[total] = '\0';
@@ -239,7 +239,7 @@ static esp_err_t search_brave(const char *query, const char *api_key,
                               char *output, size_t output_size)
 {
     /* Brave Web Search API: GET with query params, key in header */
-    char *buf = ps_malloc(MIMI_TAVILY_BUF_SIZE);
+    char *buf = ps_malloc(LANG_TAVILY_BUF_SIZE);
     if (!buf) return ESP_ERR_NO_MEM;
 
     /* URL-encode query (simple: just replace spaces with +) */
@@ -287,7 +287,7 @@ static esp_err_t search_brave(const char *query, const char *api_key,
         } else {
             int rd;
             while ((rd = esp_http_client_read(client, buf + total,
-                                               MIMI_TAVILY_BUF_SIZE - total - 1)) > 0) {
+                                               LANG_TAVILY_BUF_SIZE - total - 1)) > 0) {
                 total += rd;
             }
             buf[total] = '\0';
@@ -403,12 +403,12 @@ esp_err_t tool_web_search_execute(const char *input_json, char *output, size_t o
 esp_err_t tool_web_search_set_key(const char *api_key)
 {
     nvs_handle_t nvs;
-    esp_err_t err = nvs_open(MIMI_NVS_SEARCH, NVS_READWRITE, &nvs);
+    esp_err_t err = nvs_open(LANG_NVS_SEARCH, NVS_READWRITE, &nvs);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "NVS open failed: %s", esp_err_to_name(err));
         return err;
     }
-    err = nvs_set_str(nvs, MIMI_NVS_KEY_API_KEY, api_key);
+    err = nvs_set_str(nvs, LANG_NVS_KEY_API_KEY, api_key);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "NVS write failed: %s", esp_err_to_name(err));
         nvs_close(nvs);

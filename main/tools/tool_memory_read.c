@@ -1,7 +1,7 @@
 #include "tool_memory_read.h"
 #include "memory/memory_store.h"
 #include "memory/psram_alloc.h"
-#include "mimi_config.h"
+#include "langoustine_config.h"
 
 #include <stdio.h>
 #include <string.h>
