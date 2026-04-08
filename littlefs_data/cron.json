@@ -1,19 +1,6 @@
 {
   "jobs": [
     {
-      "id": "brfng001",
-      "name": "Daily Morning Briefing",
-      "enabled": true,
-      "kind": "every",
-      "interval_s": 86400,
-      "next_run": 1774098300,
-      "last_run": 0,
-      "delete_after_run": false,
-      "channel": "telegram",
-      "chat_id": "5538967144",
-      "message": "Run the daily briefing for James using the daily-briefing skill: ARM stock price, top tech news from HN and ARM newsroom RSS feeds, weather in San Francisco, and anything pending in memory. Also run the event-countdown skill to check if any tech event (GTC, Google I/O, Build, Computex) is within 14 days — if so, include it in the briefing. Be concise — 5-8 bullet points total."
-    },
-    {
       "id": "surf0002",
       "name": "Saturday Surf Check",
       "enabled": true,
