@@ -733,25 +733,29 @@ esp_err_t telegram_edit_message(const char *chat_id, int32_t message_id, const c
     if (s_bot_token[0] == '\0') return ESP_ERR_INVALID_STATE;
     if (message_id <= 0 || !chat_id || !text) return ESP_ERR_INVALID_ARG;
 
+    size_t text_len = strlen(text);
+
+    /* If text fits in one message, edit the placeholder directly */
+    size_t first_chunk = text_len;
+    if (first_chunk > LANG_TG_MAX_MSG_LEN) {
+        first_chunk = LANG_TG_MAX_MSG_LEN;
+        /* Try to break at a newline within the last 200 chars for cleaner split */
+        for (size_t i = first_chunk; i > first_chunk - 200 && i > 0; i--) {
+            if (text[i] == '\n') { first_chunk = i; break; }
+        }
+    }
+
+    /* Edit placeholder with first chunk */
+    char *segment = malloc(first_chunk + 1);
+    if (!segment) return ESP_ERR_NO_MEM;
+    memcpy(segment, text, first_chunk);
+    segment[first_chunk] = '\0';
+
     cJSON *body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "chat_id", chat_id);
     cJSON_AddNumberToObject(body, "message_id", (double)message_id);
-
-    size_t text_len = strlen(text);
-    if (text_len > LANG_TG_MAX_MSG_LEN) {
-        /* Truncate with ellipsis suffix */
-        char *trunc = malloc(LANG_TG_MAX_MSG_LEN + 4);
-        if (trunc) {
-            memcpy(trunc, text, LANG_TG_MAX_MSG_LEN);
-            memcpy(trunc + LANG_TG_MAX_MSG_LEN, "...", 4);
-            cJSON_AddStringToObject(body, "text", trunc);
-            free(trunc);
-        } else {
-            cJSON_AddStringToObject(body, "text", text);
-        }
-    } else {
-        cJSON_AddStringToObject(body, "text", text);
-    }
+    cJSON_AddStringToObject(body, "text", segment);
+    free(segment);
 
     char *json_str = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
@@ -771,6 +775,13 @@ esp_err_t telegram_edit_message(const char *chat_id, int32_t message_id, const c
         }
         ESP_LOGW(TAG, "editMessageText id=%d failed: %s", (int)message_id, desc[0] ? desc : "unknown");
         return ESP_FAIL;
+    }
+
+    /* Send overflow as continuation messages (telegram_send_message splits at 4096) */
+    if (text_len > first_chunk) {
+        ESP_LOGI(TAG, "Message overflow: %d chars remaining, sending as continuation",
+                 (int)(text_len - first_chunk));
+        return telegram_send_message(chat_id, text + first_chunk);
     }
 
     return ESP_OK;

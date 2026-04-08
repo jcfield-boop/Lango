@@ -77,12 +77,16 @@ esp_err_t http_session_perform(http_session_t *s)
 
     esp_err_t ret = esp_http_client_perform(s->handle);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Request failed (%s), resetting session and retrying",
+        /* Reset session (destroy old handle, create fresh one) so the
+         * next caller-initiated request starts with a clean TLS connection.
+         *
+         * NOTE: We do NOT retry here. The fresh handle has no headers,
+         * method, or POST body — only the base URL. Retrying would send
+         * a bare GET and get 404. The caller (agent_loop.c) has full
+         * retry logic that rebuilds the complete request. */
+        ESP_LOGW(TAG, "Request failed (%s), resetting session for next call",
                  esp_err_to_name(ret));
         http_session_reset(s);
-        if (s->valid) {
-            ret = esp_http_client_perform(s->handle);
-        }
     }
     return ret;
 }
