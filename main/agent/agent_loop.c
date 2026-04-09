@@ -621,8 +621,9 @@ static void agent_loop_task(void *arg)
 
         /* Smart routing: channel-aware local/cloud selection.
          * Voice (chat_id="ptt"): always use a fast cloud model — latency matters.
-         * Text (browser/Telegram): prefer local Ollama when available. */
+         * Text (browser/Telegram): prefer Apfel → Ollama → cloud (in that order). */
         bool using_local        = false;
+        bool using_apfel        = false;
         bool using_voice_cloud  = false;
         bool is_voice           = (strcmp(msg.chat_id, "ptt") == 0);
 
@@ -640,18 +641,12 @@ static void agent_loop_task(void *arg)
             }
         } else if (!is_voice && strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0
                    && llm_smart_routing_available()) {
-            /* Text (browser/Telegram) → local Ollama when reachable and appropriate.
+            /* Text (browser/Telegram) → Apfel / Ollama when reachable.
              * System/heartbeat always uses cloud (multi-step tool chains need speed).
              *
              * Complexity check: route complex requests (web search, email, briefings)
              * to cloud even from text channel — local models struggle with long tool
-             * chains. Simple Q&A, time, weather, conversational → local fine.
-             *
-             * Vision check: if capture_image ran this turn, use the vision model.
-             * Otherwise use local_text_model (fast, text-only, e.g. gemma3:12b). */
-            /* Only route to cloud for genuinely complex multi-tool chains.
-             * "forecast" removed: local Ollama handles get_weather tool fine.
-             * "headlines" removed: single web_search tool call, not complex. */
+             * chains. Simple Q&A, time, weather, conversational → local fine. */
             bool is_complex = (strcasestr(msg.content, "briefing")  != NULL ||
                                strcasestr(msg.content, "web search") != NULL ||
                                strcasestr(msg.content, "search for") != NULL ||
@@ -659,9 +654,56 @@ static void agent_loop_task(void *arg)
                                strcasestr(msg.content, "send email") != NULL ||
                                strcasestr(msg.content, "research")   != NULL);
 
+            /* Requests needing tools bypass Apfel (4K context can't hold tool schemas).
+             * Keyword triggers: weather, time, remind, cron, remember, note, search, stock */
+            bool needs_tools = is_complex ||
+                               (strcasestr(msg.content, "weather")   != NULL) ||
+                               (strcasestr(msg.content, "forecast")  != NULL) ||
+                               (strcasestr(msg.content, "what time") != NULL) ||
+                               (strcasestr(msg.content, "remind")    != NULL) ||
+                               (strcasestr(msg.content, "cron")      != NULL) ||
+                               (strcasestr(msg.content, "remember")  != NULL) ||
+                               (strcasestr(msg.content, "note that") != NULL) ||
+                               (strcasestr(msg.content, "stock")     != NULL) ||
+                               (strcasestr(msg.content, "device")    != NULL) ||
+                               (strcasestr(msg.content, "system")    != NULL) ||
+                               force_memory_tool || turn_has_image;
+
             if (is_complex) {
                 ESP_LOGI(TAG, "Smart routing: complex request → cloud");
                 ws_server_broadcast_monitor("llm", "routing: cloud (complex)");
+            } else if (!needs_tools && llm_apfel_health_check()) {
+                /* Apfel: Apple Foundation Model — ultra-fast, no tools, minimal context.
+                 * Only for simple conversational queries that don't need tool calling. */
+                llm_set_request_override("apfel", llm_get_apfel_model());
+                using_apfel = true;
+                /* Rebuild system prompt with minimal version for 4K context window */
+                context_build_minimal_prompt(system_prompt, LANG_CONTEXT_BUF_SIZE);
+                /* Aggressively trim history for Apfel's small context */
+                {
+                    int total_chars = 0;
+                    int arr_size = cJSON_GetArraySize(messages);
+                    for (int i = 0; i < arr_size; i++) {
+                        cJSON *m = cJSON_GetArrayItem(messages, i);
+                        cJSON *c = cJSON_GetObjectItemCaseSensitive(m, "content");
+                        if (c && cJSON_IsString(c))
+                            total_chars += (int)strlen(c->valuestring);
+                    }
+                    while (total_chars > 2048 && cJSON_GetArraySize(messages) >= 2) {
+                        cJSON *oldest = cJSON_GetArrayItem(messages, 0);
+                        cJSON *c = cJSON_GetObjectItemCaseSensitive(oldest, "content");
+                        if (c && cJSON_IsString(c))
+                            total_chars -= (int)strlen(c->valuestring);
+                        cJSON_DeleteItemFromArray(messages, 0);
+                    }
+                }
+                {
+                    char route_msg[64];
+                    snprintf(route_msg, sizeof(route_msg), "routing: apfel → %s",
+                             llm_get_apfel_model());
+                    ESP_LOGI(TAG, "Smart routing: %s", route_msg);
+                    ws_server_broadcast_monitor("llm", route_msg);
+                }
             } else if (llm_local_health_check()) {
                 /* Vision turns use the vision model; text turns use the text model */
                 const char *local_model = turn_has_image
@@ -682,7 +724,8 @@ static void agent_loop_task(void *arg)
             }
             /* Push local service status to OLED */
             oled_display_set_local_status(llm_local_is_online(),
-                                          tts_local_is_online());
+                                          tts_local_is_online(),
+                                          llm_apfel_is_online());
         }
 
         while (iteration < LANG_AGENT_MAX_TOOL_ITER) {
@@ -733,8 +776,9 @@ static void agent_loop_task(void *arg)
             }
             llm_response_t resp;
             bool force_this_iter = (force_memory_tool && iteration == 0);
-            err = llm_chat_tools_streaming(system_prompt, messages, tools_json,
-                                           force_this_iter,
+            const char *effective_tools = using_apfel ? NULL : tools_json;
+            err = llm_chat_tools_streaming(system_prompt, messages, effective_tools,
+                                           force_this_iter && !using_apfel,
                                            ws_stream_progress, &stream_ctx,
                                            &resp);
 
@@ -750,6 +794,34 @@ static void agent_loop_task(void *arg)
                                                force_this_iter,
                                                ws_stream_progress, &stream_ctx,
                                                &resp);
+            }
+
+            /* Apfel fallback: if Apfel failed, try Ollama with full context */
+            if (err != ESP_OK && using_apfel) {
+                ESP_LOGW(TAG, "Apfel failed (%s), trying Ollama", esp_err_to_name(err));
+                ws_server_broadcast_monitor("llm", "apfel failed — trying local Ollama");
+                using_apfel = false;
+                if (llm_local_health_check()) {
+                    const char *local_model = llm_get_local_text_model();
+                    llm_set_request_override("ollama", local_model);
+                    using_local = true;
+                    /* Rebuild full context for Ollama (Apfel had minimal) */
+                    context_build_system_prompt(system_prompt, LANG_CONTEXT_BUF_SIZE);
+                    retry_done = false;
+                    err = llm_chat_tools_streaming(system_prompt, messages, tools_json,
+                                                   force_this_iter,
+                                                   ws_stream_progress, &stream_ctx,
+                                                   &resp);
+                } else {
+                    /* Neither Apfel nor Ollama available — fall through to cloud */
+                    llm_clear_request_override();
+                    context_build_system_prompt(system_prompt, LANG_CONTEXT_BUF_SIZE);
+                    retry_done = false;
+                    err = llm_chat_tools_streaming(system_prompt, messages, tools_json,
+                                                   force_this_iter,
+                                                   ws_stream_progress, &stream_ctx,
+                                                   &resp);
+                }
             }
 
             /* Local model fallback: if text model failed (e.g. gemma3 doesn't

@@ -63,6 +63,12 @@ static bool s_local_online = false;
 static int64_t s_local_check_us = 0;
 #define LOCAL_HEALTH_CACHE_US  (30LL * 1000000LL)  /* 30 seconds — balances freshness vs per-turn latency */
 
+/* Apfel (Apple Foundation Model via OpenAI-compatible server) */
+static char s_apfel_url[LLM_LOCAL_URL_MAX] = {0};
+static char s_apfel_model[LLM_MODEL_MAX_LEN] = {0};
+static bool s_apfel_online = false;
+static int64_t s_apfel_check_us = 0;
+
 static uint32_t s_total_input_tokens    = 0;
 static uint32_t s_total_output_tokens   = 0;
 static uint32_t s_total_cost_millicents = 0;
@@ -209,23 +215,51 @@ static bool provider_is_ollama(void)
     return strcmp(effective_provider(), "ollama") == 0;
 }
 
+static bool provider_is_apfel(void)
+{
+    return strcmp(effective_provider(), "apfel") == 0;
+}
+
 /* Returns true for any provider that uses OpenAI-compatible message/tool format */
 static bool provider_uses_openai_format(void)
 {
-    return provider_is_openai() || provider_is_openrouter() || provider_is_ollama();
+    return provider_is_openai() || provider_is_openrouter()
+           || provider_is_ollama() || provider_is_apfel();
 }
 
-/* Returns true when the target is plain HTTP (no TLS) — e.g. local Ollama */
+/* Returns true when the target is plain HTTP (no TLS) — e.g. local Ollama/Apfel */
 static bool provider_is_plaintext(void)
 {
     if (provider_is_ollama() && s_local_url[0]) {
         return strncmp(s_local_url, "http://", 7) == 0;
     }
+    if (provider_is_apfel() && s_apfel_url[0]) {
+        return strncmp(s_apfel_url, "http://", 7) == 0;
+    }
     return false;
+}
+
+/* Extract host:port from a URL like "http://192.168.0.51:11434/v1" */
+static const char *extract_host(const char *url, char *buf, size_t buf_size)
+{
+    const char *p = url;
+    if (strncmp(p, "http://", 7) == 0) p += 7;
+    else if (strncmp(p, "https://", 8) == 0) p += 8;
+    const char *end = strchr(p, '/');
+    size_t len = end ? (size_t)(end - p) : strlen(p);
+    if (len >= buf_size) len = buf_size - 1;
+    memcpy(buf, p, len);
+    buf[len] = '\0';
+    return buf;
 }
 
 static const char *llm_api_url(void)
 {
+    if (provider_is_apfel() && s_apfel_url[0]) {
+        static char apfel_url_buf[LLM_LOCAL_URL_MAX + 32];
+        snprintf(apfel_url_buf, sizeof(apfel_url_buf), "%s/chat/completions", s_apfel_url);
+        return apfel_url_buf;
+    }
     if (provider_is_ollama() && s_local_url[0]) {
         /* s_local_url already contains full URL like "http://192.168.0.25:11434/v1" */
         static char url_buf[LLM_LOCAL_URL_MAX + 32];
@@ -239,18 +273,12 @@ static const char *llm_api_url(void)
 
 static const char *llm_api_host(void)
 {
+    static char host_buf[64];
+    if (provider_is_apfel() && s_apfel_url[0]) {
+        return extract_host(s_apfel_url, host_buf, sizeof(host_buf));
+    }
     if (provider_is_ollama() && s_local_url[0]) {
-        /* Extract host from URL like "http://192.168.0.25:11434/v1" */
-        static char host_buf[64];
-        const char *p = s_local_url;
-        if (strncmp(p, "http://", 7) == 0) p += 7;
-        else if (strncmp(p, "https://", 8) == 0) p += 8;
-        const char *end = strchr(p, '/');
-        size_t len = end ? (size_t)(end - p) : strlen(p);
-        if (len >= sizeof(host_buf)) len = sizeof(host_buf) - 1;
-        memcpy(host_buf, p, len);
-        host_buf[len] = '\0';
-        return host_buf;
+        return extract_host(s_local_url, host_buf, sizeof(host_buf));
     }
     if (provider_is_openrouter()) return "openrouter.ai";
     if (provider_is_openai())     return "api.openai.com";
@@ -259,7 +287,8 @@ static const char *llm_api_host(void)
 
 static const char *llm_api_path(void)
 {
-    if (provider_is_ollama()) return "/v1/chat/completions";
+    if (provider_is_apfel())      return "/v1/chat/completions";
+    if (provider_is_ollama())     return "/v1/chat/completions";
     if (provider_is_openrouter()) return "/api/v1/chat/completions";
     if (provider_is_openai())     return "/v1/chat/completions";
     return "/v1/messages";
@@ -643,7 +672,7 @@ esp_err_t llm_chat_tools(const char *system_prompt,
 {
     memset(resp, 0, sizeof(*resp));
 
-    if (s_api_key[0] == '\0' && !provider_is_ollama()) return ESP_ERR_INVALID_STATE;
+    if (s_api_key[0] == '\0' && !provider_is_ollama() && !provider_is_apfel()) return ESP_ERR_INVALID_STATE;
 
     {
         char llm_info[96];
@@ -1399,7 +1428,7 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
     }
 
     memset(resp, 0, sizeof(*resp));
-    if (s_api_key[0] == '\0' && !provider_is_ollama()) return ESP_ERR_INVALID_STATE;
+    if (s_api_key[0] == '\0' && !provider_is_ollama() && !provider_is_apfel()) return ESP_ERR_INVALID_STATE;
 
     {
         char llm_info[96];
@@ -1410,7 +1439,9 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
     /* Build request body (identical to non-streaming + stream:true) */
     cJSON *body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "model", effective_model());
-    int max_tok = (s_voice_max_tokens > 0) ? s_voice_max_tokens : LANG_LLM_MAX_TOKENS;
+    int max_tok = (s_voice_max_tokens > 0) ? s_voice_max_tokens
+                : provider_is_apfel()      ? LANG_APFEL_MAX_TOKENS
+                :                            LANG_LLM_MAX_TOKENS;
     if (provider_is_openai()) {
         cJSON_AddNumberToObject(body, "max_completion_tokens", max_tok);
     } else {
@@ -1766,10 +1797,75 @@ bool llm_local_is_online(void)
 
 bool llm_smart_routing_available(void)
 {
-    /* Smart routing is possible when: global provider is cloud-based AND local URL+model are configured */
+    /* Smart routing is possible when: global provider is cloud-based AND
+     * at least one local provider (Ollama or Apfel) is configured */
     return (strcmp(s_provider, "openrouter") == 0 || strcmp(s_provider, "anthropic") == 0)
-           && s_local_url[0] && s_local_model[0];
+           && (  (s_local_url[0] && s_local_model[0])
+              || (s_apfel_url[0] && s_apfel_model[0]));
 }
+
+/* ── Apfel (Apple Foundation Model) ────────────────────────────── */
+
+void llm_set_apfel_url(const char *url)
+{
+    if (url) {
+        safe_copy(s_apfel_url, sizeof(s_apfel_url), url);
+        ESP_LOGI(TAG, "Apfel URL set to: %s", s_apfel_url);
+    } else {
+        s_apfel_url[0] = '\0';
+    }
+}
+
+const char *llm_get_apfel_url(void) { return s_apfel_url; }
+
+void llm_set_apfel_model(const char *model)
+{
+    if (model) {
+        safe_copy(s_apfel_model, sizeof(s_apfel_model), model);
+        ESP_LOGI(TAG, "Apfel model set to: %s", s_apfel_model);
+    } else {
+        s_apfel_model[0] = '\0';
+    }
+}
+
+const char *llm_get_apfel_model(void) { return s_apfel_model; }
+
+bool llm_apfel_health_check(void)
+{
+    if (!s_apfel_url[0]) return false;
+
+    int64_t now = esp_timer_get_time();
+    if (s_apfel_check_us > 0 && (now - s_apfel_check_us) < LOCAL_HEALTH_CACHE_US) {
+        return s_apfel_online;
+    }
+
+    char url[LLM_LOCAL_URL_MAX + 16];
+    snprintf(url, sizeof(url), "%s/models", s_apfel_url);
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .timeout_ms = 1500,
+        .method = HTTP_METHOD_GET,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        s_apfel_online = false;
+        s_apfel_check_us = now;
+        return false;
+    }
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    s_apfel_online = (err == ESP_OK && status == 200);
+    s_apfel_check_us = now;
+    ESP_LOGI(TAG, "Apfel health check: %s (status=%d)",
+             s_apfel_online ? "online" : "offline", status);
+    return s_apfel_online;
+}
+
+bool llm_apfel_is_online(void) { return s_apfel_online; }
 
 /* ── Voice routing ──────────────────────────────────────────────── */
 

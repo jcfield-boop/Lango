@@ -150,3 +150,43 @@ esp_err_t context_build_system_prompt(char *buf, size_t size)
     ESP_LOGI(TAG, "System prompt built: %d bytes", (int)off);
     return ESP_OK;
 }
+
+esp_err_t context_build_minimal_prompt(char *buf, size_t size)
+{
+    size_t off = 0;
+
+    off += snprintf(buf + off, size - off,
+        "# Langoustine\n\n"
+        "You are Langoustine, a concise personal AI assistant.\n"
+        "Keep responses brief and helpful. No markdown formatting.\n"
+        "Bullet points over prose. Always respond in English.\n");
+
+    /* Read just the user profile for name/timezone (first 512 chars) */
+    {
+        FILE *f = fopen(LANG_USER_FILE, "r");
+        if (f) {
+            char user_snippet[512];
+            size_t n = fread(user_snippet, 1, sizeof(user_snippet) - 1, f);
+            user_snippet[n] = '\0';
+            fclose(f);
+            if (n > 0) {
+                off += snprintf(buf + off, size - off,
+                                "\n## User Info\n\n%s\n", user_snippet);
+            }
+        }
+    }
+
+    /* Dynamic timestamp */
+    {
+        time_t now = time(NULL);
+        struct tm local;
+        localtime_r(&now, &local);
+        char timebuf[64];
+        strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S %Z (%A)", &local);
+        off += snprintf(buf + off, size - off,
+                        "\n## Current Time\n\n%s\n", timebuf);
+    }
+
+    ESP_LOGI(TAG, "Minimal prompt built: %d bytes", (int)off);
+    return ESP_OK;
+}

@@ -36,8 +36,8 @@ void oled_display_set_tokens(uint32_t in_tokens, uint32_t out_tokens);
 /** Set the device IP address for display. Thread-safe. */
 void oled_display_set_ip(const char *ip);
 
-/** Set local service status indicators (Ollama + mlx-audio). Thread-safe. */
-void oled_display_set_local_status(bool ollama_online, bool audio_online);
+/** Set local service status indicators (Ollama + mlx-audio + Apfel). Thread-safe. */
+void oled_display_set_local_status(bool ollama_online, bool audio_online, bool apfel_online);
 
 /** Set the active channel ("WS", "TG", "PTT", "SYS"). Thread-safe.
  *  Also increments a daily message counter (resets at midnight). */

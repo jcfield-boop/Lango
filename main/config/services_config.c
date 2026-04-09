@@ -172,6 +172,18 @@ esp_err_t services_config_load(void)
                 }
             }
 
+        /* ── Apfel (Apple Foundation Model) ──────────────────── */
+        } else if (strstr(section, "apfel") || strstr(section, "apple foundation")) {
+            if (strcmp(key, "base_url") == 0) {
+                llm_set_apfel_url(val);
+                ESP_LOGI(TAG, "Apfel URL: %s", val);
+                keys_applied++;
+            } else if (strcmp(key, "model") == 0) {
+                llm_set_apfel_model(val);
+                ESP_LOGI(TAG, "Apfel model: %s", val);
+                keys_applied++;
+            }
+
         /* ── Local Audio (mlx-audio / Piper / whisper.cpp) ────── */
         } else if (strstr(section, "local audio")) {
             if (strcmp(key, "base_url") == 0) {
@@ -275,6 +287,11 @@ esp_err_t services_config_reload(void)
             if (strcmp(key, "search_key") == 0 || strcmp(key, "api_key") == 0) {
                 tool_web_search_set_key(val); keys_applied++;
             }
+
+        /* ── Apfel (Apple Foundation Model) ──────────────────── */
+        } else if (strstr(section, "apfel") || strstr(section, "apple foundation")) {
+            if (strcmp(key, "base_url") == 0)        { llm_set_apfel_url(val);   keys_applied++; }
+            else if (strcmp(key, "model") == 0)       { llm_set_apfel_model(val); keys_applied++; }
 
         /* ── Local Audio ─────────────────────────────────────── */
         } else if (strstr(section, "local audio")) {

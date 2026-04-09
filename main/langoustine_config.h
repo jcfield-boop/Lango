@@ -59,6 +59,7 @@
 #define LANG_LLM_DEFAULT_MODEL       "openai/gpt-4o-mini"
 #define LANG_LLM_PROVIDER_DEFAULT    "openrouter"
 #define LANG_LLM_MAX_TOKENS          4096
+#define LANG_APFEL_MAX_TOKENS        1024  /* conservative for Apple FM's 4K context */
 #define LANG_LLM_API_URL             "https://api.anthropic.com/v1/messages"
 #define LANG_OPENAI_API_URL          "https://api.openai.com/v1/chat/completions"
 #define LANG_OPENROUTER_API_URL      "https://openrouter.ai/api/v1/chat/completions"

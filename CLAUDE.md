@@ -72,12 +72,15 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 **Local pipeline** (fully on-device Mac at `192.168.0.51`):
 - STT: mlx-audio Whisper at `<base_url>/v1/audio/transcriptions` — raw WAV sent (Opus encoding bypassed)
 - TTS: mlx-audio Kokoro at `<base_url>/v1/audio/speech` — model + voice configurable via SERVICES.md
-- LLM: Ollama at `<local_url>/v1/chat/completions` — text/Telegram channel only; voice → cloud. Uses `qwen3:8b` for text (supports OpenAI-style tool calling), `qwen3-vl:8b` for vision
+- LLM (Ollama): at `<local_url>/v1/chat/completions` — text/Telegram channel only; voice → cloud. Uses `qwen3:8b` for text (supports OpenAI-style tool calling), `qwen3-vl:8b` for vision
+- LLM (Apfel): Apple Foundation Model (~3B) via `apfel --serve --port 11435`. Ultra-fast (Neural Engine), no tools, minimal context (~400 tokens system prompt). Used for simple conversational queries only.
 - Cloud fallback: Groq (STT/TTS), OpenRouter (LLM) when local services unavailable
 
 **Channel-aware LLM routing** (in `agent_loop.c`):
 - `chat_id == "ptt"` → voice channel → routes to `voice_provider`/`voice_model` (default: `openrouter`/`openai/gpt-4o-mini`) with `max_tokens=400`
-- All other channels → text channel → routes to local Ollama if available, else cloud
+- Text + simple (no tools needed) → Apfel if online → Ollama fallback → cloud fallback
+- Text + tool-triggering keywords → Ollama if online → cloud fallback
+- Text + complex keywords (briefing, email, research) → cloud directly
 - Voice responses also get VOICE MODE injection: natural spoken English, no markdown, ≤3 sentences
 - All LLM requests use `temperature=0.7` for focused, efficient generation
 
@@ -262,7 +265,7 @@ L/R  → GND  (left channel)
 I2C at 0x3C on GPIO 9/10 (shared bus with camera SCCB + PCA9685). 1KB PSRAM framebuffer, 2Hz refresh task on Core 0.
 
 **Idle screen** (LED state: READY):
-- Row 0-15: Large HH:MM | abbreviated IP | `O+ A-` local service status (Ollama/mlx-audio)
+- Row 0-15: Large HH:MM | abbreviated IP | `O+ A- F+` local service status (Ollama/mlx-audio/Apfel)
 - Row 18: date | RSSI bars
 - Row 30: **Rotating info line** (5s cycle): provider → next heartbeat task → slot 2 → rate limit
 - Row 40-48: message preview or token counts + SRAM/PSRAM stats
@@ -276,7 +279,7 @@ I2C at 0x3C on GPIO 9/10 (shared bus with camera SCCB + PCA9685). 1KB PSRAM fram
 - Row 56: RSSI + uptime
 
 **Thread-safe setter API** — any task pushes data, render task only reads static state:
-- `oled_display_set_local_status(ollama, audio)` — from agent_loop after health check
+- `oled_display_set_local_status(ollama, audio, apfel)` — from agent_loop after health check
 - `oled_display_set_channel("WS")` — from agent_loop on message receive (also increments daily counter)
 - `oled_display_set_rotate_line(slot, text)` — slot 0 auto-set by set_provider, slot 1 from heartbeat, slot 3 rate limit
 - No cross-module function calls from the render task (prevents init-order crashes + stack issues)

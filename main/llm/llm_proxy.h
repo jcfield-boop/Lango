@@ -83,7 +83,7 @@ void llm_set_local_text_model(const char *model);
 /** Get the text-only local model; falls back to local_model if not configured. */
 const char *llm_get_local_text_model(void);
 
-/** Check if the local Ollama instance is reachable (cached 15s). May block. */
+/** Check if the local Ollama instance is reachable (cached 30s). May block. */
 bool llm_local_health_check(void);
 
 /** Return last cached health check result (non-blocking). */
@@ -91,6 +91,22 @@ bool llm_local_is_online(void);
 
 /** Returns true if smart routing is possible (cloud global + local configured). */
 bool llm_smart_routing_available(void);
+
+/* ── Apfel (Apple Foundation Model) ────────────────────────────── */
+
+/** Set/get the Apfel server URL (e.g. "http://192.168.0.51:11435/v1"). */
+void llm_set_apfel_url(const char *url);
+const char *llm_get_apfel_url(void);
+
+/** Set/get the Apfel model name (e.g. "apple-fm"). */
+void llm_set_apfel_model(const char *model);
+const char *llm_get_apfel_model(void);
+
+/** Check if the Apfel server is reachable (cached 30s). May block. */
+bool llm_apfel_health_check(void);
+
+/** Return last cached Apfel health check result (non-blocking). */
+bool llm_apfel_is_online(void);
 
 /** Set provider/model used for voice channel (chat_id=="ptt") requests.
  *  When set, voice bypasses local Ollama and uses a fast cloud model instead. */

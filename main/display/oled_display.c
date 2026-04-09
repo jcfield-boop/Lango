@@ -29,6 +29,7 @@ static char s_token_info[32]    = "";
 static char s_ip_addr[20]       = "";
 static bool s_ollama_online     = false;
 static bool s_audio_online      = false;
+static bool s_apfel_online      = false;
 static char s_channel[8]        = "";
 static int  s_msg_count_today   = 0;
 static int  s_msg_count_yday    = -1;
@@ -100,13 +101,13 @@ static void draw_idle_screen(void)
         ssd1306_str(64, 0, ip_copy);
     }
 
-    /* Local service status on row 8: O+ A+ or O- A- */
+    /* Local service status on row 8: O+ A+ F+ or O- A- F- */
     {
         portENTER_CRITICAL(&s_mux);
-        bool o = s_ollama_online, a = s_audio_online;
+        bool o = s_ollama_online, a = s_audio_online, f = s_apfel_online;
         portEXIT_CRITICAL(&s_mux);
-        char svc[12];
-        snprintf(svc, sizeof(svc), "O%c A%c", o ? '+' : '-', a ? '+' : '-');
+        char svc[16];
+        snprintf(svc, sizeof(svc), "O%c A%c F%c", o ? '+' : '-', a ? '+' : '-', f ? '+' : '-');
         ssd1306_str(64, 8, svc);
     }
 
@@ -411,10 +412,11 @@ void oled_display_set_ip(const char *ip)
     portEXIT_CRITICAL(&s_mux);
 }
 
-void oled_display_set_local_status(bool ollama_online, bool audio_online)
+void oled_display_set_local_status(bool ollama_online, bool audio_online, bool apfel_online)
 {
     portENTER_CRITICAL(&s_mux);
     s_ollama_online = ollama_online;
+    s_apfel_online  = apfel_online;
     s_audio_online  = audio_online;
     portEXIT_CRITICAL(&s_mux);
 }
