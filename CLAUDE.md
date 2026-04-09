@@ -72,7 +72,7 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 **Local pipeline** (fully on-device Mac at `192.168.0.51`):
 - STT: mlx-audio Whisper at `<base_url>/v1/audio/transcriptions` — raw WAV sent (Opus encoding bypassed)
 - TTS: mlx-audio Kokoro at `<base_url>/v1/audio/speech` — model + voice configurable via SERVICES.md
-- LLM: Ollama at `<local_url>/v1/chat/completions` — text/Telegram channel only; voice → cloud. Uses `gemma3:12b` for text (non-thinking), `qwen3-vl:8b` for vision
+- LLM: Ollama at `<local_url>/v1/chat/completions` — text/Telegram channel only; voice → cloud. Uses `qwen3:8b` for text (supports OpenAI-style tool calling), `qwen3-vl:8b` for vision
 - Cloud fallback: Groq (STT/TTS), OpenRouter (LLM) when local services unavailable
 
 **Channel-aware LLM routing** (in `agent_loop.c`):
@@ -130,7 +130,7 @@ model: openrouter/auto
 ## Local Model (Ollama)
 base_url: http://192.168.0.51:11434/v1
 api_key: ollama
-model: llama3.2:3b
+model: qwen3:8b
 voice_provider: openrouter        # LLM provider for voice channel (PTT/wake word)
 voice_model: openai/gpt-4o-mini   # fast cloud model for low-latency voice responses
 
