@@ -56,7 +56,7 @@
 #define LANG_TIMEZONE                "PST8PDT,M3.2.0,M11.1.0"
 
 /* LLM */
-#define LANG_LLM_DEFAULT_MODEL       "openai/gpt-4o-mini"
+#define LANG_LLM_DEFAULT_MODEL       "openrouter/auto"
 #define LANG_LLM_PROVIDER_DEFAULT    "openrouter"
 #define LANG_LLM_MAX_TOKENS          4096
 #define LANG_APFEL_MAX_TOKENS        1024  /* conservative for Apple FM's 4K context */
