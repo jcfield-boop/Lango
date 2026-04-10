@@ -56,7 +56,7 @@ static const char *TAG = "wake_word";
 
 /* Default tuning values (can be overridden via NVS) */
 #define WW_DEFAULT_GAIN       4.0f    /* 10.0 clipped signal; 3.0 too low; 4.0 balanced */
-#define WW_DEFAULT_THRESHOLD  0.50f   /* was 0.85 — more sensitive for room-distance use */
+#define WW_DEFAULT_THRESHOLD  0.70f   /* 0.50 was too trigger-happy on radio/TV voices */
 #define WW_AFE_GAIN           1.0f   /* AFE's own gain — keep at 1.0, we apply software gain */
 
 /* NVS namespace and keys for persistent wake word config */
@@ -443,19 +443,19 @@ static void detect_task(void *arg)
 esp_err_t wake_word_init(void)
 {
     /* Load runtime-tunable params from NVS (or use defaults).
-     * Override stale NVS values that are less sensitive than the new defaults
-     * (old defaults were gain=3.0, threshold=0.85 which were too conservative). */
+     * User-set values via /api/config or ww_threshold CLI always win — no clamp. */
     s_sw_gain      = ww_nvs_load_float(WW_NVS_KEY_GAIN,  WW_DEFAULT_GAIN);
     s_wn_threshold = ww_nvs_load_float(WW_NVS_KEY_THRESH, WW_DEFAULT_THRESHOLD);
-    /* Force default gain if NVS value is stale (too low or clipping-high) */
+    /* Sanity clamp: gain must be in [default, 8.0] to avoid silence or clipping */
     if (s_sw_gain < WW_DEFAULT_GAIN || s_sw_gain > 8.0f) {
         ESP_LOGW(TAG, "NVS gain %.1f out of range — resetting to %.1f",
                  (double)s_sw_gain, (double)WW_DEFAULT_GAIN);
         s_sw_gain = WW_DEFAULT_GAIN;
         ww_nvs_save_float(WW_NVS_KEY_GAIN, s_sw_gain);
     }
-    if (s_wn_threshold > WW_DEFAULT_THRESHOLD) {
-        ESP_LOGW(TAG, "NVS threshold %.3f > default %.3f — upgrading",
+    /* Sanity clamp: threshold must be in (0.0, 1.0) */
+    if (s_wn_threshold <= 0.0f || s_wn_threshold >= 1.0f) {
+        ESP_LOGW(TAG, "NVS threshold %.3f out of range — resetting to %.3f",
                  (double)s_wn_threshold, (double)WW_DEFAULT_THRESHOLD);
         s_wn_threshold = WW_DEFAULT_THRESHOLD;
         ww_nvs_save_float(WW_NVS_KEY_THRESH, s_wn_threshold);
