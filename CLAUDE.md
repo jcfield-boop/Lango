@@ -64,7 +64,7 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 2. Browser sends binary WebSocket frames → `audio_ring_append()` into 256KB PSRAM ring buffer
 3. Browser sends `audio_end` → `audio_ring_commit()` signals the STT task on Core 1
 4. STT task POSTs to local mlx-audio Whisper (if `stt_local_url` set) or Groq Whisper → transcript
-5. Agent processes transcript → LLM (voice channel → cloud, text channel → local Ollama) → response
+5. Agent processes transcript → LLM (Apfel → Ollama → cloud, same hierarchy for voice and text) → response
 6. TTS client tries local mlx-audio Kokoro first, falls back to Groq PlayAI → WAV cached in PSRAM
 7. If `LANG_I2S_AUDIO_ENABLED`: WAV is played immediately via MAX98357A on GPIO 3/4/6
 8. `{"type":"message","tts_id":"<8hex>"}` sent to browser → browser fetches `GET /tts/<id>`
@@ -72,16 +72,17 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 **Local pipeline** (fully on-device Mac at `192.168.0.51`):
 - STT: mlx-audio Whisper at `<base_url>/v1/audio/transcriptions` — raw WAV sent (Opus encoding bypassed)
 - TTS: mlx-audio Kokoro at `<base_url>/v1/audio/speech` — model + voice configurable via SERVICES.md
-- LLM (Ollama): at `<local_url>/v1/chat/completions` — text/Telegram channel only; voice → cloud. Uses `qwen3:8b` for text (supports OpenAI-style tool calling), `qwen3-vl:8b` for vision
-- LLM (Apfel): Apple Foundation Model (~3B) via `apfel --serve --port 11435`. Ultra-fast (Neural Engine), no tools, minimal context (~400 tokens system prompt). Used for simple conversational queries only.
+- LLM (Ollama): at `<local_url>/v1/chat/completions` — full tool calling support. Uses `qwen3:8b` for text, `qwen3-vl:8b` for vision
+- LLM (Apfel): Apple Foundation Model (~3B) via `apfel --serve --port 11435`. Ultra-fast (Neural Engine), no tools, minimal context (~400 tokens system prompt). Used for simple conversational queries on both voice and text channels.
 - Cloud fallback: Groq (STT/TTS), OpenRouter (LLM) when local services unavailable
 
-**Channel-aware LLM routing** (in `agent_loop.c`):
-- `chat_id == "ptt"` → voice channel → routes to `voice_provider`/`voice_model` (default: `openrouter`/`openai/gpt-4o-mini`) with `max_tokens=400`
-- Text + simple (no tools needed) → Apfel if online → Ollama fallback → cloud fallback
-- Text + tool-triggering keywords → Ollama if online → cloud fallback
-- Text + complex keywords (briefing, email, research) → cloud directly
-- Voice responses also get VOICE MODE injection: natural spoken English, no markdown, ≤3 sentences
+**Unified LLM routing** (in `agent_loop.c`) — same hierarchy for voice and text:
+1. System/heartbeat/cron → cloud always (multi-step tool chains need speed)
+2. Simple query (no tools needed) → **Apfel** if online (~1s response) → Ollama fallback → cloud fallback
+3. Tool-triggering keywords (weather, remind, stock, etc.) → **Ollama** if online → cloud fallback
+4. Complex keywords (briefing, email, research) → **cloud** directly
+- Voice queries (`chat_id="ptt"`, wake word or PTT) add `max_tokens=400` + VOICE MODE prompt injection
+- Cloud voice fallback uses `voice_provider`/`voice_model` (default: `openrouter`/`openai/gpt-4o-mini`)
 - All LLM requests use `temperature=0.7` for focused, efficient generation
 
 **Boot warmup tasks** (prevent cold-start latency):

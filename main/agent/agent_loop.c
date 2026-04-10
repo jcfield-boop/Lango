@@ -619,34 +619,24 @@ static void agent_loop_task(void *arg)
         strncpy(stream_ctx.chat_id, msg.chat_id, sizeof(stream_ctx.chat_id) - 1);
         strncpy(stream_ctx.channel, msg.channel, sizeof(stream_ctx.channel) - 1);
 
-        /* Smart routing: channel-aware local/cloud selection.
-         * Voice (chat_id="ptt"): always use a fast cloud model — latency matters.
-         * Text (browser/Telegram): prefer Apfel → Ollama → cloud (in that order). */
+        /* Smart routing: unified Apfel → Ollama → cloud hierarchy.
+         * Both voice and text channels use the same tiered approach.
+         * System/heartbeat always uses cloud (multi-step tool chains).
+         * Voice adds max_tokens=400 cap and VOICE MODE prompt injection. */
         bool using_local        = false;
         bool using_apfel        = false;
         bool using_voice_cloud  = false;
         bool is_voice           = (strcmp(msg.chat_id, "ptt") == 0);
 
-        if (is_voice && llm_voice_routing_available()) {
-            /* Voice → dedicated fast cloud model, tight token limit */
-            llm_set_request_override(llm_get_voice_provider(), llm_get_voice_model());
-            llm_set_voice_max_tokens(400);
-            using_voice_cloud = true;
-            {
-                char route_msg[64];
-                snprintf(route_msg, sizeof(route_msg), "routing: cloud (voice) → %s/%s",
-                         llm_get_voice_provider(), llm_get_voice_model());
-                ESP_LOGI(TAG, "Smart routing: %s", route_msg);
-                ws_server_broadcast_monitor("llm", route_msg);
-            }
-        } else if (!is_voice && strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0
-                   && llm_smart_routing_available()) {
-            /* Text (browser/Telegram) → Apfel / Ollama when reachable.
-             * System/heartbeat always uses cloud (multi-step tool chains need speed).
+        if (strcmp(msg.channel, LANG_CHAN_SYSTEM) == 0) {
+            /* System/heartbeat/cron → always cloud (complex multi-tool chains) */
+            ESP_LOGI(TAG, "Smart routing: system channel → cloud");
+            ws_server_broadcast_monitor("llm", "routing: cloud (system)");
+        } else if (is_voice || llm_smart_routing_available()) {
+            /* Both voice and text: Apfel → Ollama → cloud hierarchy.
              *
              * Complexity check: route complex requests (web search, email, briefings)
-             * to cloud even from text channel — local models struggle with long tool
-             * chains. Simple Q&A, time, weather, conversational → local fine. */
+             * to cloud — local models struggle with long tool chains. */
             bool is_complex = (strcasestr(msg.content, "briefing")  != NULL ||
                                strcasestr(msg.content, "web search") != NULL ||
                                strcasestr(msg.content, "search for") != NULL ||
@@ -670,13 +660,16 @@ static void agent_loop_task(void *arg)
                                force_memory_tool || turn_has_image;
 
             if (is_complex) {
+                /* Complex → cloud directly */
+                if (is_voice) llm_set_voice_max_tokens(400);
                 ESP_LOGI(TAG, "Smart routing: complex request → cloud");
                 ws_server_broadcast_monitor("llm", "routing: cloud (complex)");
             } else if (!needs_tools && llm_apfel_health_check()) {
                 /* Apfel: Apple Foundation Model — ultra-fast, no tools, minimal context.
-                 * Only for simple conversational queries that don't need tool calling. */
+                 * Best tier for simple conversational queries (voice or text). */
                 llm_set_request_override("apfel", llm_get_apfel_model());
                 using_apfel = true;
+                if (is_voice) llm_set_voice_max_tokens(400);
                 /* Rebuild system prompt with minimal version for 4K context window */
                 context_build_minimal_prompt(system_prompt, LANG_CONTEXT_BUF_SIZE);
                 /* Aggressively trim history for Apfel's small context */
@@ -705,16 +698,29 @@ static void agent_loop_task(void *arg)
                     ws_server_broadcast_monitor("llm", route_msg);
                 }
             } else if (llm_local_health_check()) {
-                /* Vision turns use the vision model; text turns use the text model */
+                /* Ollama: full tool support, larger context */
                 const char *local_model = turn_has_image
                     ? llm_get_local_model()
                     : llm_get_local_text_model();
                 llm_set_request_override("ollama", local_model);
                 using_local = true;
+                if (is_voice) llm_set_voice_max_tokens(400);
                 {
                     char route_msg[64];
                     snprintf(route_msg, sizeof(route_msg), "routing: local → %s%s",
                              local_model, turn_has_image ? " (vision)" : "");
+                    ESP_LOGI(TAG, "Smart routing: %s", route_msg);
+                    ws_server_broadcast_monitor("llm", route_msg);
+                }
+            } else if (is_voice && llm_voice_routing_available()) {
+                /* Cloud fallback for voice — use dedicated voice model */
+                llm_set_request_override(llm_get_voice_provider(), llm_get_voice_model());
+                llm_set_voice_max_tokens(400);
+                using_voice_cloud = true;
+                {
+                    char route_msg[64];
+                    snprintf(route_msg, sizeof(route_msg), "routing: cloud (voice fallback) → %s/%s",
+                             llm_get_voice_provider(), llm_get_voice_model());
                     ESP_LOGI(TAG, "Smart routing: %s", route_msg);
                     ws_server_broadcast_monitor("llm", route_msg);
                 }

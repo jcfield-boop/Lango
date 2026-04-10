@@ -115,7 +115,7 @@ Most cheap UVC-compatible webcams work. For PTT mic, the webcam must also expose
 
 | Feature | Details |
 |---------|---------|
-| **LLM** | Claude (Anthropic), OpenAI, OpenRouter, or local Ollama — token-by-token streaming to browser; 4096 max output tokens; 64 KB context buffer |
+| **LLM** | Claude (Anthropic), OpenAI, OpenRouter, local Ollama, or Apple Foundation Model (Apfel) — token-by-token streaming to browser; 4096 max output tokens; 64 KB context buffer |
 | **Wake word** | "Hi ESP" via WakeNet9 + AFE — requires INMP441 mic |
 | **STT** | Local-first via mlx-audio (or any OpenAI-compatible server), falls back to Groq Whisper; browser WebM audio or webcam UAC PCM; local mic audio Opus-compressed before upload |
 | **TTS** | Local-first via mlx-audio (Kokoro, etc.), falls back to Groq PlayAI; WAV cached in PSRAM, served to browser at `/tts/<id>`; optional local I2S speaker playback |
@@ -251,27 +251,53 @@ lango> set_api_key <key>        # sets provider to "anthropic" (default)
 
 To switch providers, `POST /api/config` with `{"provider":"openai"}` or `{"provider":"openrouter"}`. OpenRouter gives access to hundreds of models with a single key.
 
-### Local model (Ollama)
+### Local LLM routing
+
+Langoustine uses a unified routing hierarchy for **all** channels (voice, text, Telegram). Queries are classified by complexity and routed to the fastest capable tier:
+
+| Tier | Provider | When used | Latency |
+|------|----------|-----------|---------|
+| 1 | **Apfel** (Apple Foundation Model) | Simple conversational queries — no tool calls needed | ~1s |
+| 2 | **Ollama** | Queries needing tools (weather, reminders, stock, etc.) | ~3-8s |
+| 3 | **Cloud** (OpenRouter/Anthropic) | Complex multi-step tasks (briefing, email, research) or when local offline | ~2-5s |
+
+System/heartbeat/cron tasks always use cloud. Voice queries add `max_tokens=400` for concise spoken responses. If a tier is offline, the next one is tried automatically.
+
+#### Ollama setup
 
 Run a local LLM on your network for free, zero-latency inference. Add to `/lfs/config/SERVICES.md`:
 
 ```markdown
-## Local Model
+## Local Model (Ollama)
 base_url: http://192.168.0.25:11434/v1
 api_key: ollama
-model: qwen2.5:14b
+model: qwen3:8b
+local_text_model: qwen3:8b
 ```
 
-Then switch to it:
+Recommended model: **qwen3:8b** — best tool calling support among small models. The Ollama provider uses the OpenAI-compatible `/v1/chat/completions` endpoint over plain HTTP (no TLS overhead).
 
+#### Apfel setup (Apple Silicon Mac)
+
+[Apfel](https://apfel.franzai.com) exposes Apple's on-device Foundation Model (~3B params, Neural Engine) as an OpenAI-compatible API. Near-zero RAM usage, ~1 second responses, no GPU needed.
+
+```bash
+# Install
+brew install --cask apfel
+
+# Start the server (runs on Neural Engine — no model download needed)
+apfel --serve --port 11435 --host 0.0.0.0 --no-origin-check --cors --permissive
 ```
-lango> set_model_provider ollama
-lango> set_model qwen2.5:14b
+
+Add to `/lfs/config/SERVICES.md`:
+
+```markdown
+## Apfel (Apple Foundation Model)
+base_url: http://192.168.0.x:11435/v1
+model: apple-foundationmodel
 ```
 
-Or set the URL directly: `lango> set_local_url http://192.168.0.25:11434/v1`
-
-The Ollama provider uses the OpenAI-compatible `/v1/chat/completions` endpoint over plain HTTP (no TLS overhead). Any model served by Ollama works — tool calling support depends on the model.
+Apfel has a 4K token context window, so Langoustine uses a minimal system prompt (~400 tokens) and no tool schemas when routing to it. It handles simple Q&A, jokes, explanations, and conversational queries. Anything needing tools or complex reasoning automatically falls through to Ollama or cloud.
 
 ### Local audio (mlx-audio / Piper / whisper.cpp)
 
