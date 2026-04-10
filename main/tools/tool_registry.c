@@ -592,9 +592,12 @@ esp_err_t tool_registry_init(void)
     mimi_tool_t say = {
         .name = "say",
         .description = "Speak text aloud through the device speaker via TTS. "
-                       "Bypasses the LLM — goes directly to Groq TTS and plays the audio. "
-                       "Use for announcements, alerts, greetings, or any time you want the "
-                       "device to speak without generating a full LLM response.",
+                       "Bypasses the LLM — goes directly to TTS and plays the audio. "
+                       "ONLY use when the user explicitly asks you to say something out loud, "
+                       "or when directly responding to a live voice query from the user. "
+                       "DO NOT use for system alerts, heartbeat warnings, cron notifications, "
+                       "heap warnings, restart prompts, or any automated background tasks — "
+                       "those MUST use telegram_send_message or send_email instead.",
         .input_schema_json =
             "{\"type\":\"object\","
             "\"properties\":{"
