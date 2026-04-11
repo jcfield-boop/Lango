@@ -56,7 +56,7 @@ static const char *TAG = "wake_word";
 
 /* Default tuning values (can be overridden via NVS) */
 #define WW_DEFAULT_GAIN       4.0f    /* 10.0 clipped signal; 3.0 too low; 4.0 balanced */
-#define WW_DEFAULT_THRESHOLD  0.70f   /* 0.50 was too trigger-happy on radio/TV voices */
+#define WW_DEFAULT_THRESHOLD  0.60f   /* 0.50 fired on radio voices, 0.70 missed the user — 0.60 is the sweet spot */
 #define WW_AFE_GAIN           1.0f   /* AFE's own gain — keep at 1.0, we apply software gain */
 
 /* NVS namespace and keys for persistent wake word config */

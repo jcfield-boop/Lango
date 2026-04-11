@@ -39,8 +39,9 @@ Good morning James.
 - [France trip countdown if within 60 days]
 - [Other relevant calendar item]
 
-🏄 Surf (weekend mornings only)
-- [Wave height, period, wind, rating 1-5 from noaa_buoy]
+🏄 Surf (weekend mornings only — BEGINNER-FOCUSED)
+- [Wave Xft @ Xs period, wind direction/speed]
+- [Beginner verdict: ✅ GO (1–3ft clean) / ⚠️ MAYBE (3–4ft, mention caveat) / ❌ SKIP (4ft+ too big, or >15kt onshore wind)]
 
 🤖 Lango status
 - Uptime [X]h, heap [X]KB (overnight min [X]KB), PSRAM [X]MB free, WiFi [X]dBm.
@@ -52,6 +53,16 @@ Keep total under 400 words. Use James's first name once. No markdown headers in 
 
 - [daily 06:03] ARM pre-market data fetch. Call web_search with query "ARM Holdings ARMH stock price pre-market today". Extract: current/pre-market price, change % vs previous close, and any significant news headline from the last 24 hours. Write result to /lfs/memory/arm_stock_today.md (overwrite). No email or Telegram — this is a data feed consumed by the 06:05 morning briefing. Keep the file under 200 words.
 
-- [daily Sat 18:00] Weekend surf forecast for James. Call noaa_buoy for ocean conditions near Pacifica (use station 46012 — Half Moon Bay, nearest to Pacifica/Linda Mar). Also call web_search with query "Pacifica Linda Mar surf forecast Sunday". Compile: wave height, swell period and direction, wind speed/direction, tide state, overall rating 1-5 stars. Use `telegram_send_message` (NOT say): "🏄 Sunday surf at Pacifica/Linda Mar: [wave Xft @ Xs period, wind X, tide X]. Rating: ⭐[X]/5. [One sentence summary]."
+- [daily Sat 18:00] Weekend surf forecast for James — **BEGINNER-FOCUSED**. James is a beginner surfer (see USER.md): comfortable in 1–3 ft, 4 ft is the upper limit, 5 ft+ is unsafe. The rating must reflect beginner-friendliness, NOT wave quality for advanced surfers. Steps:
+  1. Call `noaa_buoy` with station 46012 (Half Moon Bay — nearest buoy to Pacifica/Linda Mar). Note the reported wave height is in METRES (1 m ≈ 3.3 ft); also note Linda Mar is in the lee of Pillar Point, so actual beach wave height is often 40–60% of the open-ocean buoy reading.
+  2. Call `web_search` with query "Pacifica Linda Mar surf forecast Sunday [current date]" for a Surfline/Magicseaweed cross-check on the **beach**, not the buoy.
+  3. Beginner rating scale (use this, NOT generic quality stars):
+     - ⭐⭐⭐⭐⭐ = 1–3 ft clean, light/offshore wind → **perfect for James, GO**
+     - ⭐⭐⭐⭐ = 2–3 ft with short chop or 3 ft+ with glassy conditions → good, GO
+     - ⭐⭐⭐ = 3–4 ft, any wind → workable but pushing his limit, MAYBE
+     - ⭐⭐ = 4–5 ft or 15 kt+ onshore → too big/messy, SKIP
+     - ⭐ = 5 ft+ or stormy → unsafe for beginner, STAY OUT
+  4. Use `telegram_send_message` (NOT say): "🏄 Sunday Linda Mar beginner check: [wave Xft @ Xs period, wind Xkt dir]. Rating ⭐[X]/5 — [GO / MAYBE / SKIP]. [One sentence reason — e.g. 'Clean 2ft peelers, light offshore — dawn patrol' or 'Buoy showing 6ft long-period swell, too powerful for beginners, stay in']."
+  5. If the forecast is SKIP (4 ft+), say so plainly and suggest the alternative (sleep in, yoga, etc.) rather than sugar-coating it. James trusts the verdict to be honest.
 
 - [daily Mon 06:20] Weekly ARM + PC/Chromebook intel digest. Call web_search "ARM Holdings news this week". Call web_search "PC Chromebook market news this week". Summarise top 3 items from each in one sentence each. Send EMAIL with subject "📊 Weekly ARM + PC Intel — [date]" to James. Body under 300 words, no markdown. Useful for James's role as PMM at Arm covering PC and Chromebook segments.

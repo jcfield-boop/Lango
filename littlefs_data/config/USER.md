@@ -20,8 +20,10 @@
 ### Wellness
 - Yoga & Pilates (weekday mornings ~5:45 AM some days)
 - Surfing: Saturdays & Sundays only
-- Surf spot: Pacifica/Lindamar
-- Want: Weekend 6 PM surf condition check for next-day forecasts
+- Surf spot: Pacifica/Lindamar (beginner-friendly beach break)
+- **Skill level: BEGINNER.** Comfortable range: 1–3 ft clean waves. Okay up to 3–4 ft if period is short and wind is light. **4 ft+ is too big.** 5 ft+ is unsafe — advise staying out.
+- Prefers: light/offshore wind, short-to-medium period (8–12s — longer periods make waves feel much bigger than the reported height), mid tide.
+- Want: Weekend 6 PM surf condition check for next-day forecasts with a clear beginner-friendly verdict (go / maybe / skip)
 
 ### Tech Events to Track
 - **Conference reminders needed:** GTC, Microsoft Build, Google I/O, Computex, IFA (September), PCOEM private events (HP, Dell, Lenovo)
