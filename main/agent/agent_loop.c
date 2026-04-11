@@ -645,18 +645,44 @@ static void agent_loop_task(void *arg)
                                strcasestr(msg.content, "research")   != NULL);
 
             /* Requests needing tools bypass Apfel (4K context can't hold tool schemas).
-             * Keyword triggers: weather, time, remind, cron, remember, note, search, stock */
+             * Keyword triggers fall into three buckets:
+             *  - Explicit tool calls (weather, stock, remind, note, device/system info)
+             *  - Temporal markers (today, tonight, this week[end], latest, current, now)
+             *    → the user wants CURRENT information Apfel doesn't have
+             *  - Current-events phrasing (what's on, what's happening, events, news,
+             *    score, price of, how much, near me) → needs web_search */
             bool needs_tools = is_complex ||
-                               (strcasestr(msg.content, "weather")   != NULL) ||
-                               (strcasestr(msg.content, "forecast")  != NULL) ||
-                               (strcasestr(msg.content, "what time") != NULL) ||
-                               (strcasestr(msg.content, "remind")    != NULL) ||
-                               (strcasestr(msg.content, "cron")      != NULL) ||
-                               (strcasestr(msg.content, "remember")  != NULL) ||
-                               (strcasestr(msg.content, "note that") != NULL) ||
-                               (strcasestr(msg.content, "stock")     != NULL) ||
-                               (strcasestr(msg.content, "device")    != NULL) ||
-                               (strcasestr(msg.content, "system")    != NULL) ||
+                               /* Explicit tool intents */
+                               (strcasestr(msg.content, "weather")     != NULL) ||
+                               (strcasestr(msg.content, "forecast")    != NULL) ||
+                               (strcasestr(msg.content, "what time")   != NULL) ||
+                               (strcasestr(msg.content, "remind")      != NULL) ||
+                               (strcasestr(msg.content, "cron")        != NULL) ||
+                               (strcasestr(msg.content, "remember")    != NULL) ||
+                               (strcasestr(msg.content, "note that")   != NULL) ||
+                               (strcasestr(msg.content, "stock")       != NULL) ||
+                               (strcasestr(msg.content, "device")      != NULL) ||
+                               (strcasestr(msg.content, "system")      != NULL) ||
+                               /* Temporal markers → user wants current info */
+                               (strcasestr(msg.content, "today")       != NULL) ||
+                               (strcasestr(msg.content, "tonight")     != NULL) ||
+                               (strcasestr(msg.content, "this week")   != NULL) ||
+                               (strcasestr(msg.content, "weekend")     != NULL) ||
+                               (strcasestr(msg.content, "latest")      != NULL) ||
+                               (strcasestr(msg.content, "current")     != NULL) ||
+                               (strcasestr(msg.content, "right now")   != NULL) ||
+                               /* Current-events phrasing → web_search */
+                               (strcasestr(msg.content, "what's on")   != NULL) ||
+                               (strcasestr(msg.content, "whats on")    != NULL) ||
+                               (strcasestr(msg.content, "happening")   != NULL) ||
+                               (strcasestr(msg.content, "events")      != NULL) ||
+                               (strcasestr(msg.content, "concerts")    != NULL) ||
+                               (strcasestr(msg.content, "news")        != NULL) ||
+                               (strcasestr(msg.content, "score")       != NULL) ||
+                               (strcasestr(msg.content, "who won")     != NULL) ||
+                               (strcasestr(msg.content, "price of")    != NULL) ||
+                               (strcasestr(msg.content, "how much is") != NULL) ||
+                               (strcasestr(msg.content, "near me")     != NULL) ||
                                force_memory_tool || turn_has_image;
 
             if (is_complex) {
@@ -1023,15 +1049,19 @@ static void agent_loop_task(void *arg)
         ws_server_broadcast_monitor("done", msg.chat_id);
 
         if (final_text && final_text[0]) {
-            /* Auto-email long responses (>200 chars) from the websocket channel.
+            /* Auto-email long responses (>600 chars) from the websocket channel.
              * When emailed, TTS speaks a short local-LLM summary instead of
              * the full response.  Telegram already delivers to the user's
-             * phone so no need to duplicate there. */
+             * phone so no need to duplicate there.
+             *
+             * Skip auto-email if Apfel handled the turn — Apfel responses are
+             * conversational by design (3B model, 4K context, no tools), never
+             * essays. Emailing a 264-char Apfel refusal is pure noise. */
             size_t resp_len = strlen(final_text);
             bool auto_emailed = false;
             char *tts_summary = NULL;   /* short spoken version when emailed */
 
-            if (resp_len > 200 && strcmp(msg.channel, "websocket") == 0) {
+            if (resp_len > 600 && !using_apfel && strcmp(msg.channel, "websocket") == 0) {
                 /* Build subject from first ~60 chars of response */
                 char auto_subj[72];
                 snprintf(auto_subj, sizeof(auto_subj), "Lango: %.60s%s",
