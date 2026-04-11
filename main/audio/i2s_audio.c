@@ -839,22 +839,34 @@ esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint
         return ESP_ERR_TIMEOUT;
     }
 
-    /* Extract upper 16 bits from each 32-bit DMA word (in-place).
-     * Hex dump: 00 00 xx xx → int16[0]=pad, int16[1]=sample */
+    /* Extract 16-bit samples from each 32-bit DMA word (in-place).
+     * INMP441 delivers 24-bit two's complement audio MSB-justified within
+     * the 32-bit slot (bits [31:8] = audio, bits [7:0] = zero padding).
+     * To get a signed 16-bit sample preserving sign, right-shift the
+     * 32-bit word by 16 with arithmetic shift (sign-extending).
+     *
+     * DMA-RESTART GARBAGE: because we disable+enable RX before every read
+     * (the ESP32-S3 slave RX DMA stall workaround), the first few words of
+     * every buffer contain transient garbage from the DMA subsystem
+     * stabilising — typically 0xC0000000 / 0x80000000 / 0x60000000 spikes.
+     * Skip the first I2S_RX_SKIP_WORDS words to avoid feeding these spikes
+     * into WakeNet as if they were railed audio. */
+#define I2S_RX_SKIP_WORDS 16   /* 16 samples @ 16kHz = 1ms, negligible loss */
+
     size_t n_words = raw_read / 4;
+    int32_t *w32 = (int32_t *)buf;
     int16_t *s16 = (int16_t *)buf;
 
-    static bool s_dump_done = false;
-    if (!s_dump_done && n_words >= 4) {
-        ESP_LOGI(TAG, "RX raw int16 pairs: [%d,%d] [%d,%d] [%d,%d] [%d,%d]",
-                 s16[0], s16[1], s16[2], s16[3], s16[4], s16[5], s16[6], s16[7]);
-        s_dump_done = true;
-    }
+    size_t skip = (n_words > I2S_RX_SKIP_WORDS) ? I2S_RX_SKIP_WORDS : 0;
+    size_t out_words = n_words - skip;
 
-    for (size_t i = 0; i < n_words; i++) {
-        s16[i] = s16[i * 2 + 1];
+    /* Arithmetic right-shift by 16 = take upper 16 bits with sign extension.
+     * Writing s16[o] while reading w32[skip+o]: since o*2 < (skip+o)*4 for
+     * skip>=1, writes never clobber future reads (strictly non-overlapping). */
+    for (size_t o = 0; o < out_words; o++) {
+        s16[o] = (int16_t)(w32[skip + o] >> 16);
     }
-    *bytes_read = n_words * 2;
+    *bytes_read = out_words * 2;
 
     return ESP_OK;
 }

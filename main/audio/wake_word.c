@@ -446,8 +446,10 @@ esp_err_t wake_word_init(void)
      * User-set values via /api/config or ww_threshold CLI always win — no clamp. */
     s_sw_gain      = ww_nvs_load_float(WW_NVS_KEY_GAIN,  WW_DEFAULT_GAIN);
     s_wn_threshold = ww_nvs_load_float(WW_NVS_KEY_THRESH, WW_DEFAULT_THRESHOLD);
-    /* Sanity clamp: gain must be in [default, 8.0] to avoid silence or clipping */
-    if (s_sw_gain < WW_DEFAULT_GAIN || s_sw_gain > 8.0f) {
+    /* Sanity clamp: gain must be in (0.1, 50.0) — matches the setter's range.
+     * No floor at WW_DEFAULT_GAIN — user can tune down below default for mics
+     * that are already hot (e.g. railing samples). */
+    if (s_sw_gain < 0.1f || s_sw_gain > 50.0f) {
         ESP_LOGW(TAG, "NVS gain %.1f out of range — resetting to %.1f",
                  (double)s_sw_gain, (double)WW_DEFAULT_GAIN);
         s_sw_gain = WW_DEFAULT_GAIN;
