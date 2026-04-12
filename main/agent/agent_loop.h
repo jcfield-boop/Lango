@@ -20,6 +20,14 @@ esp_err_t agent_loop_start(void);
  */
 bool agent_loop_is_busy(void);
 
+/* ── Diagnostic state for external watchdog ─────────────────────── */
+
+/** How long (ms) the current turn has been running. Returns 0 if idle. */
+int64_t agent_loop_turn_age_ms(void);
+
+/** Copy the current phase label into buf (e.g. "llm_cloud", "tool:weather"). */
+void agent_loop_get_phase(char *buf, size_t len);
+
 /** Set LLM API rate limit (max requests per hour). */
 void agent_set_rate_limit(int max_per_hour);
 

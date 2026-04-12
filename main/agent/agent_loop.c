@@ -34,6 +34,34 @@
 static const char *TAG = "agent";
 static _Atomic bool s_agent_busy = false;
 
+/* ── Diagnostic state for external watchdog ─────────────────────── */
+static _Atomic int64_t s_turn_start_us  = 0;   /* esp_timer_get_time() at turn start */
+static char            s_phase[48]      = "";   /* current phase: "llm_cloud", "tool:weather", etc. */
+static portMUX_TYPE    s_phase_mux      = portMUX_INITIALIZER_UNLOCKED;
+
+static void agent_set_phase(const char *phase)
+{
+    taskENTER_CRITICAL(&s_phase_mux);
+    strncpy(s_phase, phase, sizeof(s_phase) - 1);
+    s_phase[sizeof(s_phase) - 1] = '\0';
+    taskEXIT_CRITICAL(&s_phase_mux);
+}
+
+void agent_loop_get_phase(char *buf, size_t len)
+{
+    taskENTER_CRITICAL(&s_phase_mux);
+    strncpy(buf, s_phase, len - 1);
+    buf[len - 1] = '\0';
+    taskEXIT_CRITICAL(&s_phase_mux);
+}
+
+int64_t agent_loop_turn_age_ms(void)
+{
+    int64_t start = atomic_load(&s_turn_start_us);
+    if (start == 0) return 0;   /* not in a turn */
+    return (esp_timer_get_time() - start) / 1000;
+}
+
 /* ── LLM API rate limiting ────────────────────────────────────── */
 /* Tracks hourly request count. Resets every hour.
  * Default: 60/hour. Configurable via CLI: rate_limit <n>  */
@@ -382,8 +410,18 @@ static cJSON *build_tool_results(const llm_response_t *resp, const lang_msg_t *m
             oled_display_set_message(oled_tool);
         }
         int64_t t0 = esp_timer_get_time();
+        /* Watchdog phase: sequential tool name for diagnostics */
+        {
+            char pb[48];
+            snprintf(pb, sizeof(pb), "tool:%.42s", call->name);
+            agent_set_phase(pb);
+        }
         tool_registry_execute(call->name, tool_input, tool_output, tool_output_size);
         int tool_ms = (int)((esp_timer_get_time() - t0) / 1000);
+        if (tool_ms > 30000) {
+            ESP_LOGW(TAG, "Tool %s took %d ms (sequential) — unusually slow",
+                     call->name, tool_ms);
+        }
         free(patched_input);
 
         int tool_out_len = (int)strlen(tool_output);
@@ -437,6 +475,8 @@ static void agent_loop_task(void *arg)
 
         atomic_store(&s_agent_busy, true);
         int64_t turn_start_us = esp_timer_get_time();
+        atomic_store(&s_turn_start_us, turn_start_us);
+        agent_set_phase("init");
         bool turn_has_image = false;   /* set when tool_capture_image runs this turn */
         memory_tool_reset_turn();
         web_search_reset_turn();
@@ -805,6 +845,10 @@ static void agent_loop_task(void *arg)
                 snprintf(prov_line, sizeof(prov_line), "%.15s/%.14s",
                          llm_get_provider(), llm_get_model());
                 oled_display_set_provider(prov_line);
+                /* Watchdog phase: track which LLM tier we're calling */
+                char phase_buf[48];
+                snprintf(phase_buf, sizeof(phase_buf), "llm:%.42s", llm_get_provider());
+                agent_set_phase(phase_buf);
             }
             llm_response_t resp;
             bool force_this_iter = (force_memory_tool && iteration == 0);
@@ -1009,6 +1053,14 @@ static void agent_loop_task(void *arg)
                 }
             }
 
+            /* Watchdog phase: track tool execution */
+            if (resp.call_count == 1) {
+                char tb[48];
+                snprintf(tb, sizeof(tb), "tool:%.42s", resp.calls[0].name);
+                agent_set_phase(tb);
+            } else {
+                agent_set_phase("tools:parallel");
+            }
             cJSON *tool_results = build_tool_results(&resp, &msg, tool_output, TOOL_OUTPUT_SIZE);
 
             if (capture_image_called) {
@@ -1105,6 +1157,7 @@ static void agent_loop_task(void *arg)
                                     cJSON *msg_item = cJSON_GetArrayItem(sum_msgs, 0);
                                     cJSON_AddStringToObject(msg_item, "content", sum_prompt);
 
+                                    agent_set_phase("llm:summariser");
                                     llm_set_request_override("ollama", llm_get_local_text_model());
                                     llm_response_t sum_resp;
                                     memset(&sum_resp, 0, sizeof(sum_resp));
@@ -1250,6 +1303,7 @@ static void agent_loop_task(void *arg)
                 }
 
                 /* Generate TTS (may take seconds for local Kokoro) */
+                agent_set_phase("tts");
                 esp_err_t tts_err = tts_generate(tts_text, tts_id);
 
                 if (tts_err == ESP_OK && tts_id[0]) {
@@ -1360,6 +1414,8 @@ static void agent_loop_task(void *arg)
         }
 
         atomic_store(&s_agent_busy, false);
+        atomic_store(&s_turn_start_us, (int64_t)0);
+        agent_set_phase("");
 
         ESP_LOGI(TAG, "PSRAM free: %d bytes  SRAM free: %d bytes",
                  (int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),

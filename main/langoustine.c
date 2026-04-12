@@ -266,6 +266,77 @@ static void outbound_dispatch_task(void *arg)
     }
 }
 
+/* ── Agent watchdog task ─────────────────────────────────────────
+ * Runs on Core 0, wakes every 30s, monitors agent turn duration.
+ * If a turn is stuck for >10 min, logs the phase and restarts.
+ * This catches zombie LLM calls, hung tool execution, or any
+ * state where the soft per-turn timeout in agent_loop.c failed
+ * to break out (e.g. blocking HTTP call that ignores the timer).
+ *
+ * Escalation:
+ *   > 5 min  → WARN log + monitor broadcast (first time only)
+ *   > 10 min → ERROR log + crashlog entry + hard restart
+ */
+#define WATCHDOG_POLL_MS     30000    /* 30s poll interval */
+#define WATCHDOG_WARN_MS    300000    /* 5 min: warning */
+#define WATCHDOG_KILL_MS    600000    /* 10 min: force restart */
+
+static void agent_watchdog_task(void *arg)
+{
+    bool warned = false;
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(WATCHDOG_POLL_MS));
+
+        if (!agent_loop_is_busy()) {
+            warned = false;
+            continue;
+        }
+
+        int64_t age_ms = agent_loop_turn_age_ms();
+        if (age_ms <= 0) { warned = false; continue; }
+
+        if (age_ms > WATCHDOG_KILL_MS) {
+            char phase[48];
+            agent_loop_get_phase(phase, sizeof(phase));
+            ESP_LOGE(TAG, "WATCHDOG: agent stuck %lld ms in phase '%s' — restarting",
+                     (long long)age_ms, phase);
+
+            /* Write to crashlog before restarting so we can diagnose */
+            {
+                time_t now = time(NULL);
+                struct tm tm_info;
+                localtime_r(&now, &tm_info);
+                char ts[32];
+                strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M", &tm_info);
+
+                FILE *f = fopen(CRASHLOG_PATH, "a");
+                if (f) {
+                    fprintf(f, "| %s | **watchdog** | phase=%s age=%llds |\n",
+                            ts, phase, (long long)(age_ms / 1000));
+                    fclose(f);
+                }
+            }
+
+            ws_server_broadcast_monitor("system", "WATCHDOG: agent zombie — restarting");
+            vTaskDelay(pdMS_TO_TICKS(500));  /* let monitor message flush */
+            esp_restart();
+        }
+
+        if (age_ms > WATCHDOG_WARN_MS && !warned) {
+            char phase[48];
+            agent_loop_get_phase(phase, sizeof(phase));
+            ESP_LOGW(TAG, "WATCHDOG: agent busy %lld ms in phase '%s'",
+                     (long long)age_ms, phase);
+            char mon[96];
+            snprintf(mon, sizeof(mon), "watchdog: agent busy %llds in %s",
+                     (long long)(age_ms / 1000), phase);
+            ws_server_broadcast_monitor("warning", mon);
+            warned = true;
+        }
+    }
+}
+
 void app_main(void)
 {
     /* Route ALL cJSON allocations to PSRAM.
@@ -510,6 +581,15 @@ void app_main(void)
             cron_service_start();
             heartbeat_start();
             rule_engine_start();
+
+            /* Agent watchdog: lightweight Core 0 task that force-restarts
+             * the device if the agent is stuck for >10 min.  Small stack
+             * (2KB PSRAM) — only reads atomics, writes a log line, calls
+             * esp_restart().  Catches zombie LLM calls that the internal
+             * soft timeout missed. */
+            xTaskCreatePinnedToCoreWithCaps(
+                agent_watchdog_task, "ag_wdog", 2048, NULL,
+                2, NULL, 0, MALLOC_CAP_SPIRAM);
 
             /* All services up — mark OTA slot valid so rollback is cancelled.
              * Doing this here (after WiFi + services) means a firmware that
