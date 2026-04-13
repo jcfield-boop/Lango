@@ -261,9 +261,18 @@ static const char *llm_api_url(void)
         return apfel_url_buf;
     }
     if (provider_is_ollama() && s_local_url[0]) {
-        /* s_local_url already contains full URL like "http://192.168.0.25:11434/v1" */
+        /* Ollama native /api/chat endpoint: supports think:false to disable
+         * qwen3 reasoning tokens (170s → 2s for tool calls).  The OpenAI-compat
+         * /v1/chat/completions endpoint ignores think:false entirely.
+         * s_local_url is like "http://192.168.0.51:11434/v1" — strip the /v1 suffix. */
         static char url_buf[LLM_LOCAL_URL_MAX + 32];
-        snprintf(url_buf, sizeof(url_buf), "%s/chat/completions", s_local_url);
+        char base[LLM_LOCAL_URL_MAX];
+        strncpy(base, s_local_url, sizeof(base) - 1);
+        base[sizeof(base) - 1] = '\0';
+        size_t blen = strlen(base);
+        /* Strip trailing /v1 if present */
+        if (blen >= 3 && strcmp(base + blen - 3, "/v1") == 0) base[blen - 3] = '\0';
+        snprintf(url_buf, sizeof(url_buf), "%s/api/chat", base);
         return url_buf;
     }
     if (provider_is_openrouter()) return LANG_OPENROUTER_API_URL;
@@ -288,7 +297,7 @@ static const char *llm_api_host(void)
 static const char *llm_api_path(void)
 {
     if (provider_is_apfel())      return "/v1/chat/completions";
-    if (provider_is_ollama())     return "/v1/chat/completions";
+    if (provider_is_ollama())     return "/api/chat";
     if (provider_is_openrouter()) return "/api/v1/chat/completions";
     if (provider_is_openai())     return "/v1/chat/completions";
     return "/v1/messages";
@@ -691,7 +700,18 @@ esp_err_t llm_chat_tools(const char *system_prompt,
     }
     cJSON_AddNumberToObject(body, "temperature", 0.7);
 
-    if (provider_uses_openai_format()) {
+    if (provider_is_ollama()) {
+        /* Ollama native /api/chat (non-streaming) */
+        cJSON_AddBoolToObject(body, "think", false);
+        cJSON_AddBoolToObject(body, "stream", false);
+        cJSON_AddStringToObject(body, "keep_alive", "10m");
+        cJSON *openai_msgs = convert_messages_openai(system_prompt, messages);
+        cJSON_AddItemToObject(body, "messages", openai_msgs);
+        if (tools_json) {
+            cJSON *tools = convert_tools_openai(tools_json);
+            if (tools) cJSON_AddItemToObject(body, "tools", tools);
+        }
+    } else if (provider_uses_openai_format()) {
         cJSON *openai_msgs = convert_messages_openai(system_prompt, messages);
         cJSON_AddItemToObject(body, "messages", openai_msgs);
 
@@ -793,6 +813,65 @@ esp_err_t llm_chat_tools(const char *system_prompt,
             snprintf(mmsg, sizeof(mmsg), "LLM model: %s", model_item->valuestring);
             ws_server_broadcast_monitor("llm", mmsg);
         }
+    }
+
+    if (provider_is_ollama()) {
+        /* Ollama native /api/chat response:
+         * {"message":{"role":"assistant","content":"...","tool_calls":[...]},"done":true,...} */
+        cJSON *message = cJSON_GetObjectItem(root, "message");
+        if (message) {
+            cJSON *content = cJSON_GetObjectItem(message, "content");
+            if (content && cJSON_IsString(content) && content->valuestring[0]) {
+                size_t tlen = strlen(content->valuestring);
+                resp->text = ps_calloc(1, tlen + 1);
+                if (resp->text) {
+                    memcpy(resp->text, content->valuestring, tlen);
+                    resp->text_len = tlen;
+                }
+            }
+
+            cJSON *tool_calls = cJSON_GetObjectItem(message, "tool_calls");
+            if (tool_calls && cJSON_IsArray(tool_calls)) {
+                cJSON *tc;
+                cJSON_ArrayForEach(tc, tool_calls) {
+                    if (resp->call_count >= LANG_MAX_TOOL_CALLS) break;
+                    llm_tool_call_t *call = &resp->calls[resp->call_count];
+                    cJSON *id_j = cJSON_GetObjectItem(tc, "id");
+                    if (id_j && cJSON_IsString(id_j)) {
+                        strncpy(call->id, id_j->valuestring, sizeof(call->id) - 1);
+                    } else {
+                        snprintf(call->id, sizeof(call->id), "call_%d", resp->call_count);
+                    }
+                    cJSON *func = cJSON_GetObjectItem(tc, "function");
+                    if (func) {
+                        cJSON *name = cJSON_GetObjectItem(func, "name");
+                        if (name && cJSON_IsString(name))
+                            strncpy(call->name, name->valuestring, sizeof(call->name) - 1);
+                        /* Ollama native: arguments is an OBJECT, not a string */
+                        cJSON *args = cJSON_GetObjectItem(func, "arguments");
+                        if (args) {
+                            char *args_str = cJSON_PrintUnformatted(args);
+                            if (args_str) {
+                                call->input     = args_str;  /* caller frees */
+                                call->input_len = strlen(args_str);
+                            }
+                        }
+                    }
+                    resp->call_count++;
+                }
+                if (resp->call_count > 0) resp->tool_use = true;
+            }
+        }
+        /* Token usage */
+        cJSON *pt = cJSON_GetObjectItem(root, "prompt_eval_count");
+        cJSON *ct = cJSON_GetObjectItem(root, "eval_count");
+        if (pt && cJSON_IsNumber(pt)) resp->input_tokens  = (uint32_t)pt->valueint;
+        if (ct && cJSON_IsNumber(ct)) resp->output_tokens = (uint32_t)ct->valueint;
+
+        cJSON_Delete(root);
+        ESP_LOGI(TAG, "Ollama response: %d bytes text, %d tool calls",
+                 (int)resp->text_len, resp->call_count);
+        return ESP_OK;
     }
 
     if (provider_uses_openai_format()) {
@@ -1257,11 +1336,100 @@ static void sse_process_anthropic(sse_state_t *st, cJSON *root)
     }
 }
 
+/* ── Ollama native streaming chunk ──────────────────────────────── */
+
+static void sse_process_ollama_native(sse_state_t *st, cJSON *root)
+{
+    /* Ollama native /api/chat streaming format:
+     *   {"message":{"role":"assistant","content":"token"},"done":false}
+     *   {"message":{"role":"assistant","tool_calls":[...]},"done":false}
+     *   {"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop",
+     *    "prompt_eval_count":155,"eval_count":21,...}
+     */
+    cJSON *done = cJSON_GetObjectItem(root, "done");
+    if (done && cJSON_IsTrue(done)) {
+        st->done = true;
+        cJSON *dr = cJSON_GetObjectItem(root, "done_reason");
+        if (dr && cJSON_IsString(dr) && strcmp(dr->valuestring, "stop") != 0) {
+            if (strcmp(dr->valuestring, "length") == 0) st->truncated = true;
+        }
+        /* Token usage from final chunk */
+        cJSON *pt = cJSON_GetObjectItem(root, "prompt_eval_count");
+        cJSON *ct = cJSON_GetObjectItem(root, "eval_count");
+        if (pt && cJSON_IsNumber(pt)) st->input_tokens  = (uint32_t)pt->valueint;
+        if (ct && cJSON_IsNumber(ct)) st->output_tokens = (uint32_t)ct->valueint;
+    }
+
+    cJSON *msg = cJSON_GetObjectItem(root, "message");
+    if (!msg) return;
+
+    /* Text content */
+    cJSON *content = cJSON_GetObjectItem(msg, "content");
+    if (content && cJSON_IsString(content) && content->valuestring[0]) {
+        resp_buf_append(&st->text, content->valuestring, strlen(content->valuestring));
+    }
+
+    /* Tool calls — Ollama native returns arguments as an OBJECT (not string).
+     * We stringify them so sse_state_to_response works the same as OpenAI path. */
+    cJSON *tc_arr = cJSON_GetObjectItem(msg, "tool_calls");
+    if (!tc_arr || !cJSON_IsArray(tc_arr)) return;
+
+    cJSON *tc_item;
+    cJSON_ArrayForEach(tc_item, tc_arr) {
+        int idx = st->tc_count;
+        if (idx >= SSE_TC_MAX) break;
+
+        cJSON *id_j = cJSON_GetObjectItem(tc_item, "id");
+        if (id_j && cJSON_IsString(id_j)) {
+            strncpy(st->tc[idx].id, id_j->valuestring, sizeof(st->tc[idx].id) - 1);
+        } else {
+            /* Ollama may omit id — generate one */
+            snprintf(st->tc[idx].id, sizeof(st->tc[idx].id), "call_%d", idx);
+        }
+
+        cJSON *func = cJSON_GetObjectItem(tc_item, "function");
+        if (!func) continue;
+
+        cJSON *name = cJSON_GetObjectItem(func, "name");
+        if (name && cJSON_IsString(name) && name->valuestring[0]) {
+            strncpy(st->tc[idx].name, name->valuestring, sizeof(st->tc[idx].name) - 1);
+        }
+
+        cJSON *args = cJSON_GetObjectItem(func, "arguments");
+        if (args) {
+            /* arguments is an object in native API — stringify it */
+            char *args_str = cJSON_PrintUnformatted(args);
+            if (args_str) {
+                if (!st->tc[idx].args.data) {
+                    resp_buf_init(&st->tc[idx].args, 256);
+                }
+                resp_buf_append(&st->tc[idx].args, args_str, strlen(args_str));
+                free(args_str);
+            }
+        }
+
+        st->tc_count++;
+        st->tool_use = true;
+    }
+}
+
 /* ── SSE line dispatcher ─────────────────────────────────────────── */
 
 static void sse_process_line(sse_state_t *st, const char *line, int len)
 {
     if (len == 0) return;
+
+    /* Ollama native format: bare JSON lines (no "data: " prefix, no SSE framing).
+     * Detect by checking if the line starts with '{'. */
+    if (provider_is_ollama() && line[0] == '{') {
+        cJSON *root = cJSON_Parse(line);
+        if (root) {
+            sse_process_ollama_native(st, root);
+            cJSON_Delete(root);
+            sse_maybe_emit_progress(st);
+        }
+        return;
+    }
 
     /* Skip "event: ..." lines */
     if (strncmp(line, "event: ", 7) == 0) return;
@@ -1449,12 +1617,24 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
     }
     cJSON_AddNumberToObject(body, "temperature", 0.7);
     cJSON_AddBoolToObject(body, "stream", true);
-    if (provider_is_ollama()) {
-        /* Keep model loaded for 10 min after last request (Ollama default is 5 min) */
-        cJSON_AddStringToObject(body, "keep_alive", "10m");
-    }
 
-    if (provider_uses_openai_format()) {
+    if (provider_is_ollama()) {
+        /* Ollama native /api/chat format.
+         * think:false disables qwen3's internal reasoning chain (170s → 2s).
+         * keep_alive keeps the model loaded for 10 min (default 5 min).
+         * Messages use the same OpenAI format (Ollama accepts both). */
+        cJSON_AddBoolToObject(body, "think", false);
+        cJSON_AddStringToObject(body, "keep_alive", "10m");
+
+        cJSON *openai_msgs = convert_messages_openai(system_prompt, messages);
+        cJSON_AddItemToObject(body, "messages", openai_msgs);
+        if (tools_json) {
+            cJSON *tools = convert_tools_openai(tools_json);
+            if (tools) {
+                cJSON_AddItemToObject(body, "tools", tools);
+            }
+        }
+    } else if (provider_uses_openai_format()) {
         /* Request usage in the final streaming chunk */
         cJSON *sopts = cJSON_CreateObject();
         cJSON_AddBoolToObject(sopts, "include_usage", true);
@@ -1908,15 +2088,22 @@ static void llm_warmup_task(void *arg)
 
     ESP_LOGI(TAG, "Ollama warmup: loading %s...", s_local_model);
 
-    /* Build minimal chat completion — no tools, no system prompt, stream=false */
+    /* Build minimal chat request — Ollama native /api/chat, think:false, stream:false */
     char url[LLM_LOCAL_URL_MAX + 32];
-    snprintf(url, sizeof(url), "%s/chat/completions", s_local_url);
+    {
+        char base[LLM_LOCAL_URL_MAX];
+        strncpy(base, s_local_url, sizeof(base) - 1);
+        base[sizeof(base) - 1] = '\0';
+        size_t blen = strlen(base);
+        if (blen >= 3 && strcmp(base + blen - 3, "/v1") == 0) base[blen - 3] = '\0';
+        snprintf(url, sizeof(url), "%s/api/chat", base);
+    }
 
     char body[384];
     snprintf(body, sizeof(body),
              "{\"model\":\"%s\","
              "\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],"
-             "\"max_tokens\":3,\"stream\":false}",
+             "\"think\":false,\"stream\":false}",
              s_local_model);
 
     /* No response buffer needed — we only care about HTTP status code */
