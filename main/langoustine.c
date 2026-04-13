@@ -299,24 +299,12 @@ static void agent_watchdog_task(void *arg)
         if (age_ms > WATCHDOG_KILL_MS) {
             char phase[48];
             agent_loop_get_phase(phase, sizeof(phase));
-            ESP_LOGE(TAG, "WATCHDOG: agent stuck %lld ms in phase '%s' — restarting",
+            ESP_LOGE(TAG, "WATCHDOG: agent stuck %lld ms in phase '%s' — restarting!",
                      (long long)age_ms, phase);
 
-            /* Write to crashlog before restarting so we can diagnose */
-            {
-                time_t now = time(NULL);
-                struct tm tm_info;
-                localtime_r(&now, &tm_info);
-                char ts[32];
-                strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M", &tm_info);
-
-                FILE *f = fopen(CRASHLOG_PATH, "a");
-                if (f) {
-                    fprintf(f, "| %s | **watchdog** | phase=%s age=%llds |\n",
-                            ts, phase, (long long)(age_ms / 1000));
-                    fclose(f);
-                }
-            }
+            /* Skip crashlog write — SRAM stack too small for fopen/fprintf,
+             * and LittleFS calls from watchdog risk SPI bus deadlock.
+             * The ESP_LOGE above persists in the UART log for diagnosis. */
 
             ws_server_broadcast_monitor("system", "WATCHDOG: agent zombie — restarting");
             vTaskDelay(pdMS_TO_TICKS(500));  /* let monitor message flush */
@@ -583,13 +571,13 @@ void app_main(void)
             rule_engine_start();
 
             /* Agent watchdog: lightweight Core 0 task that force-restarts
-             * the device if the agent is stuck for >10 min.  Small stack
-             * (2KB PSRAM) — only reads atomics, writes a log line, calls
-             * esp_restart().  Catches zombie LLM calls that the internal
-             * soft timeout missed. */
-            xTaskCreatePinnedToCoreWithCaps(
+             * the device if the agent is stuck for >10 min.  Small SRAM
+             * stack (2KB) — only reads atomics, logs, calls esp_restart().
+             * Must be SRAM: PSRAM-stacked tasks can silently hang when
+             * the SPI bus is contended during flash/PSRAM operations. */
+            xTaskCreatePinnedToCore(
                 agent_watchdog_task, "ag_wdog", 2048, NULL,
-                2, NULL, 0, MALLOC_CAP_SPIRAM);
+                2, NULL, 0);
 
             /* All services up — mark OTA slot valid so rollback is cancelled.
              * Doing this here (after WiFi + services) means a firmware that
