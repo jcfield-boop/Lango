@@ -4,6 +4,7 @@
 #include "led/led_indicator.h"
 #include "agent/agent_loop.h"
 #include "audio/wake_word.h"
+#include "display/oled_display.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -82,6 +83,7 @@ esp_err_t ota_update_from_url(const char *url)
 
     /* Step 1: Wait for agent to finish current turn */
     status_set(OTA_STATE_PENDING, 0, NULL, NULL);
+    oled_display_set_ota(0, "Waiting...");
     ws_server_broadcast_monitor("ota", "OTA pending: waiting for agent to finish...");
 
     int waited_ms = 0, log_accum = 0;
@@ -102,6 +104,7 @@ esp_err_t ota_update_from_url(const char *url)
             ESP_LOGW(TAG, "%s", abort_msg);
             ws_server_broadcast_monitor("ota", abort_msg);
             status_set(OTA_STATE_ERROR, 0, NULL, abort_msg);
+            oled_display_set_ota(-1, NULL);
             return ESP_ERR_TIMEOUT;
         }
     }
@@ -115,6 +118,7 @@ esp_err_t ota_update_from_url(const char *url)
     }
     led_indicator_set(LED_OTA);
     status_set(OTA_STATE_DOWNLOADING, 0, NULL, NULL);
+    oled_display_set_ota(0, "Downloading");
 
     /* Suspend wake word feed task — it competes for Core 0 CPU and SPI bus
      * during flash erase/write cycles, causing progressive OTA slowdown. */
@@ -213,11 +217,14 @@ esp_err_t ota_update_from_url(const char *url)
             portENTER_CRITICAL(&s_status_mux);
             s_status.progress_pct = (uint8_t)pct;
             portEXIT_CRITICAL(&s_status_mux);
+            oled_display_set_ota(pct, "Downloading");
         }
 
         /* Yield to WiFi/lwIP task on Core 0 — without this the tight
-         * perform loop can starve networking and cause download stalls. */
-        vTaskDelay(1);
+         * perform loop can starve networking and cause download stalls.
+         * 10ms yield (was 1 tick) gives WiFi enough CPU to drain TCP
+         * buffers during heavy flash erase cycles around the 60% mark. */
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
     if (ret != ESP_OK) {
         char msg[80];
@@ -226,16 +233,19 @@ esp_err_t ota_update_from_url(const char *url)
         ws_server_broadcast_monitor("ota", msg);
         esp_https_ota_abort(ota_handle);
         status_set(OTA_STATE_ERROR, 0, NULL, msg);
+        oled_display_set_ota(-1, NULL);
         led_indicator_set(LED_ERROR);
         wake_word_resume();
         return ret;
     }
 
     /* Step 6: Verify, commit, reboot */
+    oled_display_set_ota(100, "Verifying");
     status_set(OTA_STATE_VERIFYING, 100, NULL, NULL);
     ret = esp_https_ota_finish(ota_handle);
     if (ret == ESP_OK) {
         status_set(OTA_STATE_REBOOTING, 100, NULL, NULL);
+        oled_display_set_ota(100, "Rebooting...");
         ws_server_broadcast_monitor("ota", "OTA complete - rebooting in 3s...");
         ESP_LOGI(TAG, "OTA successful, restarting");
         vTaskDelay(pdMS_TO_TICKS(3000));
@@ -246,6 +256,7 @@ esp_err_t ota_update_from_url(const char *url)
         ESP_LOGE(TAG, "%s", msg);
         ws_server_broadcast_monitor("ota", msg);
         status_set(OTA_STATE_ERROR, 0, NULL, msg);
+        oled_display_set_ota(-1, NULL);
         led_indicator_set(LED_ERROR);
     }
 
@@ -262,6 +273,7 @@ static void ota_task(void *arg)
         /* Hold ERROR state for 10s so clients can read it before it clears */
         vTaskDelay(pdMS_TO_TICKS(10000));
         status_set(OTA_STATE_IDLE, 0, NULL, NULL);
+        oled_display_set_ota(-1, NULL);
     }
     s_ota_running = false;
     vTaskDelete(NULL);

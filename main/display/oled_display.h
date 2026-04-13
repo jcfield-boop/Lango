@@ -50,3 +50,7 @@ void oled_display_set_rotate_line(int slot, const char *text);
 /** Temporarily show an alert for `duration_ms` (e.g. cron fire, OTA).
  *  After the duration, reverts to normal display. Thread-safe. */
 void oled_display_alert(const char *line1, const char *line2, int duration_ms);
+
+/** Set OTA progress for dedicated OTA screen. pct=0-100, state label shown above bar.
+ *  Pass pct<0 to dismiss the OTA screen. Thread-safe. */
+void oled_display_set_ota(int pct, const char *state_label);

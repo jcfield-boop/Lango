@@ -34,6 +34,8 @@ static char s_channel[8]        = "";
 static int  s_msg_count_today   = 0;
 static int  s_msg_count_yday    = -1;
 static char s_rotate_lines[4][22] = { "", "", "", "" };
+static int  s_ota_pct            = -1;  /* <0 = no OTA screen */
+static char s_ota_label[16]      = "";
 
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -271,6 +273,53 @@ static void draw_active_screen(void)
     ssd1306_str(24, 56, up_line);
 }
 
+static void draw_ota_screen(void)
+{
+    portENTER_CRITICAL(&s_mux);
+    int pct = s_ota_pct;
+    char label[16];
+    strncpy(label, s_ota_label, sizeof(label) - 1);
+    label[sizeof(label) - 1] = '\0';
+    portEXIT_CRITICAL(&s_mux);
+
+    /* Title */
+    ssd1306_str_2x(22, 2, "OTA");
+
+    /* State label */
+    ssd1306_str(0, 22, label);
+
+    /* Percentage right-aligned on label row */
+    char pct_str[16];
+    snprintf(pct_str, sizeof(pct_str), "%d%%", pct < 0 ? 0 : pct);
+    int px = 128 - (int)strlen(pct_str) * 6;
+    ssd1306_str(px, 22, pct_str);
+
+    /* Progress bar: 4px border at y=34, 120px wide, 12px tall */
+    int bar_x = 4, bar_y = 34, bar_w = 120, bar_h = 12;
+
+    /* Border rectangle (draw 4 sides) */
+    ssd1306_hline(bar_x, bar_y, bar_w, true);
+    ssd1306_hline(bar_x, bar_y + bar_h - 1, bar_w, true);
+    for (int y = bar_y; y < bar_y + bar_h; y++) {
+        ssd1306_fill_rect(bar_x, y, 1, 1, true);
+        ssd1306_fill_rect(bar_x + bar_w - 1, y, 1, 1, true);
+    }
+
+    /* Fill: inner area = (bar_x+2, bar_y+2, bar_w-4, bar_h-4) */
+    int fill_w = (bar_w - 4) * (pct < 0 ? 0 : pct) / 100;
+    if (fill_w > 0) {
+        ssd1306_fill_rect(bar_x + 2, bar_y + 2, fill_w, bar_h - 4, true);
+    }
+
+    /* Uptime below bar */
+    int64_t up_s = esp_timer_get_time() / 1000000LL;
+    int up_h = (int)(up_s / 3600);
+    int up_m = (int)((up_s % 3600) / 60);
+    char bottom[22];
+    snprintf(bottom, sizeof(bottom), "Up:%dh%02dm", up_h, up_m);
+    ssd1306_str(0, 54, bottom);
+}
+
 static void draw_alert_screen(void)
 {
     portENTER_CRITICAL(&s_mux);
@@ -305,6 +354,12 @@ static void oled_task(void *arg)
         }
         portEXIT_CRITICAL(&s_mux);
 
+        /* Check OTA screen (highest priority) */
+        bool ota_active = false;
+        portENTER_CRITICAL(&s_mux);
+        if (s_ota_pct >= 0) ota_active = true;
+        portEXIT_CRITICAL(&s_mux);
+
         /* Check if alert is active */
         bool alert_active = false;
         portENTER_CRITICAL(&s_mux);
@@ -315,7 +370,9 @@ static void oled_task(void *arg)
         }
         portEXIT_CRITICAL(&s_mux);
 
-        if (alert_active) {
+        if (ota_active) {
+            draw_ota_screen();
+        } else if (alert_active) {
             draw_alert_screen();
         } else {
             /* Use LED state to decide idle vs active screen */
@@ -457,5 +514,16 @@ void oled_display_alert(const char *line1, const char *line2, int duration_ms)
     if (line1) { strncpy(s_alert1, line1, sizeof(s_alert1) - 1); s_alert1[31] = '\0'; }
     if (line2) { strncpy(s_alert2, line2, sizeof(s_alert2) - 1); s_alert2[31] = '\0'; }
     s_alert_until = xTaskGetTickCount() + pdMS_TO_TICKS(duration_ms);
+    portEXIT_CRITICAL(&s_mux);
+}
+
+void oled_display_set_ota(int pct, const char *state_label)
+{
+    portENTER_CRITICAL(&s_mux);
+    s_ota_pct = pct;
+    if (state_label) {
+        strncpy(s_ota_label, state_label, sizeof(s_ota_label) - 1);
+        s_ota_label[sizeof(s_ota_label) - 1] = '\0';
+    }
     portEXIT_CRITICAL(&s_mux);
 }
