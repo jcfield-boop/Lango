@@ -24,6 +24,80 @@ static const char * const WRITE_DENYLIST[] = {
 };
 
 /**
+ * Trim a line-oriented file to its last `max_lines` lines. Only rewrites the
+ * file when it actually exceeds the cap. Called after any append to soak.md
+ * to enforce LANG_SOAK_MAX_LINES without relying on the LLM to remember.
+ *
+ * Counts newline bytes in a single streaming pass, then — only if over cap —
+ * slurps the file into a PSRAM buffer and rewrites the tail.
+ */
+static void trim_file_to_last_lines(const char *path, int max_lines)
+{
+    if (!path || max_lines <= 0) return;
+
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+
+    /* Pass 1: count lines + file size cheaply */
+    int total_lines = 0;
+    long file_size = 0;
+    char chunk[256];
+    size_t n;
+    while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0) {
+        file_size += (long)n;
+        for (size_t i = 0; i < n; i++) {
+            if (chunk[i] == '\n') total_lines++;
+        }
+    }
+
+    if (total_lines <= max_lines || file_size <= 0 || file_size > MAX_FILE_SIZE) {
+        fclose(f);
+        return;  /* nothing to do */
+    }
+
+    /* Pass 2: slurp + rewrite the tail */
+    rewind(f);
+    char *buf = ps_malloc((size_t)file_size + 1);
+    if (!buf) {
+        fclose(f);
+        ESP_LOGW(TAG, "trim %s: alloc failed", path);
+        return;
+    }
+    size_t got = fread(buf, 1, (size_t)file_size, f);
+    buf[got] = '\0';
+    fclose(f);
+
+    /* Walk from end backwards, counting newlines. We want to keep the last
+     * `max_lines` lines — scan until we've passed (total_lines - max_lines)
+     * newlines from the start, then the next byte is the start of the kept tail. */
+    int skip = total_lines - max_lines;
+    size_t cut = 0;
+    int seen = 0;
+    for (size_t i = 0; i < got; i++) {
+        if (buf[i] == '\n') {
+            seen++;
+            if (seen == skip) {
+                cut = i + 1;
+                break;
+            }
+        }
+    }
+
+    FILE *out = fopen(path, "w");
+    if (!out) {
+        free(buf);
+        ESP_LOGW(TAG, "trim %s: reopen failed", path);
+        return;
+    }
+    size_t tail_len = got - cut;
+    fwrite(buf + cut, 1, tail_len, out);
+    fclose(out);
+    free(buf);
+    ESP_LOGI(TAG, "trimmed %s: %d→%d lines (%ld→%u bytes)",
+             path, total_lines, max_lines, file_size, (unsigned)tail_len);
+}
+
+/**
  * Validate that a path starts with /lfs/ and contains no ".." traversal.
  */
 static bool validate_path(const char *path)
@@ -127,6 +201,12 @@ esp_err_t tool_write_file_execute(const char *input_json, char *output, size_t o
         snprintf(output, output_size, "Error: wrote %d of %d bytes to %s", (int)written, (int)len, path);
         cJSON_Delete(root);
         return ESP_FAIL;
+    }
+
+    /* Firmware-enforced cap for soak.md so it stays bounded regardless of
+     * whether the nightly summary cron actually runs the truncate step. */
+    if (do_append && strcmp(path, LANG_SOAK_FILE) == 0) {
+        trim_file_to_last_lines(path, LANG_SOAK_MAX_LINES);
     }
 
     snprintf(output, output_size, "OK: %s %d bytes to %s",

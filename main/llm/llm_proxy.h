@@ -14,6 +14,14 @@
 esp_err_t llm_proxy_init(void);
 
 /**
+ * Pre-warm the cloud LLM TCP/TLS path so the next real request does not pay
+ * the "connection reset by peer" retry penalty (observed on heartbeats 30+ min
+ * apart). No-op when the effective provider is local (ollama/mlx/apfel).
+ * Blocks up to ~4 s on the calling task; safe from heartbeat task.
+ */
+void llm_proxy_preflight_cloud(void);
+
+/**
  * Save the LLM API key to NVS.
  */
 esp_err_t llm_set_api_key(const char *api_key);
@@ -82,6 +90,10 @@ void llm_set_local_text_model(const char *model);
 
 /** Get the text-only local model; falls back to local_model if not configured. */
 const char *llm_get_local_text_model(void);
+
+/** Set/get the local LLM provider type ("ollama" or "mlx"). Default: "ollama". */
+void llm_set_local_provider(const char *provider);
+const char *llm_get_local_provider(void);
 
 /** Check if the local Ollama instance is reachable (cached 30s). May block. */
 bool llm_local_health_check(void);

@@ -649,6 +649,39 @@ static int cmd_heartbeat_trigger(int argc, char **argv)
     return 0;
 }
 
+/* --- crashlog command --- */
+/* Usage:
+ *   crashlog          — dump /lfs/memory/crashlog.md to stdout
+ *   crashlog clear    — truncate the file
+ */
+static int cmd_crashlog(int argc, char **argv)
+{
+    const char *path = "/lfs/memory/crashlog.md";
+
+    if (argc >= 2 && strcmp(argv[1], "clear") == 0) {
+        FILE *f = fopen(path, "w");
+        if (f) fclose(f);
+        printf("Crashlog cleared.\n");
+        return 0;
+    }
+
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        printf("No crashlog found at %s (device has not recorded an abnormal reset).\n", path);
+        return 0;
+    }
+    printf("=== crashlog.md ===\n");
+    char buf[256];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf) - 1, f)) > 0) {
+        buf[n] = '\0';
+        fputs(buf, stdout);
+    }
+    fclose(f);
+    printf("\n===================\n");
+    return 0;
+}
+
 /* --- cron_start command --- */
 static int cmd_cron_start(int argc, char **argv)
 {
@@ -1592,6 +1625,14 @@ esp_err_t serial_cli_init(void)
         .command = "cron_start", .help = "Start cron scheduler", .func = &cmd_cron_start
     };
     esp_console_cmd_register(&cron_start_cmd);
+
+    /* crashlog */
+    esp_console_cmd_t crashlog_cmd = {
+        .command = "crashlog",
+        .help = "Show or clear crashlog (usage: crashlog [clear])",
+        .func = &cmd_crashlog
+    };
+    esp_console_cmd_register(&crashlog_cmd);
 
     /* tool_exec */
     esp_console_cmd_t tool_exec_cmd = {

@@ -25,6 +25,64 @@ static TaskHandle_t s_cron_task = NULL;
 
 static esp_err_t cron_save_jobs(void);
 
+/* Parse a comma-separated day-of-week list into a bitmask.
+ *   "sun,mon,tue,wed,thu,fri,sat" or a subset → bits 0..6
+ *   "daily" / "*" / NULL / ""                → 0 (any day)
+ * Case-insensitive, accepts full names too. Unknown tokens are ignored. */
+static uint8_t parse_dow(const char *s)
+{
+    if (!s || !s[0]) return 0;
+    if (strcmp(s, "*") == 0 || strcmp(s, "daily") == 0) return 0;
+
+    static const struct { const char *name; uint8_t bit; } tbl[] = {
+        {"sun", 1 << 0}, {"sunday",    1 << 0},
+        {"mon", 1 << 1}, {"monday",    1 << 1},
+        {"tue", 1 << 2}, {"tuesday",   1 << 2},
+        {"wed", 1 << 3}, {"wednesday", 1 << 3},
+        {"thu", 1 << 4}, {"thursday",  1 << 4},
+        {"fri", 1 << 5}, {"friday",    1 << 5},
+        {"sat", 1 << 6}, {"saturday",  1 << 6},
+    };
+
+    uint8_t mask = 0;
+    const char *p = s;
+    while (*p) {
+        /* Skip separators */
+        while (*p == ',' || *p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        /* Extract token (up to next separator) */
+        char tok[16];
+        size_t tlen = 0;
+        while (*p && *p != ',' && *p != ' ' && *p != '\t' && tlen < sizeof(tok) - 1) {
+            tok[tlen++] = (char)((*p >= 'A' && *p <= 'Z') ? *p + 32 : *p);
+            p++;
+        }
+        tok[tlen] = '\0';
+        for (size_t i = 0; i < sizeof(tbl) / sizeof(tbl[0]); i++) {
+            if (strcmp(tok, tbl[i].name) == 0) { mask |= tbl[i].bit; break; }
+        }
+    }
+    return mask;
+}
+
+/* Render a bitmask back to a short canonical string (e.g. "mon,wed").
+ * Returns empty string when mask is 0 (any day). Used by cron_save_jobs. */
+static void dow_mask_to_str(uint8_t mask, char *out, size_t out_size)
+{
+    static const char *names[7] = { "sun","mon","tue","wed","thu","fri","sat" };
+    if (out_size == 0) return;
+    out[0] = '\0';
+    if (mask == 0) return;
+    size_t off = 0;
+    for (int i = 0; i < 7; i++) {
+        if (!(mask & (1 << i))) continue;
+        const char *sep = (off == 0) ? "" : ",";
+        int n = snprintf(out + off, out_size - off, "%s%s", sep, names[i]);
+        if (n <= 0 || (size_t)n >= out_size - off) break;
+        off += (size_t)n;
+    }
+}
+
 static bool cron_sanitize_destination(cron_job_t *job)
 {
     bool changed = false;
@@ -153,6 +211,27 @@ static esp_err_t cron_load_jobs(void)
             cJSON *interval = cJSON_GetObjectItem(item, "interval_s");
             job->interval_s = (interval && cJSON_IsNumber(interval))
                               ? (uint32_t)interval->valuedouble : 0;
+            /* Optional day-of-week constraint. Accepts a string ("sat",
+             * "mon,wed,fri") or an array of strings (["sat","sun"]). */
+            cJSON *dow = cJSON_GetObjectItem(item, "dow");
+            if (dow) {
+                if (cJSON_IsString(dow)) {
+                    job->dow_mask = parse_dow(dow->valuestring);
+                } else if (cJSON_IsArray(dow)) {
+                    char joined[64] = {0};
+                    size_t off = 0;
+                    cJSON *d;
+                    cJSON_ArrayForEach(d, dow) {
+                        if (!cJSON_IsString(d)) continue;
+                        const char *sep = (off == 0) ? "" : ",";
+                        int n = snprintf(joined + off, sizeof(joined) - off,
+                                         "%s%s", sep, d->valuestring);
+                        if (n <= 0 || (size_t)n >= sizeof(joined) - off) break;
+                        off += (size_t)n;
+                    }
+                    job->dow_mask = parse_dow(joined);
+                }
+            }
         } else if (strcmp(kind_str, "at") == 0) {
             job->kind = CRON_KIND_AT;
             cJSON *at_epoch = cJSON_GetObjectItem(item, "at_epoch");
@@ -198,6 +277,13 @@ static esp_err_t cron_save_jobs(void)
 
         if (job->kind == CRON_KIND_EVERY) {
             cJSON_AddNumberToObject(item, "interval_s", job->interval_s);
+            if (job->dow_mask) {
+                char dow_buf[32];
+                dow_mask_to_str(job->dow_mask, dow_buf, sizeof(dow_buf));
+                if (dow_buf[0]) {
+                    cJSON_AddStringToObject(item, "dow", dow_buf);
+                }
+            }
         } else {
             cJSON_AddNumberToObject(item, "at_epoch", (double)job->at_epoch);
         }
@@ -268,6 +354,19 @@ static void cron_process_due_jobs(void)
                 while (next <= now) {
                     next += job->interval_s;
                 }
+                /* Honour day-of-week (same as the post-fire path) so a
+                 * reboot-induced catch-up doesn't land on the wrong day. */
+                if (job->dow_mask) {
+                    int rolls = 0;
+                    while (rolls < 7) {
+                        time_t tnext = (time_t)next;
+                        struct tm tm_next;
+                        localtime_r(&tnext, &tm_next);
+                        if (job->dow_mask & (1 << tm_next.tm_wday)) break;
+                        next += 86400;
+                        rolls++;
+                    }
+                }
                 ESP_LOGW(TAG, "Cron job %s (%s) overdue by %llds (>2x interval) — skipping to next",
                          job->name, job->id, (long long)overdue);
                 job->next_run = next;
@@ -334,6 +433,25 @@ static void cron_process_due_jobs(void)
             int64_t next = job->next_run + job->interval_s;
             while (next <= now) {
                 next += job->interval_s;
+            }
+
+            /* Day-of-week constraint: roll forward by 1 day until the
+             * scheduled weekday is in the allowed mask. Idempotent — a
+             * skipped fire never drifts the job off its intended day. */
+            if (job->dow_mask) {
+                int rolls = 0;
+                while (rolls < 7) {
+                    time_t tnext = (time_t)next;
+                    struct tm tm_next;
+                    localtime_r(&tnext, &tm_next);
+                    if (job->dow_mask & (1 << tm_next.tm_wday)) break;
+                    next += 86400;
+                    rolls++;
+                }
+                if (rolls > 0) {
+                    ESP_LOGI(TAG, "cron %s: advanced next_run +%dd to match dow_mask=0x%02x",
+                             job->id, rolls, job->dow_mask);
+                }
             }
             job->next_run = next;
         }

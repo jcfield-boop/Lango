@@ -69,6 +69,8 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 7. If `LANG_I2S_AUDIO_ENABLED`: WAV is played immediately via MAX98357A on GPIO 3/4/6
 8. `{"type":"message","tts_id":"<8hex>"}` sent to browser → browser fetches `GET /tts/<id>`
 
+**First-sentence TTS split** (on-device voice only, `chat_id=="ptt"`): before firing TTS, `agent_loop.c` scans the response for a sentence boundary (`. ! ? \n\n`) in `[40, 220]` chars with ≥20 chars of tail. If found, segment A is sent to Kokoro first and `i2s_audio_play_wav_async()` starts playback immediately; segment B's TTS is generated in parallel and appended via `i2s_audio_enqueue_wav()` — a 4-slot FreeRTOS queue in `i2s_audio.c` plays the two WAVs back-to-back. Cuts perceived voice latency ~400-600 ms on typical 2-3 sentence replies. Short replies fall back to the single-shot path.
+
 **Local pipeline** (fully on-device Mac at `192.168.0.51`):
 - STT: mlx-audio Whisper at `<base_url>/v1/audio/transcriptions` — raw WAV sent (Opus encoding bypassed)
 - TTS: mlx-audio Kokoro at `<base_url>/v1/audio/speech` — model + voice configurable via SERVICES.md
@@ -77,7 +79,7 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 - Cloud fallback: Groq (STT/TTS), OpenRouter (LLM) when local services unavailable
 
 **Unified LLM routing** (in `agent_loop.c`) — same hierarchy for voice and text:
-1. System/heartbeat/cron → cloud always (multi-step tool chains need speed)
+1. System/heartbeat/cron → cloud always (multi-step tool chains need speed). mlx-lm / Ollama / Apfel are **user-channel only**; scheduled traffic (heartbeat + cron system jobs) never hits the local tier.
 2. Simple query (no tools needed) → **Apfel** if online (~1s response) → Ollama fallback → cloud fallback
 3. Tool-triggering keywords (weather, remind, stock, etc.) → **Ollama** if online → cloud fallback
 4. Complex keywords (briefing, email, research) → **cloud** directly
@@ -114,9 +116,18 @@ lango> stt_key <groq-key>
 lango> tts_key <groq-key>
 lango> config_show          # shows all values with source (NVS/build)
 lango> config_reset         # wipes all NVS overrides
+lango> crashlog [clear]     # dump or truncate /lfs/memory/crashlog.md
 ```
 
 All constants live in `main/langoustine_config.h` under the `LANG_` prefix.
+
+### Crash Log
+
+Abnormal resets (panic/int_wdt/task_wdt/wdt/brownout) are appended to `/lfs/memory/crashlog.md` by `log_crash_if_needed()` in `main/langoustine.c` on boot. Retrieval:
+- `curl http://192.168.0.44/api/crashlog` — dump markdown (empty body if no entries)
+- `curl -X DELETE http://192.168.0.44/api/crashlog` — truncate
+- `lango> crashlog` / `lango> crashlog clear` — same via serial CLI
+- `/api/file?name=crashlog` still works as a fallback
 
 ### NVS Namespaces
 `wifi_config`, `llm_config`, `tg_config`, `stt_config`, `tts_config`, `proxy_config`, `search_config`
@@ -145,6 +156,14 @@ local_voice: af_heart                         # configurable TTS voice (af_heart
 ```
 
 NVS values take priority over SERVICES.md on initial load; `services_config_reload()` overrides NVS unconditionally (called when file saved via web UI).
+
+### Host-side mlx-audio setup (Mac at 192.168.0.51)
+
+Served via `launchd` (`~/Library/LaunchAgents/com.mlx-audio.server.plist`). Env vars set in the plist: `PATH` must include `/opt/homebrew/bin` (ffmpeg discovery — Whisper decoding fails without it), `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` (avoids spurious HF re-checks).
+
+**Tokenizer workaround for `mlx-community/whisper-large-v3-turbo`**: that repo ships an incomplete tokenizer (no `vocab.json` / `merges.txt` / `special_tokens_map.json`, plus a `tokenizer_config.json` whose `extra_special_tokens` is an array rather than the dict format transformers ≥5.4 expects). Loading it silently yields `vocab_size=0`, and decode later crashes in `DecodingTask._step` with `[max] Cannot max reduce zero size array`. Fix: copy the tokenizer file set from `openai/whisper-large-v3-turbo` into both mlx-community snapshot dirs under `~/.cache/huggingface/hub/` and delete `.no_exist/` so HF rechecks. Also patched `mlx_audio/stt/models/whisper/whisper.py:176` (`non_speech_tokens`) to skip empty `encode()` results defensively — that crash shows up first as `IndexError: list index out of range`.
+
+Symptom if this regresses: device log shows `[stt] STT failed in ~1s (HTTP 200) — falling back to cloud`. Confirmation command: `/Library/Frameworks/Python.framework/Versions/3.12/bin/python3 -c "from transformers import WhisperTokenizer; t=WhisperTokenizer.from_pretrained('mlx-community/whisper-large-v3-turbo'); print(t.vocab_size)"` should print `50257`, not `0`.
 
 ## OTA Notes
 

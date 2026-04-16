@@ -26,6 +26,7 @@
 #include "gateway/ws_server.h"
 #include "memory/psram_alloc.h"
 #include "display/oled_display.h"
+#include "llm/llm_proxy.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -264,6 +265,11 @@ static bool heartbeat_send(void)
             ESP_LOGI(TAG, "Waited %ds for agent idle before heartbeat dispatch", wait_count);
         }
     }
+
+    /* Pre-warm the cloud TLS path so the first request inside the agent loop
+     * doesn't pay the ~1.5-2 s "connection reset by peer" retry penalty after
+     * a 30+ min idle period. No-op when the provider is local. */
+    llm_proxy_preflight_cloud();
 
     /* Clear stale session history so the agent doesn't reference old errors.
      * Each heartbeat cycle should start with a clean context. */

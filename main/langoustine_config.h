@@ -183,6 +183,17 @@
 #define LANG_HEARTBEAT_FILE          "/lfs/HEARTBEAT.md"
 #define LANG_HEARTBEAT_INTERVAL_MS   (30 * 60 * 1000)
 
+/* Soak log — firmware-enforced cap on /lfs/memory/soak.md to prevent
+ * unbounded growth when the LLM forgets the nightly truncate directive.
+ * 96 lines ≈ 48h of [30m] heartbeat entries. */
+#define LANG_SOAK_FILE               "/lfs/memory/soak.md"
+#define LANG_SOAK_MAX_LINES          96
+
+/* Heartbeat diagnostic warnings — emit a monitor/OLED alert when a single
+ * agent turn balloons (indicates ReAct context accumulation / tool-loop). */
+#define LANG_HEARTBEAT_WARN_ITERS      5
+#define LANG_HEARTBEAT_WARN_INPUT_TOK  30000
+
 /* UVC Camera (USB webcam on GPIO 19/20) */
 #define LANG_CAMERA_BUF_SIZE            (64 * 1024) /* PSRAM: max JPEG frame */
 #define LANG_CAMERA_WARMUP_MS           3000   /* time-based AEC/AGC warmup before capture */

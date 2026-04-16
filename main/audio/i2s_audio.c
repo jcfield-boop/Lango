@@ -10,6 +10,7 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -24,8 +25,16 @@ static volatile uint8_t s_volume = LANG_AUDIO_VOLUME;
 /* Async playback cancel flag — checked in the write loop */
 static volatile bool s_play_cancel = false;
 
-/* Async playback task state */
-static TaskHandle_t     s_play_task    = NULL;
+/* Async playback task state: queue-backed so callers can enqueue a follow-up
+ * WAV that plays back-to-back with no gap (first-sentence TTS split). */
+#define I2S_PLAY_QUEUE_DEPTH 4
+typedef struct {
+    const uint8_t *wav;
+    size_t         len;
+} play_item_t;
+static TaskHandle_t     s_play_task   = NULL;
+static QueueHandle_t    s_play_queue  = NULL;
+/* Retained for legacy logging paths — current item */
 static const uint8_t   *s_play_wav     = NULL;
 static size_t           s_play_wav_len = 0;
 static void i2s_play_task(void *arg);  /* forward decl for early init */
@@ -594,23 +603,32 @@ esp_err_t i2s_audio_play_wav(const uint8_t *wav_data, size_t len)
 static void i2s_play_task(void *arg)
 {
     (void)arg;
+    play_item_t item;
     while (1) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-        const uint8_t *wav = s_play_wav;
-        size_t len = s_play_wav_len;
-        s_play_cancel = false;
-
-        if (wav && len > 0) {
-            i2s_audio_play_wav(wav, len);
+        if (xQueueReceive(s_play_queue, &item, portMAX_DELAY) != pdTRUE) {
+            continue;
         }
+        /* Fresh item — clear any residual cancel flag from the previous segment */
+        s_play_cancel  = false;
+        s_play_wav     = item.wav;
+        s_play_wav_len = item.len;
+        if (item.wav && item.len > 0) {
+            i2s_audio_play_wav(item.wav, item.len);
+        }
+        s_play_wav     = NULL;
+        s_play_wav_len = 0;
     }
 }
 
-esp_err_t i2s_audio_play_wav_async(const uint8_t *wav_data, size_t len)
+static esp_err_t i2s_play_ensure_task(void)
 {
-    if (!s_tx_handle) return ESP_ERR_INVALID_STATE;
-
+    if (!s_play_queue) {
+        s_play_queue = xQueueCreate(I2S_PLAY_QUEUE_DEPTH, sizeof(play_item_t));
+        if (!s_play_queue) {
+            ESP_LOGE(TAG, "Failed to create I2S play queue");
+            return ESP_ERR_NO_MEM;
+        }
+    }
     if (!s_play_task) {
         /* Stack in PSRAM: task only does I2S DMA writes (no flash/LittleFS/NVS).
          * 4KB was too tight — i2s_audio_play_wav() pushes past the canary. */
@@ -622,14 +640,40 @@ esp_err_t i2s_audio_play_wav_async(const uint8_t *wav_data, size_t len)
             return ESP_ERR_NO_MEM;
         }
     }
+    return ESP_OK;
+}
 
+esp_err_t i2s_audio_play_wav_async(const uint8_t *wav_data, size_t len)
+{
+    if (!s_tx_handle) return ESP_ERR_INVALID_STATE;
+    esp_err_t ierr = i2s_play_ensure_task();
+    if (ierr != ESP_OK) return ierr;
+
+    /* Cancel any in-flight playback AND drain the queue so the new WAV
+     * starts fresh (legacy "replace" semantics expected by non-voice callers). */
     s_play_cancel = true;
+    xQueueReset(s_play_queue);
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    s_play_wav     = wav_data;
-    s_play_wav_len = len;
-    xTaskNotifyGive(s_play_task);
+    play_item_t item = { .wav = wav_data, .len = len };
+    if (xQueueSend(s_play_queue, &item, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "play queue send failed");
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
 
+esp_err_t i2s_audio_enqueue_wav(const uint8_t *wav_data, size_t len)
+{
+    if (!s_tx_handle) return ESP_ERR_INVALID_STATE;
+    esp_err_t ierr = i2s_play_ensure_task();
+    if (ierr != ESP_OK) return ierr;
+
+    play_item_t item = { .wav = wav_data, .len = len };
+    if (xQueueSend(s_play_queue, &item, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "enqueue queue full");
+        return ESP_ERR_NO_MEM;
+    }
     return ESP_OK;
 }
 

@@ -62,6 +62,23 @@ esp_err_t i2s_audio_read(uint8_t *buf, size_t buf_size, size_t *bytes_read, uint
 esp_err_t i2s_audio_play_wav_async(const uint8_t *wav_data, size_t len);
 
 /**
+ * @brief Enqueue a WAV to play back-to-back after the currently playing item.
+ *
+ * Unlike i2s_audio_play_wav_async() (which cancels the current item and
+ * replaces the queue), this appends to the playback queue with no gap.
+ * Used by the voice pipeline to stream successive TTS segments: the first
+ * sentence plays via play_wav_async while the second sentence's TTS is
+ * still generating, then the second WAV is appended via this function.
+ *
+ * The WAV data must remain valid (in PSRAM cache) until playback completes.
+ *
+ * @param wav_data  Pointer to WAV file data (RIFF header + PCM payload).
+ * @param len       Total byte length of the WAV buffer.
+ * @return ESP_OK on success, ESP_ERR_NO_MEM if the queue is full.
+ */
+esp_err_t i2s_audio_enqueue_wav(const uint8_t *wav_data, size_t len);
+
+/**
  * @brief Stop any in-progress async playback.
  */
 void i2s_audio_stop(void);

@@ -40,6 +40,9 @@ static char s_local_model[LLM_MODEL_MAX_LEN] = {0};
  * Falls back to s_local_model when not set. */
 static char s_local_text_model[LLM_MODEL_MAX_LEN] = {0};
 
+/* Local provider type: "ollama" (native /api/chat) or "mlx" (OpenAI /v1/chat/completions) */
+static char s_local_provider[16] = "ollama";
+
 /* Voice-channel routing: when chat_id=="ptt", override to a fast cloud model
  * rather than local Ollama (which is too slow for real-time voice interaction).
  * Configured via SERVICES.md: voice_provider / voice_model under [Local Model]. */
@@ -220,11 +223,17 @@ static bool provider_is_apfel(void)
     return strcmp(effective_provider(), "apfel") == 0;
 }
 
+static bool provider_is_mlx(void)
+{
+    return strcmp(effective_provider(), "mlx") == 0;
+}
+
 /* Returns true for any provider that uses OpenAI-compatible message/tool format */
 static bool provider_uses_openai_format(void)
 {
     return provider_is_openai() || provider_is_openrouter()
-           || provider_is_ollama() || provider_is_apfel();
+           || provider_is_ollama() || provider_is_apfel()
+           || provider_is_mlx();
 }
 
 /* Returns true when the target is plain HTTP (no TLS) — e.g. local Ollama/Apfel */
@@ -235,6 +244,9 @@ static bool provider_is_plaintext(void)
     }
     if (provider_is_apfel() && s_apfel_url[0]) {
         return strncmp(s_apfel_url, "http://", 7) == 0;
+    }
+    if (provider_is_mlx() && s_local_url[0]) {
+        return strncmp(s_local_url, "http://", 7) == 0;
     }
     return false;
 }
@@ -259,6 +271,12 @@ static const char *llm_api_url(void)
         static char apfel_url_buf[LLM_LOCAL_URL_MAX + 32];
         snprintf(apfel_url_buf, sizeof(apfel_url_buf), "%s/chat/completions", s_apfel_url);
         return apfel_url_buf;
+    }
+    if (provider_is_mlx() && s_local_url[0]) {
+        /* mlx-lm: standard OpenAI /v1/chat/completions endpoint */
+        static char mlx_url_buf[LLM_LOCAL_URL_MAX + 32];
+        snprintf(mlx_url_buf, sizeof(mlx_url_buf), "%s/chat/completions", s_local_url);
+        return mlx_url_buf;
     }
     if (provider_is_ollama() && s_local_url[0]) {
         /* Ollama native /api/chat endpoint: supports think:false to disable
@@ -286,6 +304,9 @@ static const char *llm_api_host(void)
     if (provider_is_apfel() && s_apfel_url[0]) {
         return extract_host(s_apfel_url, host_buf, sizeof(host_buf));
     }
+    if (provider_is_mlx() && s_local_url[0]) {
+        return extract_host(s_local_url, host_buf, sizeof(host_buf));
+    }
     if (provider_is_ollama() && s_local_url[0]) {
         return extract_host(s_local_url, host_buf, sizeof(host_buf));
     }
@@ -297,6 +318,7 @@ static const char *llm_api_host(void)
 static const char *llm_api_path(void)
 {
     if (provider_is_apfel())      return "/v1/chat/completions";
+    if (provider_is_mlx())        return "/v1/chat/completions";
     if (provider_is_ollama())     return "/api/chat";
     if (provider_is_openrouter()) return "/api/v1/chat/completions";
     if (provider_is_openai())     return "/v1/chat/completions";
@@ -304,6 +326,45 @@ static const char *llm_api_path(void)
 }
 
 /* ── Init ─────────────────────────────────────────────────────── */
+
+/**
+ * Pre-warm the cloud endpoint so the first real request after a long idle
+ * does not pay the "connection reset by peer" retry penalty (observed
+ * ~1.5–2 s extra latency on heartbeats 30+ min apart).
+ *
+ * Strategy: fire a short HEAD against the current cloud URL with a fresh
+ * client (we do not want to disturb the persistent s_cloud_session mid-use).
+ * Status code is irrelevant — the goal is to make the TCP/TLS handshake
+ * happen *before* the heartbeat starts timing its round-trip.
+ *
+ * No-op when the effective provider is local (ollama/mlx/apfel) or when
+ * no URL is set. Safe to call from any task.
+ */
+void llm_proxy_preflight_cloud(void)
+{
+    if (provider_is_plaintext()) return;
+    const char *url = llm_api_url();
+    if (!url || !url[0]) return;
+
+    esp_http_client_config_t cfg = {
+        .url            = url,
+        .method         = HTTP_METHOD_HEAD,
+        .timeout_ms     = 4000,
+        .buffer_size    = 512,
+        .buffer_size_tx = 256,
+    };
+    esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    if (!c) return;
+
+    int64_t t0 = esp_timer_get_time();
+    esp_err_t err = esp_http_client_perform(c);
+    int status = esp_http_client_get_status_code(c);
+    int64_t ms = (esp_timer_get_time() - t0) / 1000;
+    esp_http_client_cleanup(c);
+
+    ESP_LOGI(TAG, "cloud preflight (%s): %lldms status=%d err=%s",
+             effective_provider(), ms, status, esp_err_to_name(err));
+}
 
 esp_err_t llm_proxy_init(void)
 {
@@ -348,7 +409,7 @@ esp_err_t llm_proxy_init(void)
     /* Pre-warm local Ollama model so the first request doesn't pay cold-load cost.
      * Runs in a background task (12s delay) to avoid blocking app_main startup. */
     if (s_local_url[0] && s_local_model[0]) {
-        ESP_LOGI(TAG, "Local LLM configured (%s) — scheduling Ollama warmup", s_local_model);
+        ESP_LOGI(TAG, "Local LLM configured (%s/%s) — scheduling warmup", s_local_provider, s_local_model);
         xTaskCreate(llm_warmup_task, "llm_warmup", 4 * 1024, NULL, 2, NULL);
     }
 
@@ -525,7 +586,22 @@ static cJSON *convert_messages_openai(const char *system_prompt, cJSON *messages
     if (system_prompt && system_prompt[0]) {
         cJSON *sys = cJSON_CreateObject();
         cJSON_AddStringToObject(sys, "role", "system");
-        cJSON_AddStringToObject(sys, "content", system_prompt);
+        /* mlx-lm with Qwen3: append /no_think to suppress reasoning tokens.
+         * Ollama uses think:false as a request param; mlx-lm needs it in the prompt. */
+        if (provider_is_mlx()) {
+            size_t slen = strlen(system_prompt);
+            char *sys_buf = malloc(slen + 16);
+            if (sys_buf) {
+                memcpy(sys_buf, system_prompt, slen);
+                memcpy(sys_buf + slen, " /no_think", 11);  /* includes NUL */
+                cJSON_AddStringToObject(sys, "content", sys_buf);
+                free(sys_buf);
+            } else {
+                cJSON_AddStringToObject(sys, "content", system_prompt);
+            }
+        } else {
+            cJSON_AddStringToObject(sys, "content", system_prompt);
+        }
         cJSON_AddItemToArray(out, sys);
     }
 
@@ -681,7 +757,7 @@ esp_err_t llm_chat_tools(const char *system_prompt,
 {
     memset(resp, 0, sizeof(*resp));
 
-    if (s_api_key[0] == '\0' && !provider_is_ollama() && !provider_is_apfel()) return ESP_ERR_INVALID_STATE;
+    if (s_api_key[0] == '\0' && !provider_is_ollama() && !provider_is_apfel() && !provider_is_mlx()) return ESP_ERR_INVALID_STATE;
 
     {
         char llm_info[96];
@@ -1125,6 +1201,12 @@ typedef struct {
     uint32_t    input_tokens;
     uint32_t    output_tokens;
 
+    /* OpenRouter includes total USD cost in the final usage chunk when
+     * stream_options.include_usage is set. Stored as USD (double) so we
+     * don't lose precision on sub-tenth-of-a-cent values, then promoted
+     * to millicents (x100_000) before accumulating into the session total. */
+    double      cost_usd;
+
     /* Anthropic block tracking */
     int         cur_block_index;
     char        cur_block_type[16];
@@ -1193,6 +1275,11 @@ static void sse_process_openai(sse_state_t *st, cJSON *root)
         cJSON *ct = cJSON_GetObjectItem(usage_top, "completion_tokens");
         if (pt && cJSON_IsNumber(pt)) st->input_tokens  = (uint32_t)pt->valueint;
         if (ct && cJSON_IsNumber(ct)) st->output_tokens = (uint32_t)ct->valueint;
+        /* OpenRouter includes generation cost in USD in the streaming usage chunk.
+         * Capture it here so llm_chat_tools_streaming() can promote to millicents
+         * and roll into the session total (mirrors the non-streaming path). */
+        cJSON *cost = cJSON_GetObjectItem(usage_top, "cost");
+        if (cost && cJSON_IsNumber(cost)) st->cost_usd = cost->valuedouble;
     }
 
     cJSON *choices = cJSON_GetObjectItem(root, "choices");
@@ -1596,7 +1683,7 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
     }
 
     memset(resp, 0, sizeof(*resp));
-    if (s_api_key[0] == '\0' && !provider_is_ollama() && !provider_is_apfel()) return ESP_ERR_INVALID_STATE;
+    if (s_api_key[0] == '\0' && !provider_is_ollama() && !provider_is_apfel() && !provider_is_mlx()) return ESP_ERR_INVALID_STATE;
 
     {
         char llm_info[96];
@@ -1639,6 +1726,15 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
         cJSON *sopts = cJSON_CreateObject();
         cJSON_AddBoolToObject(sopts, "include_usage", true);
         cJSON_AddItemToObject(body, "stream_options", sopts);
+
+        /* OpenRouter: also set the top-level "usage" object to opt in to
+         * cost reporting in streaming mode. Non-OpenRouter OpenAI-compat
+         * providers ignore unknown top-level fields. */
+        if (provider_is_openrouter()) {
+            cJSON *usage_opt = cJSON_CreateObject();
+            cJSON_AddBoolToObject(usage_opt, "include", true);
+            cJSON_AddItemToObject(body, "usage", usage_opt);
+        }
 
         cJSON *openai_msgs = convert_messages_openai(system_prompt, messages);
         cJSON_AddItemToObject(body, "messages", openai_msgs);
@@ -1792,6 +1888,11 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
         ws_server_broadcast_monitor("llm", szlog);
     }
 
+    /* Capture streaming cost (OpenRouter only) before freeing the SSE state.
+     * The non-streaming branch updates s_total_cost_millicents at line 1008;
+     * streaming previously left it at 0 despite accumulating token counts. */
+    double cost_usd = st->cost_usd;
+
     /* Convert accumulated SSE state to structured response */
     err = sse_state_to_response(st, resp);
     sse_state_free(st);
@@ -1801,6 +1902,9 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
     /* Update session stats */
     s_total_input_tokens  += resp->input_tokens;
     s_total_output_tokens += resp->output_tokens;
+    if (cost_usd > 0.0) {
+        s_total_cost_millicents += (uint32_t)(cost_usd * 100000.0 + 0.5);
+    }
 
     {
         char summary[96];
@@ -1932,6 +2036,20 @@ void llm_set_local_text_model(const char *model)
 const char *llm_get_local_text_model(void)
 {
     return (s_local_text_model[0]) ? s_local_text_model : s_local_model;
+}
+
+void llm_set_local_provider(const char *provider)
+{
+    if (provider && provider[0]) {
+        strncpy(s_local_provider, provider, sizeof(s_local_provider) - 1);
+        s_local_provider[sizeof(s_local_provider) - 1] = '\0';
+        ESP_LOGI(TAG, "Local provider set to: %s", s_local_provider);
+    }
+}
+
+const char *llm_get_local_provider(void)
+{
+    return s_local_provider;
 }
 
 bool llm_local_health_check(void)
@@ -2086,11 +2204,14 @@ static void llm_warmup_task(void *arg)
         return;
     }
 
-    ESP_LOGI(TAG, "Ollama warmup: loading %s...", s_local_model);
+    ESP_LOGI(TAG, "LLM warmup (%s): loading %s...", s_local_provider, s_local_model);
 
-    /* Build minimal chat request — Ollama native /api/chat, think:false, stream:false */
+    /* Build request URL — Ollama native or OpenAI-compatible depending on local_provider */
     char url[LLM_LOCAL_URL_MAX + 32];
-    {
+    bool is_mlx = (strcmp(s_local_provider, "mlx") == 0);
+    if (is_mlx) {
+        snprintf(url, sizeof(url), "%s/chat/completions", s_local_url);
+    } else {
         char base[LLM_LOCAL_URL_MAX];
         strncpy(base, s_local_url, sizeof(base) - 1);
         base[sizeof(base) - 1] = '\0';
@@ -2100,11 +2221,19 @@ static void llm_warmup_task(void *arg)
     }
 
     char body[384];
-    snprintf(body, sizeof(body),
-             "{\"model\":\"%s\","
-             "\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],"
-             "\"think\":false,\"stream\":false}",
-             s_local_model);
+    if (is_mlx) {
+        snprintf(body, sizeof(body),
+                 "{\"model\":\"%s\","
+                 "\"messages\":[{\"role\":\"user\",\"content\":\"ping /no_think\"}],"
+                 "\"max_tokens\":10,\"stream\":false}",
+                 s_local_model);
+    } else {
+        snprintf(body, sizeof(body),
+                 "{\"model\":\"%s\","
+                 "\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],"
+                 "\"think\":false,\"stream\":false}",
+                 s_local_model);
+    }
 
     /* No response buffer needed — we only care about HTTP status code */
     esp_http_client_config_t cfg = {
@@ -2125,12 +2254,12 @@ static void llm_warmup_task(void *arg)
     esp_http_client_cleanup(client);
 
     if (ret == ESP_OK && status == 200) {
-        ESP_LOGI(TAG, "Ollama warmup done in %lldms — model ready", elapsed_ms);
+        ESP_LOGI(TAG, "LLM warmup done in %lldms — %s ready", elapsed_ms, s_local_provider);
         /* Prime health cache so first agent turn skips the health check */
         s_local_online   = true;
         s_local_check_us = esp_timer_get_time();
     } else {
-        ESP_LOGW(TAG, "Ollama warmup failed in %lldms (err=%s HTTP %d) — will retry on first request",
+        ESP_LOGW(TAG, "LLM warmup failed in %lldms (err=%s HTTP %d) — will retry on first request",
                  elapsed_ms, esp_err_to_name(ret), status);
     }
 

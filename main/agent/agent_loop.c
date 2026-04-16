@@ -147,6 +147,40 @@ static void ws_stream_progress(const char *text, size_t len, void *ctx)
     ws_server_broadcast_monitor("llm", delta);
 }
 
+/**
+ * Find the end index of the first sentence in `text`, suitable for splitting
+ * TTS generation across two segments. Segment A (0..return) is sent to TTS
+ * first so playback starts while the rest of the message is still synthesizing.
+ *
+ * Constraints:
+ *   - sentence terminator (. ! ? \n\n) must appear between [min_chars, max_chars]
+ *   - at least `min_tail` chars must remain after the split (otherwise not worth it)
+ *
+ * Returns 0 when no suitable boundary is found — caller should fall back to
+ * the single-shot TTS path.
+ */
+static size_t find_first_sentence_end(const char *text, size_t min_chars,
+                                       size_t max_chars, size_t min_tail)
+{
+    if (!text) return 0;
+    size_t len = strlen(text);
+    if (len < min_chars + min_tail) return 0;
+    size_t scan_end = (len > min_tail) ? (len - min_tail) : 0;
+    if (scan_end > max_chars) scan_end = max_chars;
+    for (size_t i = min_chars; i < scan_end; i++) {
+        char c = text[i];
+        char nxt = text[i + 1];
+        if ((c == '.' || c == '!' || c == '?') &&
+            (nxt == ' ' || nxt == '\n' || nxt == '\t' || nxt == '\0')) {
+            return i + 1;
+        }
+        if (c == '\n' && nxt == '\n') {
+            return i;
+        }
+    }
+    return 0;
+}
+
 static cJSON *build_assistant_content(const llm_response_t *resp)
 {
     cJSON *content = cJSON_CreateArray();
@@ -764,11 +798,11 @@ static void agent_loop_task(void *arg)
                     ws_server_broadcast_monitor("llm", route_msg);
                 }
             } else if (llm_local_health_check()) {
-                /* Ollama: full tool support, larger context */
+                /* Local LLM (Ollama or mlx-lm): full tool support, larger context */
                 const char *local_model = turn_has_image
                     ? llm_get_local_model()
                     : llm_get_local_text_model();
-                llm_set_request_override("ollama", local_model);
+                llm_set_request_override(llm_get_local_provider(), local_model);
                 using_local = true;
                 if (is_voice) llm_set_voice_max_tokens(400);
                 {
@@ -874,12 +908,12 @@ static void agent_loop_task(void *arg)
 
             /* Apfel fallback: if Apfel failed, try Ollama with full context */
             if (err != ESP_OK && using_apfel) {
-                ESP_LOGW(TAG, "Apfel failed (%s), trying Ollama", esp_err_to_name(err));
-                ws_server_broadcast_monitor("llm", "apfel failed — trying local Ollama");
+                ESP_LOGW(TAG, "Apfel failed (%s), trying local LLM", esp_err_to_name(err));
+                ws_server_broadcast_monitor("llm", "apfel failed — trying local LLM");
                 using_apfel = false;
                 if (llm_local_health_check()) {
                     const char *local_model = llm_get_local_text_model();
-                    llm_set_request_override("ollama", local_model);
+                    llm_set_request_override(llm_get_local_provider(), local_model);
                     using_local = true;
                     /* Rebuild full context for Ollama (Apfel had minimal) */
                     context_build_system_prompt(system_prompt, LANG_CONTEXT_BUF_SIZE);
@@ -911,7 +945,7 @@ static void agent_loop_task(void *arg)
                              esp_err_to_name(err), primary);
                     ws_server_broadcast_monitor("llm", "text model failed — trying primary local");
                     oled_display_set_message(primary);
-                    llm_set_request_override("ollama", primary);
+                    llm_set_request_override(llm_get_local_provider(), primary);
                     retry_done = false;
                     err = llm_chat_tools_streaming(system_prompt, messages, tools_json,
                                                    force_this_iter,
@@ -971,6 +1005,24 @@ static void agent_loop_task(void *arg)
                 snprintf(rl, sizeof(rl), "%d/%d req/hr",
                          agent_get_rate_count(), agent_get_rate_limit());
                 oled_display_set_rotate_line(3, rl);
+            }
+
+            /* Heartbeat bloat warning — the ReAct loop accumulates tool results
+             * in messages[], so a multi-step heartbeat can balloon from ~5 KB to
+             * 30+ KB across iterations. This warning makes the pathology visible
+             * without changing routing logic (Pico Phase A will do real trimming). */
+            if (strcmp(msg.channel, LANG_CHAN_SYSTEM) == 0 &&
+                strcmp(msg.chat_id, "heartbeat") == 0 &&
+                ((iteration + 1) >= LANG_HEARTBEAT_WARN_ITERS ||
+                 resp.input_tokens >= LANG_HEARTBEAT_WARN_INPUT_TOK)) {
+                char wmsg[96];
+                snprintf(wmsg, sizeof(wmsg),
+                         "heartbeat bloat: iter %d/%d, %lu in-tokens this call",
+                         iteration + 1, LANG_AGENT_MAX_TOOL_ITER,
+                         (unsigned long)resp.input_tokens);
+                ESP_LOGW(TAG, "%s", wmsg);
+                ws_server_broadcast_monitor("warn", wmsg);
+                oled_display_set_rotate_line(1, "ctx bloat hb");
             }
 
             if (!resp.tool_use) {
@@ -1158,7 +1210,7 @@ static void agent_loop_task(void *arg)
                                     cJSON_AddStringToObject(msg_item, "content", sum_prompt);
 
                                     agent_set_phase("llm:summariser");
-                                    llm_set_request_override("ollama", llm_get_local_text_model());
+                                    llm_set_request_override(llm_get_local_provider(), llm_get_local_text_model());
                                     llm_response_t sum_resp;
                                     memset(&sum_resp, 0, sizeof(sum_resp));
                                     esp_err_t sum_err = llm_chat_tools(
@@ -1230,21 +1282,17 @@ static void agent_loop_task(void *arg)
                 } else {
                     final_text = NULL;
                 }
-            } else {
-                /* WebSocket: generate TTS and send */
+            } else if (is_voice) {
+                /* Voice interaction (wake word / PTT): generate TTS + play on speaker */
                 led_indicator_set(LED_SPEAKING);
                 ws_server_send_status(msg.chat_id, "tts_generating");
                 char tts_id[9] = {0};
-                /* Limit TTS input to keep WAV download manageable for browsers.
-                 * Truncate at the last sentence boundary (. ! ?) within the limit.
-                 * Full text is still sent to the browser for display. */
                 #define TTS_MAX_CHARS 1500
                 char tts_buf[TTS_MAX_CHARS + 1];
                 const char *tts_text = (auto_emailed && tts_summary) ? tts_summary : final_text;
-                if (strlen(final_text) > TTS_MAX_CHARS) {
-                    strncpy(tts_buf, final_text, TTS_MAX_CHARS);
+                if (strlen(tts_text) > TTS_MAX_CHARS) {
+                    strncpy(tts_buf, tts_text, TTS_MAX_CHARS);
                     tts_buf[TTS_MAX_CHARS] = '\0';
-                    /* Walk back to last sentence-ending punctuation */
                     int cut = TTS_MAX_CHARS - 1;
                     while (cut > 40) {
                         char c = tts_buf[cut];
@@ -1254,9 +1302,7 @@ static void agent_loop_task(void *arg)
                     tts_buf[cut] = '\0';
                     tts_text = tts_buf;
                 }
-                /* Strip emoji / non-ASCII symbols that TTS engines can't pronounce.
-                 * UTF-8 4-byte sequences (0xF0...) cover U+10000+ (emoji, symbols).
-                 * Also strip common 3-byte dingbats (U+2600-U+27BF, U+2B50, etc). */
+                /* Strip emoji / non-ASCII symbols that TTS engines can't pronounce */
                 {
                     char *cleaned = tts_buf;
                     if (tts_text != tts_buf) {
@@ -1268,12 +1314,10 @@ static void agent_loop_task(void *arg)
                     while (*src) {
                         unsigned char c = (unsigned char)*src;
                         if (c >= 0xF0) {
-                            /* Skip 4-byte UTF-8 sequence (emoji) */
                             int skip = 4;
                             while (skip > 1 && src[1] && ((unsigned char)src[1] & 0xC0) == 0x80) { src++; skip--; }
                             src++;
                         } else if (c == 0xE2 && src[1] && src[2] && (unsigned char)src[1] >= 0x98) {
-                            /* Skip 3-byte dingbats/symbols (U+2600+) */
                             src += 3;
                         } else {
                             *dst++ = *src++;
@@ -1282,34 +1326,94 @@ static void agent_loop_task(void *arg)
                     *dst = '\0';
                     tts_text = cleaned;
                 }
-                /* Push response preview to OLED display */
                 oled_display_set_message(tts_text ? tts_text : final_text);
 
-                /* Only include image URL if a capture actually succeeded */
-                const char *img_url = NULL;
-                if (capture_image_called) {
-                    struct stat img_st;
-                    if (stat(LANG_CAMERA_CAPTURE_PATH, &img_st) == 0 && img_st.st_size > 0) {
-                        img_url = "/camera/latest.jpg";
+                /* Send text to browser immediately */
+                if (strcmp(msg.channel, "websocket") == 0) {
+                    ws_server_send_with_tts(msg.chat_id, final_text, NULL, NULL);
+                }
+
+                agent_set_phase("tts");
+
+                /* First-sentence TTS split: if the response has a clean sentence
+                 * boundary in [40, 220] chars with ≥20 chars remaining, generate
+                 * the first sentence alone and start playback immediately, then
+                 * generate the remainder while segment A is already playing.
+                 * Savings ≈ duration of segment B's TTS call (~300-800ms).
+                 * Gate on I2S playback path — WS/Telegram-only voice would need
+                 * two tts_id events which the browser UI doesn't handle yet. */
+                size_t split_at = 0;
+#if LANG_I2S_AUDIO_ENABLED
+                split_at = find_first_sentence_end(tts_text, 40, 220, 20);
+#endif
+                esp_err_t tts_err = ESP_FAIL;
+                char tts_id_b[9] = {0};
+
+                if (split_at > 0) {
+                    /* Two-segment path */
+                    char seg_a[240];
+                    size_t a_len = (split_at < sizeof(seg_a)) ? split_at
+                                                               : sizeof(seg_a) - 1;
+                    memcpy(seg_a, tts_text, a_len);
+                    seg_a[a_len] = '\0';
+                    const char *seg_b = tts_text + split_at;
+                    while (*seg_b == ' ' || *seg_b == '\n' || *seg_b == '\t') seg_b++;
+
+                    ESP_LOGI(TAG, "TTS split: A=%u chars, B=%u chars",
+                             (unsigned)a_len, (unsigned)strlen(seg_b));
+
+                    tts_err = tts_generate(seg_a, tts_id);
+
+                    /* Kick off segment A playback immediately (async, on queue) */
+                    if (tts_err == ESP_OK && tts_id[0]) {
+#if LANG_I2S_AUDIO_ENABLED
+                        const uint8_t *wav_a = NULL;
+                        size_t wav_a_len = 0;
+                        if (tts_cache_get(tts_id, &wav_a, &wav_a_len) == ESP_OK) {
+                            ESP_LOGI(TAG, "Playing TTS seg A via I2S (%u bytes, async)",
+                                     (unsigned)wav_a_len);
+                            i2s_audio_play_wav_async(wav_a, wav_a_len);
+                        }
+#endif
+                        /* Generate segment B while A is already playing */
+                        esp_err_t tts_err_b = tts_generate(seg_b, tts_id_b);
+                        if (tts_err_b == ESP_OK && tts_id_b[0]) {
+#if LANG_I2S_AUDIO_ENABLED
+                            const uint8_t *wav_b = NULL;
+                            size_t wav_b_len = 0;
+                            if (tts_cache_get(tts_id_b, &wav_b, &wav_b_len) == ESP_OK) {
+                                ESP_LOGI(TAG, "Enqueue TTS seg B (%u bytes)",
+                                         (unsigned)wav_b_len);
+                                i2s_audio_enqueue_wav(wav_b, wav_b_len);
+                            }
+#endif
+                        } else {
+                            ESP_LOGW(TAG, "TTS seg B failed: %s — seg A still plays",
+                                     esp_err_to_name(tts_err_b));
+                        }
+                    }
+                } else {
+                    /* Single-shot path (response too short or no clean boundary) */
+                    tts_err = tts_generate(tts_text, tts_id);
+
+                    if (tts_err == ESP_OK && tts_id[0]) {
+#if LANG_I2S_AUDIO_ENABLED
+                        const uint8_t *wav_buf = NULL;
+                        size_t wav_len = 0;
+                        if (tts_cache_get(tts_id, &wav_buf, &wav_len) == ESP_OK) {
+                            ESP_LOGI(TAG, "Playing TTS via I2S speaker (%u bytes, async)",
+                                     (unsigned)wav_len);
+                            i2s_audio_play_wav_async(wav_buf, wav_len);
+                        }
+#endif
                     }
                 }
 
-                /* Send text to browser IMMEDIATELY — don't block on TTS.
-                 * This prevents the browser from timing out while TTS
-                 * generates (local Kokoro can take 5-40s). */
-                if (strcmp(msg.channel, "websocket") == 0) {
-                    ws_server_send_with_tts(msg.chat_id, final_text, NULL, img_url);
-                    ESP_LOGI(TAG, "Sent text to browser (TTS pending)");
-                }
-
-                /* Generate TTS (may take seconds for local Kokoro) */
-                agent_set_phase("tts");
-                esp_err_t tts_err = tts_generate(tts_text, tts_id);
-
                 if (tts_err == ESP_OK && tts_id[0]) {
-                    /* Send tts_id as a follow-up so browser can fetch audio.
-                     * For non-WS channels (Telegram), send the combined message. */
                     if (strcmp(msg.channel, "websocket") == 0) {
+                        /* Browser gets segment-A's tts_id for the play button.
+                         * Segment B plays on-device via I2S queue; browser doesn't
+                         * hear it unless they're also listening through the device. */
                         ws_server_send_with_tts(msg.chat_id, NULL, tts_id, NULL);
                     } else {
                         lang_msg_t out = {0};
@@ -1322,30 +1426,40 @@ static void agent_loop_task(void *arg)
                             final_text = NULL;
                         }
                     }
-
-#if LANG_I2S_AUDIO_ENABLED
-                    /* Play TTS audio through the MAX98357A speaker only for
-                     * voice interactions (wake word / PTT, chat_id="ptt").
-                     * WebSocket text queries stay text-only (say tool handles
-                     * its own playback independently). Skip system channel
-                     * entirely — amp current causes brownout resets. */
-                    if (is_voice) {
-                        const uint8_t *wav_buf = NULL;
-                        size_t wav_len = 0;
-                        if (tts_cache_get(tts_id, &wav_buf, &wav_len) == ESP_OK) {
-                            ESP_LOGI(TAG, "Playing TTS via I2S speaker (%u bytes, async)", (unsigned)wav_len);
-                            i2s_audio_play_wav_async(wav_buf, wav_len);
-                        }
-                    }
-#endif
                 } else if (strcmp(msg.channel, "websocket") != 0) {
-                    /* Non-WS, no TTS — send via outbound queue (Telegram etc.) */
+                    /* Non-WS voice, TTS failed — send via outbound queue (Telegram etc.) */
                     lang_msg_t out = {0};
                     strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
                     strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
                     out.content = final_text;
                     if (message_bus_push_outbound(&out) != ESP_OK) {
                         ESP_LOGW(TAG, "Outbound queue full, drop final response");
+                        free(final_text);
+                    } else {
+                        final_text = NULL;
+                    }
+                }
+            } else {
+                /* Text WebSocket / Telegram: no TTS, just deliver text */
+                oled_display_set_message(final_text);
+
+                const char *img_url = NULL;
+                if (capture_image_called) {
+                    struct stat img_st;
+                    if (stat(LANG_CAMERA_CAPTURE_PATH, &img_st) == 0 && img_st.st_size > 0) {
+                        img_url = "/camera/latest.jpg";
+                    }
+                }
+
+                if (strcmp(msg.channel, "websocket") == 0) {
+                    ESP_LOGI(TAG, "Text channel — sending text only (no TTS)");
+                    ws_server_send_with_tts(msg.chat_id, final_text, NULL, img_url);
+                } else {
+                    lang_msg_t out = {0};
+                    strncpy(out.channel, msg.channel, sizeof(out.channel) - 1);
+                    strncpy(out.chat_id, msg.chat_id, sizeof(out.chat_id) - 1);
+                    out.content = final_text;
+                    if (message_bus_push_outbound(&out) != ESP_OK) {
                         free(final_text);
                     } else {
                         final_text = NULL;

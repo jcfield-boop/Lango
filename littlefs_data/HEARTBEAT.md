@@ -49,7 +49,7 @@ Good morning James.
 
 Keep total under 400 words. Use James's first name once. No markdown headers in the email body itself — use the emoji-prefix section labels shown above. Do NOT include generic world news; James reads London Times and NY Times himself. The briefing must feel like it was written by someone who knows James's actual job and interests.
 
-- [daily 22:00] Nightly soak summary. Call system_info. Read /lfs/memory/soak.md. Use `telegram_send_message` (NOT say): "🌙 Nightly check: uptime [X]h, heap [X]KB (day min: [X]KB), [X] heartbeats logged today. [Any concerns or all-clear]." Then truncate soak.md to last 48 entries using edit_file (replace full content with just the last 48 lines) to prevent unbounded growth.
+- [daily 22:00] Nightly soak summary. Call system_info. Read /lfs/memory/soak.md. Use `telegram_send_message` (NOT say): "🌙 Nightly check: uptime [X]h, heap [X]KB (day min: [X]KB), [X] heartbeats logged today. [Any concerns or all-clear]." (No need to truncate soak.md — firmware caps it at 96 lines automatically on every append.)
 
 - [daily 06:03] ARM pre-market data fetch. Call web_search with query "ARM Holdings ARMH stock price pre-market today". Extract: current/pre-market price, change % vs previous close, and any significant news headline from the last 24 hours. Write result to /lfs/memory/arm_stock_today.md (overwrite). No email or Telegram — this is a data feed consumed by the 06:05 morning briefing. Keep the file under 200 words.
 

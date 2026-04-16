@@ -24,6 +24,12 @@ typedef struct {
     int64_t last_run;      /* Last run epoch */
     int64_t next_run;      /* Next run epoch */
     bool delete_after_run; /* Remove job after firing (for AT jobs) */
+    /* Optional day-of-week constraint (kind=EVERY only). Bitmask with
+     * bit 0 = Sunday ... bit 6 = Saturday (matches struct tm::tm_wday).
+     * 0 = any day. When non-zero, after advancing next_run by interval_s
+     * we roll forward by 86400 until tm_wday matches. This makes weekly
+     * jobs self-correct after a skipped fire (reboot, busy agent, etc.). */
+    uint8_t dow_mask;
 } cron_job_t;
 
 /**

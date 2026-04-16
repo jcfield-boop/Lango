@@ -823,6 +823,51 @@ static esp_err_t file_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── GET / DELETE /api/crashlog ───────────────────────────────── */
+/* Convenience endpoints for the crashlog file written by log_crash_if_needed()
+ * in main/langoustine.c on abnormal reset (panic/wdt/brownout). GET returns
+ * raw markdown (same as /api/file?name=crashlog) but with no-store caching
+ * and a friendly empty response. DELETE truncates the file to empty. */
+
+static esp_err_t crashlog_get_handler(httpd_req_t *req)
+{
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    apply_cors(req);
+
+    FILE *f = fopen("/lfs/memory/crashlog.md", "r");
+    if (!f) {
+        httpd_resp_sendstr(req, "");
+        return ESP_OK;
+    }
+
+    char buf[512];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        if (httpd_resp_send_chunk(req, buf, (ssize_t)n) != ESP_OK) break;
+    }
+    fclose(f);
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
+static esp_err_t crashlog_delete_handler(httpd_req_t *req)
+{
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
+    /* Truncate by opening in write mode with no content. If the file doesn't
+     * exist this still succeeds (returns "cleared" semantics). */
+    FILE *f = fopen("/lfs/memory/crashlog.md", "w");
+    if (f) fclose(f);
+
+    httpd_resp_set_type(req, "application/json");
+    apply_cors(req);
+    httpd_resp_sendstr(req, "{\"ok\":true,\"cleared\":true}");
+    return ESP_OK;
+}
+
 /* ── POST /api/file ──────────────────────────────────────────── */
 
 static esp_err_t file_post_handler(httpd_req_t *req)
@@ -2037,6 +2082,12 @@ esp_err_t ws_server_start(void)
     httpd_register_uri_handler(s_server, &file_get_uri);
     httpd_uri_t file_post_uri = { .uri = "/api/file", .method = HTTP_POST, .handler = file_post_handler };
     httpd_register_uri_handler(s_server, &file_post_uri);
+
+    /* Crashlog (dedicated endpoint; also reachable via /api/file?name=crashlog) */
+    httpd_uri_t crashlog_get_uri  = { .uri = "/api/crashlog", .method = HTTP_GET,    .handler = crashlog_get_handler };
+    httpd_register_uri_handler(s_server, &crashlog_get_uri);
+    httpd_uri_t crashlog_del_uri  = { .uri = "/api/crashlog", .method = HTTP_DELETE, .handler = crashlog_delete_handler };
+    httpd_register_uri_handler(s_server, &crashlog_del_uri);
 
     /* Reboot */
     httpd_uri_t reboot_uri = { .uri = "/api/reboot", .method = HTTP_POST, .handler = reboot_handler };
