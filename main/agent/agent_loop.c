@@ -1042,9 +1042,15 @@ static void agent_loop_task(void *arg)
                 }
                 /* Recovery: retry once if truncated OR if tools ran but LLM
                  * returned 0 bytes of final text (stop=end_turn with no content
-                 * after multi-iteration tool use — common with daily briefing). */
+                 * after multi-iteration tool use — common with daily briefing).
+                 *
+                 * Threshold: iteration > 2 (≥ 3 tool-call rounds before empty response).
+                 * Simple 2-step tasks (heartbeat: system_info + write_file) legitimately
+                 * end with no text and must NOT trigger recovery — that would restart
+                 * the task from scratch. Complex tasks (briefing, email) have 3+ tool
+                 * rounds and still benefit from the recovery injection. */
                 bool do_recovery = !recovery_tried &&
-                                   (resp.truncated || iteration > 0);
+                                   (resp.truncated || iteration > 2);
                 llm_response_free(&resp);
                 if (do_recovery) {
                     recovery_tried = true;
