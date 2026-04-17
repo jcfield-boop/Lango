@@ -217,7 +217,11 @@ static bool heartbeat_send(void)
     bool has_oneshots = false;
 
     off += snprintf(prompt + off, HB_PROMPT_SIZE - off,
-                    "Heartbeat check (%02d:%02d). Execute these tasks:\n\n",
+                    "AUTONOMOUS MAINTENANCE MODE (%02d:%02d). "
+                    "Execute ONLY the numbered tasks below. "
+                    "Do NOT add extra tool calls (no weather, no memory_write, "
+                    "no device_temp, no send_notification) unless the task "
+                    "text explicitly requires it. Tasks:\n\n",
                     now.tm_hour, now.tm_min);
 
     for (int i = 0; i < n; i++) {
