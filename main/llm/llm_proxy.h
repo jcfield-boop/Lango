@@ -132,6 +132,15 @@ bool llm_voice_routing_available(void);
 const char *llm_get_voice_provider(void);
 const char *llm_get_voice_model(void);
 
+/** Set/get the model used for system-channel (heartbeat/cron) requests.
+ *  Defaults to openai/gpt-4o-mini via openrouter — a proven model (same as voice_model)
+ *  that does not content-refuse operational tasks. Configurable via
+ *  SERVICES.md: system_provider / system_model under ## Local Model. */
+void llm_set_system_provider(const char *provider);
+void llm_set_system_model(const char *model);
+const char *llm_get_system_provider(void);
+const char *llm_get_system_model(void);
+
 /** Set/clear a reduced max_tokens for voice-channel requests (e.g. 400).
  *  When > 0, overrides LANG_LLM_MAX_TOKENS for the current request. */
 void llm_set_voice_max_tokens(int n);

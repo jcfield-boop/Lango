@@ -131,6 +131,14 @@ esp_err_t services_config_load(void)
                 llm_set_local_provider(val);
                 ESP_LOGI(TAG, "Local provider: %s", val);
                 keys_applied++;
+            } else if (strcmp(key, "system_provider") == 0) {
+                llm_set_system_provider(val);
+                ESP_LOGI(TAG, "System channel provider: %s", val);
+                keys_applied++;
+            } else if (strcmp(key, "system_model") == 0) {
+                llm_set_system_model(val);
+                ESP_LOGI(TAG, "System channel model: %s", val);
+                keys_applied++;
             }
 
         /* ── Speech-to-Text section ──────────────────────────── */
@@ -272,6 +280,8 @@ esp_err_t services_config_reload(void)
             else if (strcmp(key, "voice_provider") == 0)   { llm_set_voice_provider(val);   keys_applied++; }
             else if (strcmp(key, "voice_model") == 0)      { llm_set_voice_model(val);      keys_applied++; }
             else if (strcmp(key, "local_provider") == 0)   { llm_set_local_provider(val);   keys_applied++; }
+            else if (strcmp(key, "system_provider") == 0)  { llm_set_system_provider(val);  keys_applied++; }
+            else if (strcmp(key, "system_model") == 0)     { llm_set_system_model(val);     keys_applied++; }
 
         /* ── STT ─────────────────────────────────────────────── */
         } else if (strstr(section, "speech-to-text") || strstr(section, "stt")) {

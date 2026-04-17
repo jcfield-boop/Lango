@@ -49,6 +49,13 @@ static char s_local_provider[16] = "ollama";
 static char s_voice_provider[16] = {0};
 static char s_voice_model[LLM_MODEL_MAX_LEN] = {0};
 
+/* System-channel routing: heartbeat/cron tasks always use cloud, but openrouter/auto
+ * occasionally routes to content-restricted models that refuse system_info tasks.
+ * Pin to a known-reliable model. Configured via SERVICES.md: system_provider / system_model.
+ * Default: openai/gpt-4o-mini — proven to work (also the voice model), no content filtering. */
+static char s_system_provider[16]          = "openrouter";
+static char s_system_model[LLM_MODEL_MAX_LEN] = "openai/gpt-4o-mini";
+
 /* Per-request override (single agent task, no concurrency) */
 static char s_override_provider[16] = {0};
 static char s_override_model[LLM_MODEL_MAX_LEN] = {0};
@@ -2186,6 +2193,21 @@ bool llm_voice_routing_available(void)
 
 const char *llm_get_voice_provider(void) { return s_voice_provider; }
 const char *llm_get_voice_model(void)    { return s_voice_model; }
+
+/* ── System-channel routing ─────────────────────────────────────── */
+
+void llm_set_system_provider(const char *p)
+{
+    if (p && p[0]) safe_copy(s_system_provider, sizeof(s_system_provider), p);
+}
+
+void llm_set_system_model(const char *m)
+{
+    if (m && m[0]) safe_copy(s_system_model, sizeof(s_system_model), m);
+}
+
+const char *llm_get_system_provider(void) { return s_system_provider; }
+const char *llm_get_system_model(void)    { return s_system_model; }
 
 void llm_set_voice_max_tokens(int n) { s_voice_max_tokens = n; }
 int  llm_get_voice_max_tokens(void)  { return s_voice_max_tokens; }

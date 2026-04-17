@@ -44,13 +44,13 @@ static const char *TAG = "heartbeat";
 /* ── Task types and parsing ─────────────────────────────────── */
 
 #define MAX_HB_TASKS     12
-#define HB_TEXT_LEN      384
-#define HB_PROMPT_SIZE   2048
+#define HB_TEXT_LEN      1500  /* raised from 384 — long daily tasks no longer truncated */
+#define HB_PROMPT_SIZE   8192  /* raised from 2048 — fits all due tasks without truncation */
 #define HB_TASK_STACK    4096   /* PSRAM — LittleFS I/O is safe with XIP enabled */
 
 typedef enum {
     HB_INTERVAL,    /* [30m]  — every heartbeat cycle */
-    HB_DAILY,       /* [daily HH:MM] — once per day at target time */
+    HB_DAILY,       /* [daily [DOW] HH:MM] — once per day at target time */
     HB_ONESHOT,     /* [ ] — one-shot pending */
     HB_DONE,        /* [x] — completed one-shot (skip) */
 } hb_type_t;
@@ -59,6 +59,7 @@ typedef struct {
     hb_type_t type;
     uint8_t   hour;       /* daily tasks only */
     uint8_t   minute;     /* daily tasks only */
+    uint8_t   dow_mask;   /* bitmask: bit 0=Sun … bit 6=Sat; 0x7F=any day */
     char      text[HB_TEXT_LEN];
 } hb_task_t;
 
@@ -83,6 +84,11 @@ static bool daily_is_due(const hb_task_t *task, const struct tm *now, int daily_
 {
     if (daily_idx < 0 || daily_idx >= MAX_DAILY_TASKS) return false;
     if (s_daily_fired[daily_idx]) return false;
+
+    /* Day-of-week gate: 0x7F = any day */
+    if (task->dow_mask && task->dow_mask != 0x7F) {
+        if (!(task->dow_mask & (1 << now->tm_wday))) return false;
+    }
 
     int now_mins    = now->tm_hour * 60 + now->tm_min;
     int target_mins = task->hour * 60 + task->minute;
@@ -129,11 +135,23 @@ static int parse_tasks(hb_task_t *tasks, int max)
             p += 4;
         } else if (strncmp(p, "daily ", 6) == 0) {
             p += 6;
+            /* Optional day-of-week prefix: Mon Tue Wed Thu Fri Sat Sun */
+            static const char *s_dow_names[] =
+                {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+            uint8_t dow = 0x7F; /* default: any day */
+            for (int d = 0; d < 7; d++) {
+                if (strncasecmp(p, s_dow_names[d], 3) == 0 && p[3] == ' ') {
+                    dow = (uint8_t)(1u << d);
+                    p += 4; /* skip "Mon " */
+                    break;
+                }
+            }
             int h = 0, m = 0;
             if (sscanf(p, "%d:%d]", &h, &m) == 2 && h >= 0 && h <= 23 && m >= 0 && m <= 59) {
-                t->type   = HB_DAILY;
-                t->hour   = (uint8_t)h;
-                t->minute = (uint8_t)m;
+                t->type     = HB_DAILY;
+                t->hour     = (uint8_t)h;
+                t->minute   = (uint8_t)m;
+                t->dow_mask = dow;
                 while (*p && *p != ']') p++;
                 if (*p == ']') p++;
             } else {

@@ -703,8 +703,12 @@ static void agent_loop_task(void *arg)
         bool is_voice           = (strcmp(msg.chat_id, "ptt") == 0);
 
         if (strcmp(msg.channel, LANG_CHAN_SYSTEM) == 0) {
-            /* System/heartbeat/cron → always cloud (complex multi-tool chains) */
-            ESP_LOGI(TAG, "Smart routing: system channel → cloud");
+            /* System/heartbeat/cron → always cloud, pinned to a known-reliable model.
+             * openrouter/auto occasionally routes to content-restricted models that
+             * refuse system_info tasks. system_model defaults to claude-3-5-haiku. */
+            llm_set_request_override(llm_get_system_provider(), llm_get_system_model());
+            ESP_LOGI(TAG, "Smart routing: system channel → %s/%s",
+                     llm_get_system_provider(), llm_get_system_model());
             ws_server_broadcast_monitor("llm", "routing: cloud (system)");
         } else if (is_voice || llm_smart_routing_available()) {
             /* Both voice and text: Apfel → Ollama → cloud hierarchy.
