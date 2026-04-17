@@ -3,9 +3,7 @@
 Markers: `[30m]` = every cycle, `[daily HH:MM]` = once/day (Pacific time), `[daily DOW HH:MM]` = specific weekday, `[ ]` = one-shot, `[x]` = done.
 Keep tasks fast and cheap. System channel — use `telegram_send_message` or `send_email` for notifications; NEVER use the `say` tool.
 
-- [30m] Call system_info and get_current_time. Append ONE line to /lfs/memory/soak.md (append=true, create if missing). Exact format with no variation: `"HH:MM — heap=Xk min=Xk psram=X.XMB rssi=XdBm up=Xm"` — for example: `"14:30 — heap=12420k min=12100k psram=12.5MB rssi=-41dBm up=60m"`. Rules: heap and min in whole kB (no decimals, no space, write "k" not "kB"); psram in MB with exactly one decimal place; rssi no space before "dBm"; uptime in whole minutes. Nothing else on that line.
-
-- [30m] After system_info: if heap_free < 15000 AND heap_min < 10000, send `telegram_send_message` (not say): "⚠️ Lango heap critical: [heap_free]B free (min: [heap_min]B). Uptime: [uptime]s." Skip if heap is fine.
+- [30m] Call system_info and get_current_time. Then: (1) Write ONE line append=true to /lfs/memory/soak.md using write_file. Exact format: `"HH:MM — heap=Xk min=Xk psram=X.XMB rssi=XdBm up=Xm"` — example: `"14:30 — heap=12420k min=12100k psram=12.5MB rssi=-41dBm up=60m"`. Use "Free heap" for heap/min in whole kB; PSRAM for psram with one decimal; rssi no space before "dBm"; uptime in whole minutes. (2) Check "SRAM free" from system_info: ONLY if SRAM free < 15000 AND min heap < 10000, send one telegram_send_message "⚠️ Lango heap critical: [sram]B SRAM free. Uptime: [X]." — otherwise NO message, NO notification, NO push. Stop after the write_file call.
 
 - [daily 05:55] ARM pre-market data. Call web_search "ARM Holdings ARMH stock pre-market today [date]". Extract: pre-market price, % change vs previous close, one headline if notable. Write to /lfs/memory/arm_stock_today.md (overwrite, under 100 words). No email or Telegram — this feeds the 06:20 briefing.
 
