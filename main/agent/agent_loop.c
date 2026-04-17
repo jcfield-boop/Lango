@@ -1036,12 +1036,20 @@ static void agent_loop_task(void *arg)
                     llm_response_free(&resp);
                     break;
                 }
-                bool do_recovery = resp.truncated && !recovery_tried;
+                /* Recovery: retry once if truncated OR if tools ran but LLM
+                 * returned 0 bytes of final text (stop=end_turn with no content
+                 * after multi-iteration tool use — common with daily briefing). */
+                bool do_recovery = !recovery_tried &&
+                                   (resp.truncated || iteration > 0);
                 llm_response_free(&resp);
                 if (do_recovery) {
                     recovery_tried = true;
                     iteration++;
-                    ws_server_broadcast_monitor("error", "LLM: truncated, injecting recovery");
+                    const char *reason = (iteration <= 1)
+                        ? "LLM: truncated, injecting recovery"
+                        : "LLM: empty response after tools, injecting recovery";
+                    ws_server_broadcast_monitor("error", reason);
+                    ESP_LOGW(TAG, "%s (iter %d)", reason, iteration);
                     cJSON *recovery = cJSON_CreateObject();
                     cJSON_AddStringToObject(recovery, "role", "user");
                     cJSON_AddStringToObject(recovery, "content",
@@ -1498,6 +1506,24 @@ static void agent_loop_task(void *arg)
                     if (message_bus_push_outbound(&out) != ESP_OK) {
                         free(out.content);
                     }
+                }
+            }
+
+            /* Voice error: speak the error aloud so PTT/wake-word users
+             * hear feedback instead of silence (the text-only dispatch
+             * above goes to the browser but nothing comes out of the
+             * speaker without TTS). */
+            if (is_voice && !oom_restart) {
+                char err_tts_id[9] = {0};
+                if (tts_generate(err_text, err_tts_id) == ESP_OK && err_tts_id[0]) {
+#if LANG_I2S_AUDIO_ENABLED
+                    const uint8_t *wav = NULL;
+                    size_t wav_len = 0;
+                    if (tts_cache_get(err_tts_id, &wav, &wav_len) == ESP_OK) {
+                        ESP_LOGI(TAG, "Speaking error via I2S (%u bytes)", (unsigned)wav_len);
+                        i2s_audio_play_wav_async(wav, wav_len);
+                    }
+#endif
                 }
             }
 

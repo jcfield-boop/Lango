@@ -71,6 +71,8 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 
 **First-sentence TTS split** (on-device voice only, `chat_id=="ptt"`): before firing TTS, `agent_loop.c` scans the response for a sentence boundary (`. ! ? \n\n`) in `[40, 220]` chars with ≥20 chars of tail. If found, segment A is sent to Kokoro first and `i2s_audio_play_wav_async()` starts playback immediately; segment B's TTS is generated in parallel and appended via `i2s_audio_enqueue_wav()` — a 4-slot FreeRTOS queue in `i2s_audio.c` plays the two WAVs back-to-back. Cuts perceived voice latency ~400-600 ms on typical 2-3 sentence replies. Short replies fall back to the single-shot path.
 
+**ReAct loop recovery** (`agent_loop.c`): if the LLM returns `stop=end_turn` with zero text bytes after one or more tool-use iterations, the agent injects a recovery turn ("Your response was cut off…") and retries once. This covers multi-step queries (daily briefing, web searches) where the model sometimes emits an empty final assistant turn. On voice turns, if the loop still has no final text, the error message is spoken aloud via TTS so the user hears feedback instead of silence.
+
 **Local pipeline** (fully on-device Mac at `192.168.0.51`):
 - STT: mlx-audio Whisper at `<base_url>/v1/audio/transcriptions` — raw WAV sent (Opus encoding bypassed)
 - TTS: mlx-audio Kokoro at `<base_url>/v1/audio/speech` — model + voice configurable via SERVICES.md
