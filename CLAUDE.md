@@ -180,6 +180,8 @@ Symptom if this regresses: device log shows `[stt] STT failed in ~1s (HTTP 200) 
 
 ## TLS & Latency Optimization
 
+**Pre-warm** (`main/heartbeat/heartbeat.c:294`): `llm_proxy_preflight_cloud()` fires before each heartbeat dispatch, sending a probe to keep the OpenRouter TLS session alive. Prevents the ~1.5-2s "connection reset after idle" retry penalty for scheduled tasks. User-channel queries after a 30+ min idle gap still pay the retry cost (auto-retried by `http_session.c`) — a periodic keep-alive would fix it but is out of scope.
+
 **Persistent HTTP sessions** (`main/llm/http_session.c`) keep TLS connections alive across requests, avoiding ~300-500ms handshake overhead per call. Three persistent sessions are maintained:
 - **STT** (Groq Whisper): 20s timeout, 4KB buffers
 - **TTS** (Groq PlayAI): 20s timeout, 8KB RX buffer
@@ -222,7 +224,8 @@ Mounted at `/lfs` (~24MB partition). Static content in `littlefs_data/` is baked
 /lfs/skills/    *.md skill definitions loaded by the agent
 /lfs/tts/       (runtime TTS cache IDs, audio served from PSRAM)
 /lfs/console/   index.html (voice UI), dev.html (dev console)
-/lfs/cron.json  Scheduled job definitions
+/lfs/cron.json  Scheduled job definitions (`kind:every|at`, optional `dow:"sat"` day-of-week constraint, `interval_s`, `message`, `channel`, `chat_id`). Hot-reload: `POST /api/file?name=cron` rewrites the file then calls `cron_service_reload()` — no reboot needed.
+/lfs/memory/soak.md  30-min system health log — firmware-capped at `LANG_SOAK_MAX_LINES` (96) lines on every append via `trim_file_to_last_lines()` in `tool_files.c`. DoNOT add an explicit truncation step in HEARTBEAT.md; the firmware enforces it.
 /lfs/HEARTBEAT.md  Periodic task checklist (checked every 30 min)
 ```
 
@@ -306,7 +309,7 @@ I2C at 0x3C on GPIO 9/10 (shared bus with camera SCCB + PCA9685). 1KB PSRAM fram
 **Thread-safe setter API** — any task pushes data, render task only reads static state:
 - `oled_display_set_local_status(ollama, audio, apfel)` — from agent_loop after health check
 - `oled_display_set_channel("WS")` — from agent_loop on message receive (also increments daily counter)
-- `oled_display_set_rotate_line(slot, text)` — slot 0 auto-set by set_provider, slot 1 from heartbeat, slot 3 rate limit
+- `oled_display_set_rotate_line(slot, text)` — slot 0 auto-set by set_provider, slot 1 from heartbeat (next-task preview) or bloat warning (>5 iterations or >30 K in-tokens on system channel), slot 3 rate limit
 - No cross-module function calls from the render task (prevents init-order crashes + stack issues)
 
 Files: `main/display/oled_display.h/.c` (API + render), `main/display/ssd1306.h/.c` (I2C driver)
@@ -326,7 +329,9 @@ Files: `main/display/oled_display.h/.c` (API + render), `main/display/ssd1306.h/
 | `main/audio/tts_client.c` | PlayAI/Kokoro POST + PSRAM cache; local mlx-audio; configurable model/voice; boot warmup task |
 | `main/audio/wake_word.c` | WakeNet9 wake word detection; VAD silence 700ms |
 | `main/audio/i2s_audio.c` | I2S driver: simplex TX (I2S0 master) + RX (I2S1 slave) + WAV playback |
-| `main/llm/llm_proxy.c` | LLM request routing; Ollama local health check (15s cache); boot warmup task |
+| `main/llm/llm_proxy.c` | LLM request routing; Ollama local health check (15s cache); boot warmup task; OpenRouter streaming cost tracking (`usage.cost` → `s_total_cost_millicents`) |
+| `main/cron/cron_service.c` | Cron scheduler: load/save/fire jobs from `/lfs/cron.json`; SRAM stack (LittleFS write requirement); DoW roll-forward on `kind:every` after each fire |
+| `main/heartbeat/heartbeat.c` | 30-min task runner; cloud TLS pre-warm before dispatch; OLED rotate-line slot 1 |
 | `main/telegram/telegram_bot.c` | Long-poll Telegram bot |
 | `main/bus/message_bus.c` | FreeRTOS inbound/outbound queues |
 | `main/config/services_config.c` | SERVICES.md parser (load + hot-reload) |

@@ -67,3 +67,11 @@ esp_err_t cron_remove_job(const char *job_id);
  * @param count     Output: number of jobs
  */
 void cron_list_jobs(const cron_job_t **jobs, int *count);
+
+/**
+ * Hot-reload cron jobs from /lfs/cron.json without restarting the task.
+ * Safe to call from HTTP handlers (Core 0) while the cron task runs on Core 1:
+ * sets s_job_count=0 first so the cron task skips one check harmlessly, then
+ * repopulates s_jobs[].  Call after POST /api/file?name=cron.
+ */
+esp_err_t cron_service_reload(void);

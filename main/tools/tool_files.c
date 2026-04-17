@@ -186,6 +186,28 @@ esp_err_t tool_write_file_execute(const char *input_json, char *output, size_t o
 
     cJSON *append_item = cJSON_GetObjectItem(root, "append");
     bool do_append = append_item && cJSON_IsBool(append_item) && cJSON_IsTrue(append_item);
+
+    /* For append mode: if the existing file is non-empty and does not end
+     * with '\n', prepend one so consecutive entries stay on separate lines.
+     * This handles LLM-generated content that omits the trailing newline. */
+    if (do_append) {
+        FILE *peek = fopen(path, "r");
+        if (peek) {
+            bool needs_nl = false;
+            if (fseek(peek, -1, SEEK_END) == 0) {
+                char last = 0;
+                if (fread(&last, 1, 1, peek) == 1) {
+                    needs_nl = (last != '\n');
+                }
+            }
+            fclose(peek);
+            if (needs_nl) {
+                FILE *nl_f = fopen(path, "a");
+                if (nl_f) { fwrite("\n", 1, 1, nl_f); fclose(nl_f); }
+            }
+        }
+    }
+
     FILE *f = fopen(path, do_append ? "a" : "w");
     if (!f) {
         snprintf(output, output_size, "Error: cannot open file for writing: %s", path);

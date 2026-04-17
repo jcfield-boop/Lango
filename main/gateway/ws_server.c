@@ -967,6 +967,11 @@ static esp_err_t file_post_handler(httpd_req_t *req)
         services_config_reload();
     }
 
+    /* If cron.json was saved, hot-reload job list (no restart needed) */
+    if (strcmp(name, "cron") == 0) {
+        cron_service_reload();
+    }
+
     httpd_resp_set_type(req, "application/json");
     apply_cors(req);
     httpd_resp_sendstr(req, "{\"ok\":true}");
@@ -1515,6 +1520,20 @@ static esp_err_t crons_get_handler(httpd_req_t *req)
         cJSON_AddStringToObject(item, "kind",    j->kind == CRON_KIND_EVERY ? "every" : "at");
         if (j->kind == CRON_KIND_EVERY) {
             cJSON_AddNumberToObject(item, "interval_s", j->interval_s);
+            if (j->dow_mask) {
+                /* Render bitmask as canonical short string for the API response.
+                 * Avoids exposing the raw int — callers see "sat", "mon,wed", etc. */
+                char dow_buf[32] = {0};
+                static const char *dow_names[7] = {"sun","mon","tue","wed","thu","fri","sat"};
+                size_t off = 0;
+                for (int b = 0; b < 7 && off < sizeof(dow_buf)-4; b++) {
+                    if (!(j->dow_mask & (1 << b))) continue;
+                    if (off) dow_buf[off++] = ',';
+                    const char *n = dow_names[b];
+                    while (*n && off < sizeof(dow_buf)-1) dow_buf[off++] = *n++;
+                }
+                cJSON_AddStringToObject(item, "dow", dow_buf);
+            }
         } else {
             cJSON_AddNumberToObject(item, "at_epoch",   (double)j->at_epoch);
         }

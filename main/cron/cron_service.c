@@ -521,16 +521,17 @@ esp_err_t cron_service_start(void)
         }
     }
 
-    /* Stack in PSRAM — safe with XIP.  Frees 4KB SRAM. */
-    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
+    /* SRAM stack — required: cron_save_jobs() calls fopen/fwrite on LittleFS,
+     * which briefly disables the flash cache.  PSRAM-stacked tasks hang when
+     * the cache is disabled during a flash write (same rule as heartbeat/agent). */
+    BaseType_t ok = xTaskCreatePinnedToCore(
         cron_task_main,
         "cron",
         4096,
         NULL,
         4,
         &s_cron_task,
-        1,  /* Core 1 (AI pipeline core) */
-        MALLOC_CAP_SPIRAM
+        1   /* Core 1 (AI pipeline core) */
     );
     if (ok != pdPASS || !s_cron_task) {
         ESP_LOGE(TAG, "Failed to create cron task");
@@ -615,4 +616,14 @@ void cron_list_jobs(const cron_job_t **jobs, int *count)
 {
     *jobs = s_jobs;
     *count = s_job_count;
+}
+
+esp_err_t cron_service_reload(void)
+{
+    /* Zero the count first: cron_task_main loops on s_job_count so it will
+     * skip its next check harmlessly while we repopulate s_jobs[]. */
+    s_job_count = 0;
+    esp_err_t err = cron_load_jobs();
+    ESP_LOGI(TAG, "Hot-reloaded %d cron jobs from disk", s_job_count);
+    return err;
 }
