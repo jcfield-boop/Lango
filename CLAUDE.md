@@ -81,12 +81,13 @@ Agent identifies the originating channel from `msg.channel` ("websocket", "teleg
 - Cloud fallback: Groq (STT/TTS), OpenRouter (LLM) when local services unavailable
 
 **Unified LLM routing** (in `agent_loop.c`) — same hierarchy for voice and text:
-1. System/heartbeat/cron → cloud always (multi-step tool chains need speed). mlx-lm / Ollama / Apfel are **user-channel only**; scheduled traffic (heartbeat + cron system jobs) never hits the local tier.
+1. System/heartbeat/cron → cloud always (multi-step tool chains need speed). mlx-lm / Ollama / Apfel are **user-channel only**; scheduled traffic (heartbeat + cron system jobs) never hits the local tier. Pinned to `system_model` (default `openrouter`/`openai/gpt-4o-mini`) — `openrouter/auto` was occasionally routing to content-restricted models that refused `system_info` tasks.
 2. Simple query (no tools needed) → **Apfel** if online (~1s response) → Ollama fallback → cloud fallback
 3. Tool-triggering keywords (weather, remind, stock, etc.) → **Ollama** if online → cloud fallback
 4. Complex keywords (briefing, email, research) → **cloud** directly
 - Voice queries (`chat_id="ptt"`, wake word or PTT) add `max_tokens=400` + VOICE MODE prompt injection
 - Cloud voice fallback uses `voice_provider`/`voice_model` (default: `openrouter`/`openai/gpt-4o-mini`)
+- System channel uses `system_provider`/`system_model` (default: `openrouter`/`openai/gpt-4o-mini`) — configurable via `SERVICES.md` under `## Local Model`
 - All LLM requests use `temperature=0.7` for focused, efficient generation
 
 **Boot warmup tasks** (prevent cold-start latency):
@@ -150,6 +151,8 @@ api_key: ollama
 model: qwen3:8b
 voice_provider: openrouter        # LLM provider for voice channel (PTT/wake word)
 voice_model: openai/gpt-4o-mini   # fast cloud model for low-latency voice responses
+system_provider: openrouter       # LLM provider for system/heartbeat/cron channel
+system_model: openai/gpt-4o-mini  # pinned model — avoids openrouter/auto content refusals
 
 ## Local Audio (mlx-audio)
 base_url: http://192.168.0.51:8000
