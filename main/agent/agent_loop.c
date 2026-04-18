@@ -839,12 +839,16 @@ static void agent_loop_task(void *arg)
         }
 
         while (iteration < LANG_AGENT_MAX_TOOL_ITER) {
-            /* Soft per-turn timeout. System tasks get 5 min (briefing involves
-             * 3-4 cloud LLM calls + web_search + email). Interactive turns get
-             * 3 min — enough for tool chains while giving the user feedback. */
-            int64_t turn_timeout_us = (strcmp(msg.channel, LANG_CHAN_SYSTEM) == 0)
-                ? 300000000LL   /* 5 min for heartbeat/cron */
-                : 180000000LL;  /* 3 min for browser/Telegram */
+            /* Soft per-turn timeout.
+             * WebSocket browser turns get 3 min — enough for tool chains while
+             * giving the user fast feedback.
+             * Everything else (system heartbeat, cron jobs delivered via telegram,
+             * Telegram user messages, CLI) gets 5 min — cron surf/briefing tasks
+             * involve 5-8 tool calls + multiple LLM iterations and routinely
+             * exceed 3 min with TLS reconnect penalty on first post-idle call. */
+            int64_t turn_timeout_us = (strcmp(msg.channel, LANG_CHAN_WEBSOCKET) == 0)
+                ? 180000000LL   /* 3 min for interactive browser turns */
+                : 300000000LL;  /* 5 min for system/cron/telegram/CLI */
             if ((esp_timer_get_time() - turn_start_us) > turn_timeout_us) {
                 ESP_LOGW(TAG, "Agent soft timeout at iter %d — abandoning turn", iteration);
                 ws_server_broadcast_monitor("error", "agent turn timeout");
@@ -1141,6 +1145,35 @@ static void agent_loop_task(void *arg)
             cJSON_AddStringToObject(result_msg, "role", "user");
             cJSON_AddItemToObject(result_msg, "content", tool_results);
             cJSON_AddItemToArray(messages, result_msg);
+
+            /* ── Pico Phase A: rolling context window ────────────────────────
+             * Keep the original user message (index 0) plus the last
+             * LANG_AGENT_CONTEXT_TRIM_ITERS (assistant, tool_result) pairs.
+             * Drop the oldest pair when the window is exceeded to prevent
+             * unbounded context growth on multi-step cron/briefing turns
+             * (6-8 tool calls → 40-50 KB without trimming → OOM or timeout).
+             *
+             * Only applies to system/cron turns (channel == LANG_CHAN_SYSTEM or
+             * iteration >= LANG_AGENT_CONTEXT_TRIM_ITERS). Interactive turns
+             * rarely exceed 3-4 iterations so the cap is never hit in practice.
+             * Layout: [user_msg, asst_1, res_1, ..., asst_N, res_N]
+             *          ↑ idx 0 always kept; pairs start at idx 1 */
+            {
+                int arr_sz = cJSON_GetArraySize(messages);
+                /* 1 user msg + TRIM_ITERS pairs = 1 + 2*TRIM_ITERS elements */
+                int max_sz = 1 + 2 * LANG_AGENT_CONTEXT_TRIM_ITERS;
+                if (arr_sz > max_sz) {
+                    /* Drop oldest (assistant, tool_result) pair at indices [1][1] */
+                    cJSON *old_asst = cJSON_DetachItemFromArray(messages, 1);
+                    cJSON *old_res  = cJSON_DetachItemFromArray(messages, 1);
+                    cJSON_Delete(old_asst);
+                    cJSON_Delete(old_res);
+                    ESP_LOGD(TAG, "Pico-A: trimmed iter context, messages=%d→%d",
+                             arr_sz, cJSON_GetArraySize(messages));
+                    ws_server_broadcast_monitor("system",
+                        "context trimmed (Pico-A)");
+                }
+            }
 
             llm_response_free(&resp);
 

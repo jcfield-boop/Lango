@@ -194,6 +194,14 @@
 #define LANG_HEARTBEAT_WARN_ITERS      5
 #define LANG_HEARTBEAT_WARN_INPUT_TOK  30000
 
+/* Pico Phase A — rolling context window for long tool chains.
+ * Keep original user message + this many (assistant, tool_result) pairs.
+ * Older pairs are dropped after each iteration to keep the in-flight
+ * messages[] array from growing unboundedly on multi-step cron/briefing
+ * tasks (6-8 tool calls) that would otherwise balloon to 40-50 KB and
+ * either OOM the agent task or hit the 5-min soft timeout. */
+#define LANG_AGENT_CONTEXT_TRIM_ITERS  4
+
 /* UVC Camera (USB webcam on GPIO 19/20) */
 #define LANG_CAMERA_BUF_SIZE            (64 * 1024) /* PSRAM: max JPEG frame */
 #define LANG_CAMERA_WARMUP_MS           3000   /* time-based AEC/AGC warmup before capture */
