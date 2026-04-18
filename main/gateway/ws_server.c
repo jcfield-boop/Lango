@@ -1898,6 +1898,14 @@ static esp_err_t message_post_handler(httpd_req_t *req)
     if (!content) {
         content = strdup(jmsg->valuestring);
     }
+
+    /* Copy channel/chat_id into the msg struct BEFORE freeing the cJSON tree.
+     * channel/chat_id are pointers into jchan/jchat->valuestring; cJSON_Delete(root)
+     * frees those nodes, making the pointers dangle.  strncpy first, delete after. */
+    lang_msg_t msg = {0};
+    strncpy(msg.channel, channel, sizeof(msg.channel) - 1);
+    strncpy(msg.chat_id, chat_id, sizeof(msg.chat_id) - 1);
+    msg.content = content;
     cJSON_Delete(root);
 
     if (!content) {
@@ -1905,18 +1913,13 @@ static esp_err_t message_post_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    lang_msg_t msg = {0};
-    strncpy(msg.channel, channel, sizeof(msg.channel) - 1);
-    strncpy(msg.chat_id, chat_id, sizeof(msg.chat_id) - 1);
-    msg.content = content;
-
     if (message_bus_push_inbound(&msg) != ESP_OK) {
         free(msg.content);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Bus full");
         return ESP_OK;
     }
 
-    ESP_LOGI(TAG, "/api/message queued (channel=%s chat_id=%s)", channel, chat_id);
+    ESP_LOGI(TAG, "/api/message queued (channel=%s chat_id=%s)", msg.channel, msg.chat_id);
     httpd_resp_set_status(req, "202 Accepted");
     httpd_resp_sendstr(req, "{\"status\":\"queued\"}");
     return ESP_OK;

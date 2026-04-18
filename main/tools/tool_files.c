@@ -348,6 +348,40 @@ esp_err_t tool_edit_file_execute(const char *input_json, char *output, size_t ou
 
 /* ── list_dir ──────────────────────────────────────────────── */
 
+/**
+ * Recursive helper: walk dir_path and emit every file whose full path
+ * starts with prefix (or all files if prefix is NULL). LittleFS uses
+ * real directories, so a single opendir(LANG_LFS_BASE) only returns
+ * top-level entries — we must recurse into subdirectories.
+ */
+static int list_dir_recursive(const char *dir_path, const char *prefix,
+                               char *output, size_t output_size, size_t *off)
+{
+    DIR *dir = opendir(dir_path);
+    if (!dir) return 0;
+
+    int count = 0;
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != NULL && *off < output_size - 1) {
+        char full_path[512];
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, ent->d_name);
+
+        if (ent->d_type == DT_DIR) {
+            /* Recurse — LittleFS real directory */
+            count += list_dir_recursive(full_path, prefix, output, output_size, off);
+        } else {
+            /* Regular file — apply prefix filter */
+            if (prefix && strncmp(full_path, prefix, strlen(prefix)) != 0) {
+                continue;
+            }
+            *off += snprintf(output + *off, output_size - *off, "%s\n", full_path);
+            count++;
+        }
+    }
+    closedir(dir);
+    return count;
+}
+
 esp_err_t tool_list_dir_execute(const char *input_json, char *output, size_t output_size)
 {
     cJSON *root = cJSON_Parse(input_json);
@@ -359,31 +393,8 @@ esp_err_t tool_list_dir_execute(const char *input_json, char *output, size_t out
         }
     }
 
-    DIR *dir = opendir(LANG_LFS_BASE);
-    if (!dir) {
-        snprintf(output, output_size, "Error: cannot open /lfs directory");
-        cJSON_Delete(root);
-        return ESP_FAIL;
-    }
-
     size_t off = 0;
-    struct dirent *ent;
-    int count = 0;
-
-    while ((ent = readdir(dir)) != NULL && off < output_size - 1) {
-        /* Build full path: SPIFFS entries are just filenames with embedded slashes */
-        char full_path[512];
-        snprintf(full_path, sizeof(full_path), "%s/%s", LANG_LFS_BASE, ent->d_name);
-
-        if (prefix && strncmp(full_path, prefix, strlen(prefix)) != 0) {
-            continue;
-        }
-
-        off += snprintf(output + off, output_size - off, "%s\n", full_path);
-        count++;
-    }
-
-    closedir(dir);
+    int count = list_dir_recursive(LANG_LFS_BASE, prefix, output, output_size, &off);
 
     if (count == 0) {
         snprintf(output, output_size, "(no files found)");
