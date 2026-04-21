@@ -1,6 +1,45 @@
 {
   "jobs": [
     {
+      "id": "armpre01",
+      "name": "ARM Pre-Market Snapshot",
+      "enabled": true,
+      "kind": "every",
+      "interval_s": 86400,
+      "next_run": 1776862500,
+      "last_run": 0,
+      "delete_after_run": false,
+      "channel": "system",
+      "chat_id": "armpre",
+      "message": "ARM pre-market snapshot. web_search \"ARM Holdings ARMH stock pre-market today\". Extract pre-market price, % change vs prev close, one headline if notable. write_file /lfs/memory/arm_stock_today.md (overwrite, under 100 words). No email/Telegram — this feeds the 06:20 morning briefing."
+    },
+    {
+      "id": "brief001",
+      "name": "Morning Briefing",
+      "enabled": true,
+      "kind": "every",
+      "interval_s": 86400,
+      "next_run": 1776864000,
+      "last_run": 0,
+      "delete_after_run": false,
+      "channel": "system",
+      "chat_id": "briefing",
+      "message": "Run the morning-briefing skill: read /lfs/skills/morning-briefing.md and execute all steps. Send the daily briefing email to James. If send_email fails, fall back to telegram_send_message (chat_id 5538967144) with a condensed version."
+    },
+    {
+      "id": "haupd001",
+      "name": "HA Update Check",
+      "enabled": true,
+      "kind": "every",
+      "interval_s": 86400,
+      "next_run": 1776873600,
+      "last_run": 0,
+      "delete_after_run": false,
+      "channel": "system",
+      "chat_id": "ha-updater",
+      "message": "Run the ha-updater skill: read /lfs/skills/ha-updater.md and execute all steps. Check for HA Core, OS, and integration updates. Auto-install integration/device firmware updates. For Core/OS updates (manual action required), send an email alert AND a short Telegram summary to chat_id 5538967144. If nothing needs attention, send a brief Telegram 'all current' line."
+    },
+    {
       "id": "surf0002",
       "name": "Saturday Surf Check",
       "enabled": true,
