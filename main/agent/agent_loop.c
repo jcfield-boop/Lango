@@ -113,6 +113,20 @@ int agent_get_rate_count(void)
 #define WS_TOKEN_MIN_CHARS    8
 #define WS_TOKEN_MIN_US       150000
 
+/* Streaming-TTS background job.
+ * The SSE progress callback spawns a task that runs tts_generate +
+ * i2s_audio_play_wav_async OUTSIDE the callback context, so the reader
+ * keeps draining the LLM stream while TTS is in flight. Synchronous
+ * calls from the callback would block lwIP for 1-15 s (local) or up to
+ * 27 s (cloud fallback) and starve other sockets — see Slice 1a commit
+ * message for the full trace. */
+typedef struct {
+    char         text[240];      /* seg A text (input, written by agent) */
+    char         tts_id[9];      /* TTS cache id (output, written by task) */
+    _Atomic int  state;          /* 0 = pending, 1 = ok, -1 = failed/abandoned */
+    _Atomic bool abandoned;      /* agent sets true to tell task to skip play */
+} streaming_tts_job_t;
+
 /* Progress callback: sends token deltas to the WS client, and — for
  * voice/Apfel turns — fires TTS seg A the moment a sentence boundary
  * appears in the accumulating stream. See docs above strip_tts_unsafe_chars
@@ -128,11 +142,11 @@ typedef struct {
      * safely fire TTS on the first sentence boundary. For Ollama/cloud
      * the tool-call path makes early fire risky — leave the post-stream
      * split in place for those. */
-    bool     tts_split_enabled;   /* set to is_voice && using_apfel && I2S */
-    bool     tts_seg_a_fired;
-    size_t   tts_split_at;        /* byte offset in raw stream where seg A ends */
-    char     tts_id_a[9];         /* TTS cache id for the already-playing seg A */
-    int64_t  tts_trigger_us;      /* esp_timer_get_time() when seg A was enqueued */
+    bool                tts_split_enabled;   /* is_voice && using_apfel && I2S */
+    bool                tts_task_spawned;    /* true once background task launched */
+    size_t              tts_split_at;        /* byte offset where seg A ends */
+    int64_t             tts_trigger_us;      /* esp_timer_get_time() at spawn */
+    streaming_tts_job_t tts_job;             /* embedded; lifetime = agent turn */
 } ws_stream_ctx_t;
 
 /* Forward declarations — helpers are defined further down the file. */
@@ -140,55 +154,136 @@ static void strip_tts_unsafe_chars(char *inout);
 static size_t find_first_sentence_end(const char *text, size_t min_chars,
                                        size_t max_chars, size_t min_tail);
 
+/* Background task: runs tts_generate + start playback, then exits.
+ * Touches only the job pointer (owned by agent). Agent must wait for
+ * state != 0 before letting the stack frame that holds the job die. */
+static void stream_tts_task(void *arg)
+{
+    streaming_tts_job_t *job = (streaming_tts_job_t *)arg;
+    if (atomic_load(&job->abandoned)) {
+        atomic_store(&job->state, -1);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    int64_t t0 = esp_timer_get_time();
+    esp_err_t e = tts_generate(job->text, job->tts_id);
+    int64_t gen_ms = (esp_timer_get_time() - t0) / 1000;
+
+    if (e != ESP_OK || !job->tts_id[0]) {
+        ESP_LOGW(TAG, "stream_tts_task: tts_generate failed (%s) after %lldms",
+                 esp_err_to_name(e), gen_ms);
+        atomic_store(&job->state, -1);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    if (atomic_load(&job->abandoned)) {
+        ESP_LOGI(TAG, "stream_tts_task: abandoned after gen — skipping play");
+        atomic_store(&job->state, -1);
+        vTaskDelete(NULL);
+        return;
+    }
+
+#if LANG_I2S_AUDIO_ENABLED
+    const uint8_t *wav = NULL;
+    size_t wav_len = 0;
+    if (tts_cache_get(job->tts_id, &wav, &wav_len) == ESP_OK) {
+        if (!atomic_load(&job->abandoned)) {
+            i2s_audio_play_wav_async(wav, wav_len);
+            ESP_LOGI(TAG, "stream_tts_task: seg A playing (%u B wav, gen=%lldms)",
+                     (unsigned)wav_len, gen_ms);
+        }
+    } else {
+        ESP_LOGW(TAG, "stream_tts_task: cache miss after gen — play skipped");
+        atomic_store(&job->state, -1);
+        vTaskDelete(NULL);
+        return;
+    }
+#endif
+    atomic_store(&job->state, 1);
+    vTaskDelete(NULL);
+}
+
 /* Called by ws_stream_progress once per delta. No-op unless voice+Apfel
- * path has armed tts_split_enabled. Fires synchronously — the SSE reader
- * blocks for the duration of tts_generate (~500-1500 ms for local Kokoro),
- * but by the time we resume reading the remote LLM has usually finished
- * emitting, so the rest of the stream drains fast. Net savings on
- * time-to-first-speech ≈ duration of seg B's TTS call. */
+ * path has armed tts_split_enabled. Spawns a background task — does NOT
+ * block the SSE reader (Slice 1b fix for the 42 s lwIP starvation bug). */
 static void try_fire_streaming_tts_seg_a(const char *text, size_t len, ws_stream_ctx_t *sc)
 {
-    if (!sc->tts_split_enabled || sc->tts_seg_a_fired) return;
+    if (!sc->tts_split_enabled || sc->tts_task_spawned) return;
     if (len < 40) return;
 
     size_t split_at = find_first_sentence_end(text, 40, 220, 20);
     if (split_at == 0) return;
 
-    /* Copy + emoji-strip seg A */
-    char seg_a[240];
-    size_t a_len = (split_at < sizeof(seg_a)) ? split_at : sizeof(seg_a) - 1;
-    memcpy(seg_a, text, a_len);
-    seg_a[a_len] = '\0';
-    strip_tts_unsafe_chars(seg_a);
-    if (seg_a[0] == '\0') return;  /* nothing speakable after strip */
+    /* Copy + emoji-strip seg A into the job's text buffer */
+    size_t a_len = (split_at < sizeof(sc->tts_job.text))
+                       ? split_at : sizeof(sc->tts_job.text) - 1;
+    memcpy(sc->tts_job.text, text, a_len);
+    sc->tts_job.text[a_len] = '\0';
+    strip_tts_unsafe_chars(sc->tts_job.text);
+    if (sc->tts_job.text[0] == '\0') return;
 
-    int64_t t0 = esp_timer_get_time();
-    esp_err_t e = tts_generate(seg_a, sc->tts_id_a);
-    int64_t gen_ms = (esp_timer_get_time() - t0) / 1000;
+    sc->tts_job.tts_id[0] = '\0';
+    atomic_store(&sc->tts_job.state, 0);
+    atomic_store(&sc->tts_job.abandoned, false);
 
-    if (e != ESP_OK || !sc->tts_id_a[0]) {
-        ESP_LOGW(TAG, "stream_tts: seg A gen failed (%s) — fallback to post-stream",
-                 esp_err_to_name(e));
-        sc->tts_split_enabled = false;  /* don't retry on later callbacks */
-        return;
-    }
-
-#if LANG_I2S_AUDIO_ENABLED
-    const uint8_t *wav_a = NULL;
-    size_t wav_a_len = 0;
-    if (tts_cache_get(sc->tts_id_a, &wav_a, &wav_a_len) == ESP_OK) {
-        i2s_audio_play_wav_async(wav_a, wav_a_len);
-        ESP_LOGI(TAG, "stream_tts: seg A playing (%u B wav, gen=%lldms, stream_len=%u, split=%u)",
-                 (unsigned)wav_a_len, gen_ms, (unsigned)len, (unsigned)split_at);
-    } else {
-        ESP_LOGW(TAG, "stream_tts: seg A cache miss — post-stream will re-fire");
+    /* Pin to Core 1 (same core as agent) — keeps TTS HTTP work off the
+     * WiFi/lwIP core (Core 0) and away from the inbound/outbound queues.
+     * 12 KB stack covers the TTS client's HTTP buffers + cJSON transient. */
+    BaseType_t r = xTaskCreatePinnedToCore(stream_tts_task, "tts_stream",
+                                            12 * 1024, &sc->tts_job, 4,
+                                            NULL, 1);
+    if (r != pdPASS) {
+        ESP_LOGW(TAG, "stream_tts: task spawn failed — fallback to post-stream");
         sc->tts_split_enabled = false;
         return;
     }
-#endif
-    sc->tts_seg_a_fired = true;
+
+    sc->tts_task_spawned = true;
     sc->tts_split_at = split_at;
     sc->tts_trigger_us = esp_timer_get_time();
+    ESP_LOGI(TAG, "stream_tts: seg A task spawned (split=%u, stream_len=%u, text='%.40s')",
+             (unsigned)split_at, (unsigned)len, sc->tts_job.text);
+}
+
+/* Agent-side abandon helper: tell the task to skip playback if it
+ * hasn't already, and mark the split disabled so no new task spawns.
+ * Called on LLM-stream failure / retry / fallback paths. */
+static void streaming_tts_abandon(ws_stream_ctx_t *sc)
+{
+    sc->tts_split_enabled = false;
+    if (sc->tts_task_spawned) {
+        atomic_store(&sc->tts_job.abandoned, true);
+    }
+}
+
+/* Block until the seg-A task completes or the budget expires. Must be
+ * called before the stream_ctx stack frame dies. Returns the task's
+ * final state (1 = ok, -1 = failed/abandoned, 0 = still pending). */
+static int streaming_tts_wait_done(ws_stream_ctx_t *sc, int max_wait_ms)
+{
+    if (!sc->tts_task_spawned) return 0;
+    int64_t deadline = esp_timer_get_time() + (int64_t)max_wait_ms * 1000;
+    while (atomic_load(&sc->tts_job.state) == 0) {
+        if (esp_timer_get_time() >= deadline) break;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    int s = atomic_load(&sc->tts_job.state);
+    if (s == 0) {
+        /* Timed out. Flag abandoned, then spin briefly for the task to
+         * notice and transition state (bounded — we cannot let stream_ctx
+         * die while the task still holds a pointer into it). */
+        atomic_store(&sc->tts_job.abandoned, true);
+        int64_t drain_deadline = esp_timer_get_time() + 2LL * 1000 * 1000;
+        while (atomic_load(&sc->tts_job.state) == 0 &&
+               esp_timer_get_time() < drain_deadline) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        s = atomic_load(&sc->tts_job.state);
+        ESP_LOGW(TAG, "stream_tts: wait exceeded budget, final state=%d", s);
+    }
+    return s;
 }
 
 static void ws_stream_progress(const char *text, size_t len, void *ctx)
@@ -996,25 +1091,28 @@ static void agent_loop_task(void *arg)
             bool force_this_iter = (force_memory_tool && iteration == 0);
             const char *effective_tools = using_apfel ? NULL : tools_json;
 
-            /* Streaming-TTS seg A fire (Slice 1) — currently DORMANT.
+            /* Streaming-TTS seg A fire (Slice 1b) — ARMED for voice + Apfel.
              *
-             * Design intent: fire TTS for the first sentence the moment a
-             * boundary appears in the streaming LLM deltas, so playback can
-             * start before the rest of the response arrives. Voice + Apfel +
-             * I2S only (Apfel emits pure prose with no tool_calls mid-stream).
+             * When a sentence boundary appears in the streaming LLM deltas,
+             * ws_stream_progress → try_fire_streaming_tts_seg_a spawns a
+             * background FreeRTOS task that runs tts_generate +
+             * i2s_audio_play_wav_async. The SSE reader returns immediately
+             * and keeps draining the LLM stream — no lwIP starvation.
              *
-             * Why gated off: calling tts_generate() synchronously from inside
-             * the SSE reader callback blocks the ESP-IDF network stack for
-             * the full duration of the TTS HTTP call. On the 2026-04-21 soak
-             * this manifested as a ~42 s stall: local TTS timed out at 15 s,
-             * DNS then failed (getaddrinfo → EAI_AGAIN, 202), Groq fallback
-             * retried for another 27 s, and Telegram polling ran into
-             * ESP_ERR_HTTP_EAGAIN at the same moment. The post-stream
-             * 2-segment split (below, around line 1565) already works and
-             * is preserved. Slice 1b will re-enable this path with a
-             * background TTS worker task so the SSE reader keeps draining
-             * while seg A is being synthesized. */
-            stream_ctx.tts_split_enabled = false;
+             * Gated to Apfel-only because Apfel emits pure prose (no
+             * tool-use mid-stream). For Ollama/cloud the tool-call path
+             * would make early fire risky; they continue to use the
+             * post-stream 2-segment split further down.
+             *
+             * We only arm on iteration 0 (the first LLM call of the turn).
+             * On ReAct retries later in the loop, stream_ctx.tts_task_spawned
+             * gates a second spawn; iteration 0 always gets a fresh turn. */
+            stream_ctx.tts_split_enabled = (is_voice && using_apfel &&
+                                            !stream_ctx.tts_task_spawned);
+            if (stream_ctx.tts_split_enabled) {
+                ESP_LOGI(TAG, "stream_tts: armed for voice+Apfel turn (iter=%d)",
+                         iteration);
+            }
 
             err = llm_chat_tools_streaming(system_prompt, messages, effective_tools,
                                            force_this_iter && !using_apfel,
@@ -1028,11 +1126,11 @@ static void agent_loop_task(void *arg)
                     snprintf(rmsg, sizeof(rmsg), "LLM: %s — retrying...", esp_err_to_name(err));
                     ws_server_broadcast_monitor("error", rmsg);
                 }
-                /* On retry, disable streaming-TTS: if seg A already played
-                 * for the failed attempt, we live with the brief cut-off and
-                 * let post-stream do a single-shot TTS of the retry result.
+                /* On retry, disable streaming-TTS and tell an already-spawned
+                 * seg A task to skip playback: its text came from the failed
+                 * attempt, so playing it would mismatch the retry response.
                  * Avoids seg B being sliced at a stale offset. */
-                stream_ctx.tts_split_enabled = false;
+                streaming_tts_abandon(&stream_ctx);
                 vTaskDelay(pdMS_TO_TICKS(250));  /* brief pause, then retry */
                 err = llm_chat_tools_streaming(system_prompt, messages, tools_json,
                                                force_this_iter,
@@ -1045,6 +1143,9 @@ static void agent_loop_task(void *arg)
                 ESP_LOGW(TAG, "Apfel failed (%s), trying local LLM", esp_err_to_name(err));
                 ws_server_broadcast_monitor("llm", "apfel failed — trying local LLM");
                 using_apfel = false;
+                /* If seg A task is still in flight, abandon — the Apfel
+                 * prose we piped into it isn't the final answer. */
+                streaming_tts_abandon(&stream_ctx);
                 if (llm_local_health_check()) {
                     const char *local_model = llm_get_local_text_model();
                     llm_set_request_override(llm_get_local_provider(), local_model);
@@ -1520,16 +1621,20 @@ static void agent_loop_task(void *arg)
                  * Gate on I2S playback path — WS/Telegram-only voice would need
                  * two tts_id events which the browser UI doesn't handle yet.
                  *
-                 * Slice 1 streaming-TTS: if stream_ctx.tts_seg_a_fired is true,
-                 * seg A was already generated + enqueued for playback from
-                 * inside the SSE callback. We only need to emit seg B here. */
+                 * Slice 1b streaming-TTS: if a background seg-A task was
+                 * spawned from the SSE callback, wait for it here (bounded),
+                 * then emit seg B. Must wait BEFORE stream_ctx dies. */
                 size_t split_at = 0;
                 esp_err_t tts_err = ESP_FAIL;
                 char tts_id_b[9] = {0};
 
-                if (stream_ctx.tts_seg_a_fired) {
-                    /* Streaming-TTS path: seg A already generated + enqueued
-                     * from inside the SSE callback. Just emit seg B here. */
+                /* Wait for in-flight seg-A task (6 s budget = cold Kokoro +
+                 * generous headroom). Returns task final state. */
+                int seg_a_state = streaming_tts_wait_done(&stream_ctx, 6000);
+
+                if (stream_ctx.tts_task_spawned && seg_a_state == 1) {
+                    /* Streaming-TTS path: seg A generated + played from the
+                     * background task. Just emit seg B here. */
                     split_at = stream_ctx.tts_split_at;
                     size_t clean_len = strlen(tts_text);
                     size_t b_start = (split_at < clean_len) ? split_at : clean_len;
@@ -1539,7 +1644,7 @@ static void agent_loop_task(void *arg)
                     /* Copy seg A's id into the outer tts_id so the websocket
                      * ws_server_send_with_tts call below points the browser
                      * at playable audio. */
-                    strncpy(tts_id, stream_ctx.tts_id_a, sizeof(tts_id) - 1);
+                    strncpy(tts_id, stream_ctx.tts_job.tts_id, sizeof(tts_id) - 1);
                     tts_id[sizeof(tts_id) - 1] = '\0';
 
                     int64_t seg_a_head_ms =
@@ -1568,6 +1673,10 @@ static void agent_loop_task(void *arg)
                     }
                     tts_err = ESP_OK;  /* seg A already succeeded */
                 } else {
+                    if (stream_ctx.tts_task_spawned) {
+                        ESP_LOGW(TAG, "stream_tts: seg A task failed (state=%d) — falling back to post-stream single/split",
+                                 seg_a_state);
+                    }
 #if LANG_I2S_AUDIO_ENABLED
                     split_at = find_first_sentence_end(tts_text, 40, 220, 20);
 #endif
