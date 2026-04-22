@@ -120,6 +120,51 @@ bool llm_apfel_health_check(void);
 /** Return last cached Apfel health check result (non-blocking). */
 bool llm_apfel_is_online(void);
 
+/* ── Voice router (Slice 2, EAGLE-style) ───────────────────────────
+ *
+ * Single-shot Apfel call that classifies a voice query and returns
+ * one of three modes + a provisional answer/ack. Does not stream,
+ * does not call tools, does not affect the global request override.
+ * Used by the agent's voice routing layer to decide whether to answer
+ * directly, ack-and-run-tools, or race cloud vs Apfel. */
+
+typedef enum {
+    ROUTER_MODE_UNKNOWN = 0,
+    ROUTER_MODE_DIRECT,
+    ROUTER_MODE_TOOLS,
+    ROUTER_MODE_RACE
+} llm_router_mode_t;
+
+/**
+ * Call Apfel with the voice-router prompt + user query. Hard-deadlined:
+ * returns ESP_ERR_TIMEOUT if the call exceeds timeout_ms. Returns
+ * ESP_ERR_NOT_FOUND when Apfel is unconfigured. Returns ESP_FAIL when
+ * the response isn't parseable JSON with a valid "mode".
+ *
+ * On success:
+ *   - *out_mode populated with DIRECT / TOOLS / RACE
+ *   - out_text[] populated for DIRECT and RACE (may be empty for TOOLS)
+ *   - out_ack[] populated for TOOLS and RACE (may be empty for DIRECT)
+ *
+ * @param query         User query text (voice transcript)
+ * @param timeout_ms    Hard deadline (recommend LANG_VOICE_ROUTER_TIMEOUT_MS)
+ * @param out_mode      Output: classification result
+ * @param out_text      Output: provisional text (may be NULL)
+ * @param out_text_size Size of out_text (0 ok only if out_text NULL)
+ * @param out_ack       Output: ack phrase (may be NULL)
+ * @param out_ack_size  Size of out_ack
+ * @param out_latency_ms Output: actual call latency (may be NULL)
+ */
+esp_err_t llm_apfel_router_call(const char *query,
+                                int timeout_ms,
+                                llm_router_mode_t *out_mode,
+                                char *out_text, size_t out_text_size,
+                                char *out_ack, size_t out_ack_size,
+                                int *out_latency_ms);
+
+/** Map enum to human-readable short name ("DIRECT"/"TOOLS"/"RACE"/"?"). */
+const char *llm_router_mode_name(llm_router_mode_t mode);
+
 /** Set provider/model used for voice channel (chat_id=="ptt") requests.
  *  When set, voice bypasses local Ollama and uses a fast cloud model instead. */
 void llm_set_voice_provider(const char *provider);

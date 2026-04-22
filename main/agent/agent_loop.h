@@ -36,3 +36,11 @@ int agent_get_rate_limit(void);
 
 /** Get number of LLM requests in current rate window. */
 int agent_get_rate_count(void);
+
+/* ── Voice router kill switch (Slice 2) ──────────────────────────
+ * Backed by NVS key LANG_NVS_KEY_VOICE_ROUTER under LANG_NVS_LLM.
+ * Default false — flip to true via CLI (voice_router on) once the
+ * router is verified in Slice 3. Read on every voice turn from the
+ * agent loop; cheap (in-RAM flag, NVS only touched on set). */
+bool agent_voice_router_enabled(void);
+void agent_set_voice_router_enabled(bool enabled);

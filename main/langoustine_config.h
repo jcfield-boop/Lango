@@ -210,6 +210,38 @@
 #define LANG_CAMERA_CAPTURE_PATH        "/lfs/captures/latest.jpg"
 #define LANG_VISION_MAX_TOKENS          512
 
+/* Voice Router (EAGLE-style Apfel classifier)
+ *
+ * The router call is a single Apfel completion that classifies the query
+ * as DIRECT / TOOLS / RACE and (for DIRECT/RACE) returns a provisional
+ * answer. See docs/plans/voice_router.md and context_build_voice_router_prompt.
+ * Hot-reloadable prompt at /lfs/config/voice_router.md; compiled-in
+ * fallback used when the file is missing or fails to parse.
+ *
+ * Timeout: hard 3000 ms on the HTTP call so we never starve a voice turn
+ * on a stalled router — the agent falls back to the legacy routing path
+ * on timeout. Measured ESP32 → Mac round-trip (warm Apfel, 1.8 KB prompt,
+ * 96-tok max): 2000-2500 ms; bumped from the design's 800 ms after Slice 2
+ * verify showed even warm Apfel consistently exceeded 1500 ms end-to-end
+ * from the device (~1 s ESP32/WiFi overhead on top of ~1 s Apfel compute).
+ * Still below the ~4-6 s cloud LLM baseline, so EAGLE economics hold. */
+#define LANG_VOICE_ROUTER_FILE              "/lfs/config/voice_router.md"
+#define LANG_VOICE_ROUTER_TIMEOUT_MS        3000
+#define LANG_VOICE_ROUTER_ACK_MIN_MS        400
+#define LANG_VOICE_ROUTER_PROMPT_MAX_BYTES  2048   /* prompt + query fits here */
+#define LANG_VOICE_ROUTER_MAX_TOKENS        96     /* ack+text+mode json */
+
+/* Hedge patterns — if a DIRECT answer contains any of these phrases, the
+ * router escalates to RACE (fire cloud in parallel). Pipe-separated so
+ * strstr can iterate. Lowercased at match time. */
+#define LANG_VOICE_ROUTER_HEDGE_PATTERNS \
+    "as of my knowledge|i'm not sure|i don't know|might be|could be|i think"
+
+/* Time-sensitive tokens — DIRECT answers containing these are likely
+ * misclassifications; promote to RACE. */
+#define LANG_VOICE_ROUTER_TIMELY_TOKENS \
+    "today|current|right now|near me|just now|recent"
+
 /* Web Search */
 #define LANG_TAVILY_BUF_SIZE         (32 * 1024)
 
@@ -246,6 +278,10 @@
 #define LANG_NVS_KEY_VOICE           "voice"
 #define LANG_NVS_KEY_ENDPOINT        "endpoint"
 #define LANG_NVS_KEY_VOLUME          "volume"
+
+/* Voice Router kill switch. Lives under LANG_NVS_LLM namespace.
+ * Default false — flip to true via CLI once Slice 3 soak is green. */
+#define LANG_NVS_KEY_VOICE_ROUTER    "voice_router"
 
 /* Telegram Bot */
 #define LANG_TG_POLL_TIMEOUT_S       30

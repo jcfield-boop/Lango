@@ -29,6 +29,8 @@
 #include "esp_http_client.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 #include "cJSON.h"
 
 static const char *TAG = "agent";
@@ -107,6 +109,53 @@ int agent_get_rate_count(void)
         return 0;
     }
     return s_rate_limit_count;
+}
+
+/* ── Voice router kill switch (Slice 2) ──────────────────────────
+ * Cached in RAM to avoid a per-voice-turn NVS read. Loaded from NVS on
+ * first query (s_router_loaded=false), refreshed on every set. */
+static bool   s_router_enabled   = false;
+static bool   s_router_loaded    = false;
+
+static void voice_router_load_from_nvs(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(LANG_NVS_LLM, NVS_READONLY, &h) != ESP_OK) {
+        s_router_enabled = false;
+        s_router_loaded  = true;
+        return;
+    }
+    uint8_t v = 0;
+    esp_err_t e = nvs_get_u8(h, LANG_NVS_KEY_VOICE_ROUTER, &v);
+    nvs_close(h);
+    s_router_enabled = (e == ESP_OK) ? (v != 0) : false;
+    s_router_loaded  = true;
+    ESP_LOGI(TAG, "voice_router: loaded from NVS = %s (err=%s)",
+             s_router_enabled ? "ON" : "OFF", esp_err_to_name(e));
+}
+
+bool agent_voice_router_enabled(void)
+{
+    if (!s_router_loaded) voice_router_load_from_nvs();
+    return s_router_enabled;
+}
+
+void agent_set_voice_router_enabled(bool enabled)
+{
+    s_router_enabled = enabled;
+    s_router_loaded  = true;
+
+    nvs_handle_t h;
+    esp_err_t e = nvs_open(LANG_NVS_LLM, NVS_READWRITE, &h);
+    if (e != ESP_OK) {
+        ESP_LOGW(TAG, "voice_router: nvs_open failed: %s", esp_err_to_name(e));
+        return;
+    }
+    (void)nvs_set_u8(h, LANG_NVS_KEY_VOICE_ROUTER, enabled ? 1 : 0);
+    (void)nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "voice_router: set to %s (persisted)",
+             enabled ? "ON" : "OFF");
 }
 
 #define TOOL_OUTPUT_SIZE      (32 * 1024)

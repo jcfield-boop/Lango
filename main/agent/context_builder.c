@@ -151,6 +151,75 @@ esp_err_t context_build_system_prompt(char *buf, size_t size)
     return ESP_OK;
 }
 
+/* Compiled-in fallback router prompt — used when /lfs/config/voice_router.md
+ * is missing, empty, or fails to read. Mirrors the shipped file's content
+ * but trimmed to fit in ROM without bloating the image. The shipped file
+ * is the source of truth; keep this in rough sync on structural changes. */
+static const char ROUTER_PROMPT_FALLBACK[] =
+    "You are the voice query router for Langoustine. Output ONE minified "
+    "JSON object, no other text.\n\n"
+    "DIRECT — confident, stable-knowledge answer. "
+    "{\"mode\":\"DIRECT\",\"text\":\"<1-2 sentence answer>\"}\n"
+    "TOOLS — needs live data or device action. "
+    "{\"mode\":\"TOOLS\",\"ack\":\"<under 8 words, contextual>\"}\n"
+    "RACE — borderline; could answer but not sure it's current. "
+    "{\"mode\":\"RACE\",\"text\":\"<best guess>\",\"ack\":\"<ack>\"}\n\n"
+    "Examples:\n"
+    "\"hi\" -> {\"mode\":\"DIRECT\",\"text\":\"Hi James, what's up?\"}\n"
+    "\"what's the weather\" -> {\"mode\":\"TOOLS\",\"ack\":\"Checking weather…\"}\n"
+    "\"price of arm stock\" -> {\"mode\":\"TOOLS\",\"ack\":\"Let me check ARM…\"}\n"
+    "\"capital of france\" -> {\"mode\":\"DIRECT\",\"text\":\"Paris.\"}\n"
+    "\"who's the president\" -> {\"mode\":\"RACE\",\"text\":\"The current U.S. president.\",\"ack\":\"Let me verify…\"}\n";
+
+esp_err_t context_build_voice_router_prompt(char *buf, size_t size)
+{
+    if (!buf || size < 256) return ESP_ERR_INVALID_ARG;
+    size_t off = 0;
+
+    /* Try the hot-reloadable file first. Leave ~512 bytes of headroom for
+     * the user-info tail + query block that callers append. */
+    bool file_ok = false;
+    FILE *f = fopen(LANG_VOICE_ROUTER_FILE, "r");
+    if (f) {
+        size_t cap = (size > 512) ? (size - 512) : (size - 1);
+        size_t n = fread(buf, 1, cap, f);
+        fclose(f);
+        if (n > 64) {
+            off = n;
+            buf[off] = '\0';
+            file_ok = true;
+        }
+    }
+
+    if (!file_ok) {
+        size_t flen = strlen(ROUTER_PROMPT_FALLBACK);
+        if (flen >= size - 1) flen = size - 1;
+        memcpy(buf, ROUTER_PROMPT_FALLBACK, flen);
+        off = flen;
+        buf[off] = '\0';
+        ESP_LOGW(TAG, "voice_router prompt: file missing, using compiled-in fallback");
+    }
+
+    /* Append a tiny user-info snippet (first 256 chars of USER.md) so the
+     * router can personalize DIRECT greetings ("Hi James, …"). Safe even
+     * if the file is missing — we just skip the section. */
+    FILE *u = fopen(LANG_USER_FILE, "r");
+    if (u) {
+        char user_snippet[256];
+        size_t un = fread(user_snippet, 1, sizeof(user_snippet) - 1, u);
+        user_snippet[un] = '\0';
+        fclose(u);
+        if (un > 0 && off + un + 32 < size) {
+            off += snprintf(buf + off, size - off,
+                            "\n\n## User Info\n%s\n", user_snippet);
+        }
+    }
+
+    ESP_LOGI(TAG, "Voice router prompt built: %d bytes (%s)",
+             (int)off, file_ok ? "file" : "fallback");
+    return ESP_OK;
+}
+
 esp_err_t context_build_minimal_prompt(char *buf, size_t size)
 {
     size_t off = 0;

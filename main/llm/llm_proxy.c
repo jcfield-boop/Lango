@@ -2172,6 +2172,243 @@ bool llm_apfel_health_check(void)
 
 bool llm_apfel_is_online(void) { return s_apfel_online; }
 
+/* ── Voice router (EAGLE-style single-shot classifier) ──────────── */
+
+const char *llm_router_mode_name(llm_router_mode_t mode)
+{
+    switch (mode) {
+        case ROUTER_MODE_DIRECT: return "DIRECT";
+        case ROUTER_MODE_TOOLS:  return "TOOLS";
+        case ROUTER_MODE_RACE:   return "RACE";
+        default:                  return "?";
+    }
+}
+
+/* Extract one of three expected string fields from the inner JSON object
+ * the model produced ("mode", "text", "ack"). Returns empty string if
+ * absent. Safe against malformed JSON (cJSON_IsString guards). */
+static const char *router_json_str(cJSON *obj, const char *key)
+{
+    cJSON *it = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (cJSON_IsString(it) && it->valuestring) return it->valuestring;
+    return "";
+}
+
+/* Locate the first balanced JSON object in a string. Apfel occasionally
+ * emits a ```json fence or a trailing comment; be defensive. Returns a
+ * newly allocated, NUL-terminated substring the caller must free, or
+ * NULL if no balanced braces found. */
+static char *router_extract_json_object(const char *s)
+{
+    if (!s) return NULL;
+    const char *start = strchr(s, '{');
+    if (!start) return NULL;
+    int depth = 0;
+    const char *end = NULL;
+    bool in_str = false;
+    bool esc = false;
+    for (const char *p = start; *p; p++) {
+        char c = *p;
+        if (in_str) {
+            if (esc) { esc = false; continue; }
+            if (c == '\\') { esc = true; continue; }
+            if (c == '"') in_str = false;
+            continue;
+        }
+        if (c == '"') { in_str = true; continue; }
+        if (c == '{') depth++;
+        else if (c == '}') {
+            depth--;
+            if (depth == 0) { end = p; break; }
+        }
+    }
+    if (!end) return NULL;
+    size_t n = (size_t)(end - start + 1);
+    char *out = malloc(n + 1);
+    if (!out) return NULL;
+    memcpy(out, start, n);
+    out[n] = '\0';
+    return out;
+}
+
+/* Forward decl — defined in agent/context_builder.c. We avoid pulling
+ * in the whole header to keep include graph flat. */
+extern esp_err_t context_build_voice_router_prompt(char *buf, size_t size);
+
+esp_err_t llm_apfel_router_call(const char *query,
+                                int timeout_ms,
+                                llm_router_mode_t *out_mode,
+                                char *out_text, size_t out_text_size,
+                                char *out_ack, size_t out_ack_size,
+                                int *out_latency_ms)
+{
+    if (!query || !out_mode) return ESP_ERR_INVALID_ARG;
+    *out_mode = ROUTER_MODE_UNKNOWN;
+    if (out_text && out_text_size) out_text[0] = '\0';
+    if (out_ack && out_ack_size)   out_ack[0] = '\0';
+    if (out_latency_ms) *out_latency_ms = 0;
+
+    if (!s_apfel_url[0] || !s_apfel_model[0]) return ESP_ERR_NOT_FOUND;
+    if (timeout_ms <= 0) timeout_ms = LANG_VOICE_ROUTER_TIMEOUT_MS;
+
+    int64_t t0 = esp_timer_get_time();
+
+    /* Build router prompt in PSRAM (~1.5 KB). */
+    char *sys_prompt = ps_calloc(1, LANG_VOICE_ROUTER_PROMPT_MAX_BYTES);
+    if (!sys_prompt) return ESP_ERR_NO_MEM;
+    if (context_build_voice_router_prompt(sys_prompt,
+                                          LANG_VOICE_ROUTER_PROMPT_MAX_BYTES) != ESP_OK) {
+        free(sys_prompt);
+        return ESP_FAIL;
+    }
+
+    /* Assemble chat-completions body */
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "model", s_apfel_model);
+    cJSON_AddNumberToObject(body, "max_tokens", LANG_VOICE_ROUTER_MAX_TOKENS);
+    cJSON_AddNumberToObject(body, "temperature", 0.2);
+    cJSON_AddBoolToObject(body, "stream", false);
+
+    cJSON *msgs = cJSON_CreateArray();
+    cJSON *sys_msg = cJSON_CreateObject();
+    cJSON_AddStringToObject(sys_msg, "role", "system");
+    cJSON_AddStringToObject(sys_msg, "content", sys_prompt);
+    cJSON_AddItemToArray(msgs, sys_msg);
+
+    cJSON *user_msg = cJSON_CreateObject();
+    cJSON_AddStringToObject(user_msg, "role", "user");
+    cJSON_AddStringToObject(user_msg, "content", query);
+    cJSON_AddItemToArray(msgs, user_msg);
+
+    cJSON_AddItemToObject(body, "messages", msgs);
+
+    char *post_data = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    free(sys_prompt);
+    if (!post_data) return ESP_ERR_NO_MEM;
+
+    /* Apfel chat/completions endpoint */
+    char url[LLM_LOCAL_URL_MAX + 32];
+    snprintf(url, sizeof(url), "%s/chat/completions", s_apfel_url);
+
+    resp_buf_t rb;
+    if (resp_buf_init(&rb, 4096) != ESP_OK) {
+        free(post_data);
+        return ESP_ERR_NO_MEM;
+    }
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = timeout_ms,
+        .event_handler = http_event_handler,
+        .user_data = &rb,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        free(post_data);
+        resp_buf_free(&rb);
+        return ESP_FAIL;
+    }
+
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, post_data, strlen(post_data));
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    free(post_data);
+
+    int latency_ms = (int)((esp_timer_get_time() - t0) / 1000);
+    if (out_latency_ms) *out_latency_ms = latency_ms;
+
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "router: HTTP err=%s after %dms (status=%d)",
+                 esp_err_to_name(err), latency_ms, status);
+        resp_buf_free(&rb);
+        /* Classify timeouts distinctly so the caller can choose a
+         * different fallback (timeout → fall back to legacy routing;
+         * other errors → same). ESP_ERR_HTTP_EAGAIN covers SO_RCVTIMEO
+         * tripping on the esp_http_client read path. */
+        if (err == ESP_ERR_HTTP_EAGAIN || err == ESP_ERR_TIMEOUT ||
+            latency_ms >= timeout_ms - 20) {
+            return ESP_ERR_TIMEOUT;
+        }
+        return err;
+    }
+    if (status != 200) {
+        ESP_LOGW(TAG, "router: HTTP status %d after %dms", status, latency_ms);
+        resp_buf_free(&rb);
+        return ESP_FAIL;
+    }
+
+    /* Parse the outer OpenAI-shaped response: choices[0].message.content */
+    cJSON *outer = cJSON_Parse(rb.data);
+    resp_buf_free(&rb);
+    if (!outer) {
+        ESP_LOGW(TAG, "router: outer JSON parse failed");
+        return ESP_FAIL;
+    }
+
+    cJSON *choices = cJSON_GetObjectItemCaseSensitive(outer, "choices");
+    cJSON *first   = choices ? cJSON_GetArrayItem(choices, 0) : NULL;
+    cJSON *message = first ? cJSON_GetObjectItemCaseSensitive(first, "message") : NULL;
+    cJSON *content = message ? cJSON_GetObjectItemCaseSensitive(message, "content") : NULL;
+    const char *ctext = (cJSON_IsString(content) && content->valuestring)
+                         ? content->valuestring : NULL;
+    if (!ctext) {
+        cJSON_Delete(outer);
+        ESP_LOGW(TAG, "router: no choices[0].message.content in response");
+        return ESP_FAIL;
+    }
+
+    /* The content should itself be one JSON object (the mode/text/ack).
+     * Apfel sometimes wraps it in a code fence or adds trailing noise —
+     * strip to a balanced {...} substring before re-parsing. */
+    char *inner_str = router_extract_json_object(ctext);
+    cJSON_Delete(outer);
+    if (!inner_str) {
+        ESP_LOGW(TAG, "router: no JSON object in content: %.100s", ctext);
+        return ESP_FAIL;
+    }
+
+    cJSON *inner = cJSON_Parse(inner_str);
+    if (!inner) {
+        ESP_LOGW(TAG, "router: inner JSON parse failed: %.100s", inner_str);
+        free(inner_str);
+        return ESP_FAIL;
+    }
+    free(inner_str);
+
+    const char *mode_s = router_json_str(inner, "mode");
+    llm_router_mode_t mode = ROUTER_MODE_UNKNOWN;
+    if      (strcasecmp(mode_s, "DIRECT") == 0) mode = ROUTER_MODE_DIRECT;
+    else if (strcasecmp(mode_s, "TOOLS")  == 0) mode = ROUTER_MODE_TOOLS;
+    else if (strcasecmp(mode_s, "RACE")   == 0) mode = ROUTER_MODE_RACE;
+
+    if (mode == ROUTER_MODE_UNKNOWN) {
+        cJSON_Delete(inner);
+        ESP_LOGW(TAG, "router: unrecognized mode='%s'", mode_s);
+        return ESP_FAIL;
+    }
+
+    if (out_text && out_text_size) {
+        const char *t = router_json_str(inner, "text");
+        strncpy(out_text, t, out_text_size - 1);
+        out_text[out_text_size - 1] = '\0';
+    }
+    if (out_ack && out_ack_size) {
+        const char *a = router_json_str(inner, "ack");
+        strncpy(out_ack, a, out_ack_size - 1);
+        out_ack[out_ack_size - 1] = '\0';
+    }
+    cJSON_Delete(inner);
+
+    *out_mode = mode;
+    ESP_LOGI(TAG, "router: mode=%s latency=%dms", llm_router_mode_name(mode), latency_ms);
+    return ESP_OK;
+}
+
 /* ── Voice routing ──────────────────────────────────────────────── */
 
 void llm_set_voice_provider(const char *p)

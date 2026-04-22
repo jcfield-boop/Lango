@@ -1363,6 +1363,77 @@ static int cmd_ww_test(int argc, char **argv)
 }
 
 /* rate_limit — get/set LLM API rate limit */
+/* ── voice_router ───────────────────────────────────────────────
+ * voice_router                     → show state + run no-op self-test
+ * voice_router on|off              → flip NVS kill switch
+ * voice_router status              → state + last Apfel health result
+ * voice_router test <query>        → live router call, print mode/text/ack
+ */
+static int cmd_voice_router(int argc, char **argv)
+{
+    if (argc < 2 || strcmp(argv[1], "status") == 0) {
+        bool enabled = agent_voice_router_enabled();
+        bool apfel_up = llm_apfel_is_online();
+        printf("voice_router: %s  |  apfel: %s  |  apfel_url: %s  |  apfel_model: %s\n",
+               enabled  ? "ON"  : "OFF",
+               apfel_up ? "online" : "offline",
+               llm_get_apfel_url()[0]   ? llm_get_apfel_url()   : "(unset)",
+               llm_get_apfel_model()[0] ? llm_get_apfel_model() : "(unset)");
+        printf("  Default off. Flip on after Slice 3 verification: voice_router on\n");
+        return 0;
+    }
+
+    if (strcmp(argv[1], "on") == 0) {
+        agent_set_voice_router_enabled(true);
+        printf("voice_router: ON (persisted to NVS)\n");
+        return 0;
+    }
+    if (strcmp(argv[1], "off") == 0) {
+        agent_set_voice_router_enabled(false);
+        printf("voice_router: OFF (persisted to NVS)\n");
+        return 0;
+    }
+
+    if (strcmp(argv[1], "test") == 0) {
+        if (argc < 3) {
+            printf("usage: voice_router test <query...>\n");
+            return 1;
+        }
+        /* Assemble argv[2..] back into one space-separated query */
+        char query[256] = {0};
+        size_t off = 0;
+        for (int i = 2; i < argc && off < sizeof(query) - 2; i++) {
+            if (i > 2 && off < sizeof(query) - 2) query[off++] = ' ';
+            size_t need = strlen(argv[i]);
+            size_t room = sizeof(query) - 1 - off;
+            if (need > room) need = room;
+            memcpy(query + off, argv[i], need);
+            off += need;
+            query[off] = '\0';
+        }
+
+        llm_router_mode_t mode = ROUTER_MODE_UNKNOWN;
+        char text[180] = {0};
+        char ack[64]   = {0};
+        int  latency   = 0;
+        esp_err_t e = llm_apfel_router_call(query, LANG_VOICE_ROUTER_TIMEOUT_MS,
+                                             &mode, text, sizeof(text),
+                                             ack, sizeof(ack), &latency);
+        if (e != ESP_OK) {
+            printf("router call failed: %s (latency=%dms)\n",
+                   esp_err_to_name(e), latency);
+            return 1;
+        }
+        printf("router: mode=%s  latency=%dms\n", llm_router_mode_name(mode), latency);
+        if (text[0]) printf("  text: %s\n", text);
+        if (ack[0])  printf("  ack:  %s\n", ack);
+        return 0;
+    }
+
+    printf("usage: voice_router [status | on | off | test <query>]\n");
+    return 1;
+}
+
 static int cmd_rate_limit(int argc, char **argv)
 {
     if (argc >= 2) {
@@ -1865,6 +1936,14 @@ esp_err_t serial_cli_init(void)
         .func    = &cmd_rate_limit,
     };
     esp_console_cmd_register(&rate_limit_cmd);
+
+    /* voice_router — kill switch + live test harness */
+    esp_console_cmd_t voice_router_cmd = {
+        .command = "voice_router",
+        .help    = "Voice router kill switch: voice_router [status|on|off|test <query>]",
+        .func    = &cmd_voice_router,
+    };
+    esp_console_cmd_register(&voice_router_cmd);
 
     ESP_ERROR_CHECK(esp_console_start_repl(repl));
     ESP_LOGI(TAG, "Serial CLI started");
