@@ -113,18 +113,91 @@ int agent_get_rate_count(void)
 #define WS_TOKEN_MIN_CHARS    8
 #define WS_TOKEN_MIN_US       150000
 
-/* Progress callback: sends token deltas to the WS client */
+/* Progress callback: sends token deltas to the WS client, and — for
+ * voice/Apfel turns — fires TTS seg A the moment a sentence boundary
+ * appears in the accumulating stream. See docs above strip_tts_unsafe_chars
+ * and find_first_sentence_end. */
 typedef struct {
     size_t   last_sent_len;
     uint64_t last_sent_us;
     char     chat_id[32];
     char     channel[16];
+
+    /* Streaming-TTS first-sentence split (voice + Apfel only).
+     * Apfel emits pure prose with no tool-call mid-stream, so we can
+     * safely fire TTS on the first sentence boundary. For Ollama/cloud
+     * the tool-call path makes early fire risky — leave the post-stream
+     * split in place for those. */
+    bool     tts_split_enabled;   /* set to is_voice && using_apfel && I2S */
+    bool     tts_seg_a_fired;
+    size_t   tts_split_at;        /* byte offset in raw stream where seg A ends */
+    char     tts_id_a[9];         /* TTS cache id for the already-playing seg A */
+    int64_t  tts_trigger_us;      /* esp_timer_get_time() when seg A was enqueued */
 } ws_stream_ctx_t;
+
+/* Forward declarations — helpers are defined further down the file. */
+static void strip_tts_unsafe_chars(char *inout);
+static size_t find_first_sentence_end(const char *text, size_t min_chars,
+                                       size_t max_chars, size_t min_tail);
+
+/* Called by ws_stream_progress once per delta. No-op unless voice+Apfel
+ * path has armed tts_split_enabled. Fires synchronously — the SSE reader
+ * blocks for the duration of tts_generate (~500-1500 ms for local Kokoro),
+ * but by the time we resume reading the remote LLM has usually finished
+ * emitting, so the rest of the stream drains fast. Net savings on
+ * time-to-first-speech ≈ duration of seg B's TTS call. */
+static void try_fire_streaming_tts_seg_a(const char *text, size_t len, ws_stream_ctx_t *sc)
+{
+    if (!sc->tts_split_enabled || sc->tts_seg_a_fired) return;
+    if (len < 40) return;
+
+    size_t split_at = find_first_sentence_end(text, 40, 220, 20);
+    if (split_at == 0) return;
+
+    /* Copy + emoji-strip seg A */
+    char seg_a[240];
+    size_t a_len = (split_at < sizeof(seg_a)) ? split_at : sizeof(seg_a) - 1;
+    memcpy(seg_a, text, a_len);
+    seg_a[a_len] = '\0';
+    strip_tts_unsafe_chars(seg_a);
+    if (seg_a[0] == '\0') return;  /* nothing speakable after strip */
+
+    int64_t t0 = esp_timer_get_time();
+    esp_err_t e = tts_generate(seg_a, sc->tts_id_a);
+    int64_t gen_ms = (esp_timer_get_time() - t0) / 1000;
+
+    if (e != ESP_OK || !sc->tts_id_a[0]) {
+        ESP_LOGW(TAG, "stream_tts: seg A gen failed (%s) — fallback to post-stream",
+                 esp_err_to_name(e));
+        sc->tts_split_enabled = false;  /* don't retry on later callbacks */
+        return;
+    }
+
+#if LANG_I2S_AUDIO_ENABLED
+    const uint8_t *wav_a = NULL;
+    size_t wav_a_len = 0;
+    if (tts_cache_get(sc->tts_id_a, &wav_a, &wav_a_len) == ESP_OK) {
+        i2s_audio_play_wav_async(wav_a, wav_a_len);
+        ESP_LOGI(TAG, "stream_tts: seg A playing (%u B wav, gen=%lldms, stream_len=%u, split=%u)",
+                 (unsigned)wav_a_len, gen_ms, (unsigned)len, (unsigned)split_at);
+    } else {
+        ESP_LOGW(TAG, "stream_tts: seg A cache miss — post-stream will re-fire");
+        sc->tts_split_enabled = false;
+        return;
+    }
+#endif
+    sc->tts_seg_a_fired = true;
+    sc->tts_split_at = split_at;
+    sc->tts_trigger_us = esp_timer_get_time();
+}
 
 static void ws_stream_progress(const char *text, size_t len, void *ctx)
 {
     ws_stream_ctx_t *sc = (ws_stream_ctx_t *)ctx;
     if (!sc || !sc->chat_id[0]) return;
+
+    /* Streaming-TTS fire (voice + Apfel only; callback itself gates) */
+    try_fire_streaming_tts_seg_a(text, len, sc);
 
     /* Only stream WebSocket channels — Telegram uses placeholder/edit */
     if (strcmp(sc->channel, "websocket") != 0) return;
@@ -159,6 +232,31 @@ static void ws_stream_progress(const char *text, size_t len, void *ctx)
  * Returns 0 when no suitable boundary is found — caller should fall back to
  * the single-shot TTS path.
  */
+/* Strip emoji and pictographs that Kokoro/PlayAI pronounce badly.
+ * In-place: removes 4-byte UTF-8 sequences (U+1F000-range) and
+ * U+2600-range pictographs starting with 0xE2 0x98+. Keeps ASCII and
+ * common accented letters intact. Mirrors the post-response cleanup
+ * so the streaming seg-A TTS doesn't speak emoji names. */
+static void strip_tts_unsafe_chars(char *inout)
+{
+    if (!inout) return;
+    char *dst = inout;
+    const char *src = inout;
+    while (*src) {
+        unsigned char c = (unsigned char)*src;
+        if (c >= 0xF0) {
+            int skip = 4;
+            while (skip > 1 && src[1] && ((unsigned char)src[1] & 0xC0) == 0x80) { src++; skip--; }
+            src++;
+        } else if (c == 0xE2 && src[1] && src[2] && (unsigned char)src[1] >= 0x98) {
+            src += 3;
+        } else {
+            *dst++ = *src++;
+        }
+    }
+    *dst = '\0';
+}
+
 static size_t find_first_sentence_end(const char *text, size_t min_chars,
                                        size_t max_chars, size_t min_tail)
 {
@@ -692,6 +790,8 @@ static void agent_loop_task(void *arg)
         ws_stream_ctx_t stream_ctx = { .last_sent_len = 0, .last_sent_us = 0 };
         strncpy(stream_ctx.chat_id, msg.chat_id, sizeof(stream_ctx.chat_id) - 1);
         strncpy(stream_ctx.channel, msg.channel, sizeof(stream_ctx.channel) - 1);
+        /* Streaming-TTS fields are zero-initialised above; tts_split_enabled
+         * is armed below only when we're about to call Apfel on a voice turn. */
 
         /* Smart routing: unified Apfel → Ollama → cloud hierarchy.
          * Both voice and text channels use the same tiered approach.
@@ -895,6 +995,27 @@ static void agent_loop_task(void *arg)
             llm_response_t resp;
             bool force_this_iter = (force_memory_tool && iteration == 0);
             const char *effective_tools = using_apfel ? NULL : tools_json;
+
+            /* Streaming-TTS seg A fire (Slice 1) — currently DORMANT.
+             *
+             * Design intent: fire TTS for the first sentence the moment a
+             * boundary appears in the streaming LLM deltas, so playback can
+             * start before the rest of the response arrives. Voice + Apfel +
+             * I2S only (Apfel emits pure prose with no tool_calls mid-stream).
+             *
+             * Why gated off: calling tts_generate() synchronously from inside
+             * the SSE reader callback blocks the ESP-IDF network stack for
+             * the full duration of the TTS HTTP call. On the 2026-04-21 soak
+             * this manifested as a ~42 s stall: local TTS timed out at 15 s,
+             * DNS then failed (getaddrinfo → EAI_AGAIN, 202), Groq fallback
+             * retried for another 27 s, and Telegram polling ran into
+             * ESP_ERR_HTTP_EAGAIN at the same moment. The post-stream
+             * 2-segment split (below, around line 1565) already works and
+             * is preserved. Slice 1b will re-enable this path with a
+             * background TTS worker task so the SSE reader keeps draining
+             * while seg A is being synthesized. */
+            stream_ctx.tts_split_enabled = false;
+
             err = llm_chat_tools_streaming(system_prompt, messages, effective_tools,
                                            force_this_iter && !using_apfel,
                                            ws_stream_progress, &stream_ctx,
@@ -907,6 +1028,11 @@ static void agent_loop_task(void *arg)
                     snprintf(rmsg, sizeof(rmsg), "LLM: %s — retrying...", esp_err_to_name(err));
                     ws_server_broadcast_monitor("error", rmsg);
                 }
+                /* On retry, disable streaming-TTS: if seg A already played
+                 * for the failed attempt, we live with the brief cut-off and
+                 * let post-stream do a single-shot TTS of the retry result.
+                 * Avoids seg B being sliced at a stale offset. */
+                stream_ctx.tts_split_enabled = false;
                 vTaskDelay(pdMS_TO_TICKS(250));  /* brief pause, then retry */
                 err = llm_chat_tools_streaming(system_prompt, messages, tools_json,
                                                force_this_iter,
@@ -1392,71 +1518,118 @@ static void agent_loop_task(void *arg)
                  * generate the remainder while segment A is already playing.
                  * Savings ≈ duration of segment B's TTS call (~300-800ms).
                  * Gate on I2S playback path — WS/Telegram-only voice would need
-                 * two tts_id events which the browser UI doesn't handle yet. */
+                 * two tts_id events which the browser UI doesn't handle yet.
+                 *
+                 * Slice 1 streaming-TTS: if stream_ctx.tts_seg_a_fired is true,
+                 * seg A was already generated + enqueued for playback from
+                 * inside the SSE callback. We only need to emit seg B here. */
                 size_t split_at = 0;
-#if LANG_I2S_AUDIO_ENABLED
-                split_at = find_first_sentence_end(tts_text, 40, 220, 20);
-#endif
                 esp_err_t tts_err = ESP_FAIL;
                 char tts_id_b[9] = {0};
 
-                if (split_at > 0) {
-                    /* Two-segment path */
-                    char seg_a[240];
-                    size_t a_len = (split_at < sizeof(seg_a)) ? split_at
-                                                               : sizeof(seg_a) - 1;
-                    memcpy(seg_a, tts_text, a_len);
-                    seg_a[a_len] = '\0';
-                    const char *seg_b = tts_text + split_at;
+                if (stream_ctx.tts_seg_a_fired) {
+                    /* Streaming-TTS path: seg A already generated + enqueued
+                     * from inside the SSE callback. Just emit seg B here. */
+                    split_at = stream_ctx.tts_split_at;
+                    size_t clean_len = strlen(tts_text);
+                    size_t b_start = (split_at < clean_len) ? split_at : clean_len;
+                    const char *seg_b = tts_text + b_start;
                     while (*seg_b == ' ' || *seg_b == '\n' || *seg_b == '\t') seg_b++;
 
-                    ESP_LOGI(TAG, "TTS split: A=%u chars, B=%u chars",
-                             (unsigned)a_len, (unsigned)strlen(seg_b));
+                    /* Copy seg A's id into the outer tts_id so the websocket
+                     * ws_server_send_with_tts call below points the browser
+                     * at playable audio. */
+                    strncpy(tts_id, stream_ctx.tts_id_a, sizeof(tts_id) - 1);
+                    tts_id[sizeof(tts_id) - 1] = '\0';
 
-                    tts_err = tts_generate(seg_a, tts_id);
+                    int64_t seg_a_head_ms =
+                        (esp_timer_get_time() - stream_ctx.tts_trigger_us) / 1000;
+                    ESP_LOGI(TAG, "stream_tts: seg B from split=%u, seg_a_head=%lldms",
+                             (unsigned)split_at, seg_a_head_ms);
 
-                    /* Kick off segment A playback immediately (async, on queue) */
-                    if (tts_err == ESP_OK && tts_id[0]) {
-#if LANG_I2S_AUDIO_ENABLED
-                        const uint8_t *wav_a = NULL;
-                        size_t wav_a_len = 0;
-                        if (tts_cache_get(tts_id, &wav_a, &wav_a_len) == ESP_OK) {
-                            ESP_LOGI(TAG, "Playing TTS seg A via I2S (%u bytes, async)",
-                                     (unsigned)wav_a_len);
-                            i2s_audio_play_wav_async(wav_a, wav_a_len);
-                        }
-#endif
-                        /* Generate segment B while A is already playing */
+                    if (*seg_b) {
                         esp_err_t tts_err_b = tts_generate(seg_b, tts_id_b);
                         if (tts_err_b == ESP_OK && tts_id_b[0]) {
 #if LANG_I2S_AUDIO_ENABLED
                             const uint8_t *wav_b = NULL;
                             size_t wav_b_len = 0;
                             if (tts_cache_get(tts_id_b, &wav_b, &wav_b_len) == ESP_OK) {
-                                ESP_LOGI(TAG, "Enqueue TTS seg B (%u bytes)",
+                                ESP_LOGI(TAG, "Enqueue TTS seg B (%u bytes, streaming path)",
                                          (unsigned)wav_b_len);
                                 i2s_audio_enqueue_wav(wav_b, wav_b_len);
                             }
 #endif
                         } else {
-                            ESP_LOGW(TAG, "TTS seg B failed: %s — seg A still plays",
+                            ESP_LOGW(TAG, "TTS seg B failed: %s — seg A already played",
                                      esp_err_to_name(tts_err_b));
                         }
+                    } else {
+                        ESP_LOGI(TAG, "stream_tts: no tail after split, seg A was the whole reply");
                     }
+                    tts_err = ESP_OK;  /* seg A already succeeded */
                 } else {
-                    /* Single-shot path (response too short or no clean boundary) */
-                    tts_err = tts_generate(tts_text, tts_id);
-
-                    if (tts_err == ESP_OK && tts_id[0]) {
 #if LANG_I2S_AUDIO_ENABLED
-                        const uint8_t *wav_buf = NULL;
-                        size_t wav_len = 0;
-                        if (tts_cache_get(tts_id, &wav_buf, &wav_len) == ESP_OK) {
-                            ESP_LOGI(TAG, "Playing TTS via I2S speaker (%u bytes, async)",
-                                     (unsigned)wav_len);
-                            i2s_audio_play_wav_async(wav_buf, wav_len);
-                        }
+                    split_at = find_first_sentence_end(tts_text, 40, 220, 20);
 #endif
+
+                    if (split_at > 0) {
+                        /* Two-segment post-stream path (Ollama/cloud fallback) */
+                        char seg_a[240];
+                        size_t a_len = (split_at < sizeof(seg_a)) ? split_at
+                                                                   : sizeof(seg_a) - 1;
+                        memcpy(seg_a, tts_text, a_len);
+                        seg_a[a_len] = '\0';
+                        const char *seg_b = tts_text + split_at;
+                        while (*seg_b == ' ' || *seg_b == '\n' || *seg_b == '\t') seg_b++;
+
+                        ESP_LOGI(TAG, "TTS split: A=%u chars, B=%u chars",
+                                 (unsigned)a_len, (unsigned)strlen(seg_b));
+
+                        tts_err = tts_generate(seg_a, tts_id);
+
+                        /* Kick off segment A playback immediately (async, on queue) */
+                        if (tts_err == ESP_OK && tts_id[0]) {
+#if LANG_I2S_AUDIO_ENABLED
+                            const uint8_t *wav_a = NULL;
+                            size_t wav_a_len = 0;
+                            if (tts_cache_get(tts_id, &wav_a, &wav_a_len) == ESP_OK) {
+                                ESP_LOGI(TAG, "Playing TTS seg A via I2S (%u bytes, async)",
+                                         (unsigned)wav_a_len);
+                                i2s_audio_play_wav_async(wav_a, wav_a_len);
+                            }
+#endif
+                            /* Generate segment B while A is already playing */
+                            esp_err_t tts_err_b = tts_generate(seg_b, tts_id_b);
+                            if (tts_err_b == ESP_OK && tts_id_b[0]) {
+#if LANG_I2S_AUDIO_ENABLED
+                                const uint8_t *wav_b = NULL;
+                                size_t wav_b_len = 0;
+                                if (tts_cache_get(tts_id_b, &wav_b, &wav_b_len) == ESP_OK) {
+                                    ESP_LOGI(TAG, "Enqueue TTS seg B (%u bytes)",
+                                             (unsigned)wav_b_len);
+                                    i2s_audio_enqueue_wav(wav_b, wav_b_len);
+                                }
+#endif
+                            } else {
+                                ESP_LOGW(TAG, "TTS seg B failed: %s — seg A still plays",
+                                         esp_err_to_name(tts_err_b));
+                            }
+                        }
+                    } else {
+                        /* Single-shot path (response too short or no clean boundary) */
+                        tts_err = tts_generate(tts_text, tts_id);
+
+                        if (tts_err == ESP_OK && tts_id[0]) {
+#if LANG_I2S_AUDIO_ENABLED
+                            const uint8_t *wav_buf = NULL;
+                            size_t wav_len = 0;
+                            if (tts_cache_get(tts_id, &wav_buf, &wav_len) == ESP_OK) {
+                                ESP_LOGI(TAG, "Playing TTS via I2S speaker (%u bytes, async)",
+                                         (unsigned)wav_len);
+                                i2s_audio_play_wav_async(wav_buf, wav_len);
+                            }
+#endif
+                        }
                     }
                 }
 
