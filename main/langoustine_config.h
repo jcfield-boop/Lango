@@ -218,15 +218,16 @@
  * Hot-reloadable prompt at /lfs/config/voice_router.md; compiled-in
  * fallback used when the file is missing or fails to parse.
  *
- * Timeout: hard 3000 ms on the HTTP call so we never starve a voice turn
+ * Timeout: hard 3500 ms on the HTTP call so we never starve a voice turn
  * on a stalled router — the agent falls back to the legacy routing path
  * on timeout. Measured ESP32 → Mac round-trip (warm Apfel, 1.8 KB prompt,
- * 96-tok max): 2000-2500 ms; bumped from the design's 800 ms after Slice 2
- * verify showed even warm Apfel consistently exceeded 1500 ms end-to-end
- * from the device (~1 s ESP32/WiFi overhead on top of ~1 s Apfel compute).
- * Still below the ~4-6 s cloud LLM baseline, so EAGLE economics hold. */
+ * 96-tok max): 2000-2500 ms typical, ~3000 ms P95; bumped from the design's
+ * 800 ms after Slice 2 verify (~1 s ESP32/WiFi overhead on top of ~1 s
+ * Apfel compute) and bumped again 3000 → 3500 in Slice 6 after a 3072 ms
+ * edge case timed out during "hi" verification. Still well below the
+ * ~4-6 s cloud LLM baseline, so EAGLE economics hold. */
 #define LANG_VOICE_ROUTER_FILE              "/lfs/config/voice_router.md"
-#define LANG_VOICE_ROUTER_TIMEOUT_MS        3000
+#define LANG_VOICE_ROUTER_TIMEOUT_MS        3500
 #define LANG_VOICE_ROUTER_ACK_MIN_MS        400
 #define LANG_VOICE_ROUTER_PROMPT_MAX_BYTES  2048   /* prompt + query fits here */
 #define LANG_VOICE_ROUTER_MAX_TOKENS        96     /* ack+text+mode json */
