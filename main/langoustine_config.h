@@ -238,9 +238,13 @@
     "as of my knowledge|i'm not sure|i don't know|might be|could be|i think"
 
 /* Time-sensitive tokens — DIRECT answers containing these are likely
- * misclassifications; promote to RACE. */
+ * misclassifications; promote to RACE. Dropped bare "today" from the
+ * design spec: Apfel uses it in polite greetings ("how can I assist
+ * you today") which tripped every DIRECT-clean turn. "currently"
+ * still catches hallucinated factual answers ("Paris is currently
+ * 18°C"). "live score/price" catches sports/markets freshness cues. */
 #define LANG_VOICE_ROUTER_TIMELY_TOKENS \
-    "today|current|right now|near me|just now|recent"
+    "currently|right now|near me|just now|live score|live price"
 
 /* Web Search */
 #define LANG_TAVILY_BUF_SIZE         (32 * 1024)

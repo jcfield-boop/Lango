@@ -423,6 +423,189 @@ static size_t find_first_sentence_end(const char *text, size_t min_chars,
     return 0;
 }
 
+/* ── Slice 3: hedge detection for DIRECT-mode router answers ────────
+ * Checks a lowercased copy of `text` against a pipe-separated pattern
+ * string. A hit signals the router was unsure or the query is time-
+ * sensitive — caller should promote DIRECT → RACE (ack + run cloud in
+ * parallel so its answer wins over the router's guess).
+ *
+ * Patterns are compiled in from LANG_VOICE_ROUTER_{HEDGE,TIMELY}
+ * (langoustine_config.h). Pipe-split + strstr — O(n*m) but n,m are both
+ * < 200 chars so negligible versus the 1-3 s cloud LLM latency. */
+static bool text_contains_any_lc(const char *text, const char *patterns)
+{
+    if (!text || !patterns) return false;
+    /* Lowercase a bounded copy of text — hedge phrases are short so
+     * capping at 512 chars covers every DIRECT response (prompt rule
+     * caps them at 40 words ~= 250 chars). */
+    char lc[512];
+    size_t n = strlen(text);
+    if (n >= sizeof(lc)) n = sizeof(lc) - 1;
+    for (size_t i = 0; i < n; i++) lc[i] = (char)tolower((unsigned char)text[i]);
+    lc[n] = '\0';
+    /* Walk pipe-delimited patterns */
+    const char *p = patterns;
+    while (*p) {
+        const char *end = strchr(p, '|');
+        size_t plen = end ? (size_t)(end - p) : strlen(p);
+        if (plen > 0 && plen < 64) {
+            char pat[64];
+            memcpy(pat, p, plen);
+            pat[plen] = '\0';
+            if (strstr(lc, pat)) return true;
+        }
+        p = end ? end + 1 : p + plen;
+    }
+    return false;
+}
+
+static bool voice_router_text_hedges(const char *text)
+{
+    return text_contains_any_lc(text, LANG_VOICE_ROUTER_HEDGE_PATTERNS) ||
+           text_contains_any_lc(text, LANG_VOICE_ROUTER_TIMELY_TOKENS);
+}
+
+/* ── Slice 3: router dispatch result ───────────────────────────────
+ * Shared struct so the caller can skip the LLM (DIRECT) or decorate
+ * the streaming-TTS context (TOOLS/RACE) without chasing multiple out-
+ * params. `owns_final_text` tells the caller to use the struct's text
+ * as-is (already strdup'd, caller owns). */
+typedef struct {
+    bool                shortcut_direct;   /* skip ReAct loop; final_text populated */
+    bool                ack_played;        /* seg-A ack in flight via i2s queue */
+    char               *final_text;        /* heap, transferred to caller on shortcut */
+    char                ack_tts_id[9];     /* for stream_ctx seg-B handoff */
+    int64_t             ack_trigger_us;    /* for seg_a_head_ms log */
+    llm_router_mode_t   mode;
+    int                 latency_ms;
+    const char         *reason;            /* short telemetry string */
+} voice_router_result_t;
+
+/* Call Apfel router (Slice 2 helper), apply hedge check, fire ack TTS if
+ * TOOLS/RACE. Best-effort: on any error leaves *out.shortcut_direct=false
+ * and *out.ack_played=false so the caller transparently falls through to
+ * the legacy Apfel→Ollama→cloud tier chain.
+ *
+ * Runs synchronously — router deadline is LANG_VOICE_ROUTER_TIMEOUT_MS
+ * (3000 ms end-to-end budget measured ESP32→Mac→ESP32, see config notes).
+ * TTS for ack adds ~400-800 ms (cached Kokoro warm path) before the seg A
+ * audio starts playing — that time runs IN PARALLEL with the agent turn
+ * setup, so it's not strict additive latency. */
+static void voice_router_try_dispatch(const char *query,
+                                      const char *chat_id,
+                                      voice_router_result_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->mode = ROUTER_MODE_UNKNOWN;
+    out->reason = "init";
+
+    if (!query || !query[0]) { out->reason = "empty-query"; return; }
+
+    /* Apfel offline → skip router, let legacy chain handle it */
+    if (!llm_apfel_health_check()) {
+        out->reason = "apfel-offline";
+        ESP_LOGI(TAG, "voice_router: apfel offline, falling through to legacy routing");
+        return;
+    }
+
+    char text[220] = {0};
+    char ack[64]   = {0};
+    int  latency   = 0;
+    esp_err_t e = llm_apfel_router_call(query, LANG_VOICE_ROUTER_TIMEOUT_MS,
+                                         &out->mode, text, sizeof(text),
+                                         ack, sizeof(ack), &latency);
+    out->latency_ms = latency;
+
+    if (e != ESP_OK) {
+        out->reason = (e == ESP_ERR_TIMEOUT) ? "timeout" : esp_err_to_name(e);
+        ESP_LOGW(TAG, "voice_router: apfel call failed (%s, %dms) — legacy fallback",
+                 out->reason, latency);
+        return;
+    }
+
+    ESP_LOGI(TAG, "voice_router: mode=%s latency=%dms text='%.60s' ack='%.40s'",
+             llm_router_mode_name(out->mode), latency,
+             text[0] ? text : "(none)", ack[0] ? ack : "(none)");
+
+    /* Hedge check on DIRECT — promote to RACE if the text hedges or
+     * references time-sensitive material. Treated downstream like TOOLS
+     * (ack + cloud); the cloud answer supersedes the router guess. */
+    if (out->mode == ROUTER_MODE_DIRECT && voice_router_text_hedges(text)) {
+        ESP_LOGI(TAG, "voice_router: hedge detected in DIRECT text, escalating to RACE");
+        out->mode = ROUTER_MODE_RACE;
+        /* Keep the provisional text around but treat it like RACE — ack
+         * plays first, cloud fires in parallel and writes the real answer. */
+        if (!ack[0]) {
+            /* Router didn't provide an ack for DIRECT. Fabricate a neutral one. */
+            strncpy(ack, "One moment…", sizeof(ack) - 1);
+        }
+    }
+
+    if (out->mode == ROUTER_MODE_DIRECT && text[0]) {
+        /* Clean-DIRECT shortcut: the router answer IS the final response. */
+        out->final_text = strdup(text);
+        if (!out->final_text) {
+            ESP_LOGW(TAG, "voice_router: strdup OOM on DIRECT text — falling through");
+            out->reason = "oom";
+            return;
+        }
+        out->shortcut_direct = true;
+        out->reason = "DIRECT-clean";
+        return;
+    }
+
+    if ((out->mode == ROUTER_MODE_TOOLS || out->mode == ROUTER_MODE_RACE) && ack[0]) {
+        /* Fire ack TTS and start playback immediately. seg B (the cloud
+         * answer) will be enqueued by the existing voice-TTS path once
+         * the ReAct loop finalises final_text. */
+        char tts_id[9] = {0};
+        int64_t t0 = esp_timer_get_time();
+        esp_err_t te = tts_generate(ack, tts_id);
+        int64_t gen_ms = (esp_timer_get_time() - t0) / 1000;
+        if (te != ESP_OK || !tts_id[0]) {
+            ESP_LOGW(TAG, "voice_router: ack TTS failed (%s, %lldms) — cloud runs without ack",
+                     esp_err_to_name(te), gen_ms);
+            out->reason = "ack-tts-fail";
+            /* Mode stays TOOLS/RACE but ack_played stays false; legacy
+             * routing will run cloud with no audible preamble (today's UX). */
+            return;
+        }
+#if LANG_I2S_AUDIO_ENABLED
+        const uint8_t *wav = NULL;
+        size_t wav_len = 0;
+        if (tts_cache_get(tts_id, &wav, &wav_len) == ESP_OK) {
+            i2s_audio_play_wav_async(wav, wav_len);
+            ESP_LOGI(TAG, "voice_router: ack seg A playing (%u B, tts=%lldms, mode=%s)",
+                     (unsigned)wav_len, gen_ms, llm_router_mode_name(out->mode));
+            out->ack_played = true;
+            out->ack_trigger_us = t0;
+            memcpy(out->ack_tts_id, tts_id, sizeof(out->ack_tts_id));
+            out->reason = (out->mode == ROUTER_MODE_TOOLS) ? "TOOLS-ack" : "RACE-ack";
+        } else {
+            ESP_LOGW(TAG, "voice_router: ack tts_cache miss — cloud runs without ack");
+            out->reason = "ack-cache-miss";
+        }
+#else
+        /* No I2S — just note the ack for browser display; browser gets the
+         * tts_id via stream_ctx handoff too. */
+        out->ack_played = true;
+        out->ack_trigger_us = t0;
+        memcpy(out->ack_tts_id, tts_id, sizeof(out->ack_tts_id));
+        out->reason = "ack-no-i2s";
+#endif
+        /* Push ack text to the browser transcript too so the user sees
+         * "Checking the weather…" immediately. */
+        if (chat_id && chat_id[0]) {
+            ws_server_send_token(chat_id, ack);
+        }
+        return;
+    }
+
+    /* Mode is valid but we have nothing actionable (e.g. TOOLS with no ack).
+     * Fall through to legacy routing; router was advisory only. */
+    out->reason = "no-action";
+}
+
 static cJSON *build_assistant_content(const llm_response_t *resp)
 {
     cJSON *content = cJSON_CreateArray();
@@ -946,6 +1129,66 @@ static void agent_loop_task(void *arg)
         bool using_voice_cloud  = false;
         bool is_voice           = (strcmp(msg.chat_id, "ptt") == 0);
 
+        /* ── Slice 3: EAGLE voice router dispatch ───────────────────
+         * Voice turn + kill switch on + no image + not a memory trigger
+         * → let Apfel classify the query. On DIRECT the router answer is
+         * the final reply (skip the ReAct loop). On TOOLS/RACE an ack is
+         * played via I2S immediately and the existing tier chain runs the
+         * full answer as seg B. Any failure falls through transparently. */
+        voice_router_result_t router = {0};
+        bool router_direct_shortcut = false;
+        if (is_voice && agent_voice_router_enabled() && !turn_has_image &&
+            !force_memory_tool &&
+            strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0) {
+            voice_router_try_dispatch(msg.content, msg.chat_id, &router);
+            if (router.shortcut_direct && router.final_text) {
+                router_direct_shortcut = true;
+                final_text   = router.final_text;      /* ownership transferred */
+                router.final_text = NULL;
+                /* Mark Apfel as the handler so auto-email skip logic fires
+                 * (Apfel answers are short by design — never essays). */
+                using_apfel = true;
+                ESP_LOGI(TAG, "voice_router: DIRECT shortcut — skipping ReAct loop");
+                ws_server_broadcast_monitor("llm", "voice_router: DIRECT (bypass)");
+            } else if (router.ack_played) {
+                /* Prime stream_ctx so the voice-TTS finaliser treats the
+                 * ack as seg A and enqueues cloud response as seg B. */
+                strncpy(stream_ctx.tts_job.tts_id, router.ack_tts_id,
+                        sizeof(stream_ctx.tts_job.tts_id) - 1);
+                stream_ctx.tts_job.tts_id[sizeof(stream_ctx.tts_job.tts_id) - 1] = '\0';
+                atomic_store(&stream_ctx.tts_job.state, 1);
+                atomic_store(&stream_ctx.tts_job.abandoned, false);
+                stream_ctx.tts_task_spawned = true;
+                stream_ctx.tts_split_at     = 0;   /* full cloud text = seg B */
+                stream_ctx.tts_trigger_us   = router.ack_trigger_us;
+                ESP_LOGI(TAG, "voice_router: %s — ack playing, cloud runs as seg B",
+                         llm_router_mode_name(router.mode));
+                ws_server_broadcast_monitor("llm",
+                    router.mode == ROUTER_MODE_TOOLS
+                        ? "voice_router: TOOLS (ack + cloud)"
+                        : "voice_router: RACE (ack + cloud)");
+            } else {
+                /* Router advised but produced nothing actionable. Log +
+                 * continue to legacy routing. */
+                ESP_LOGI(TAG, "voice_router: fall-through (%s, %dms)",
+                         router.reason, router.latency_ms);
+            }
+            /* Push router telemetry to OLED slot 2 (previously unused).
+             * Plan spec said "slot 4" but the display has 4 slots indexed
+             * 0-3; slot 2 was the empty one. */
+            char oled_v[22];
+            if (router_direct_shortcut) {
+                snprintf(oled_v, sizeof(oled_v), "v:D %dms", router.latency_ms);
+            } else if (router.ack_played) {
+                snprintf(oled_v, sizeof(oled_v), "v:%c %dms+cloud",
+                         router.mode == ROUTER_MODE_TOOLS ? 'T' : 'R',
+                         router.latency_ms);
+            } else {
+                snprintf(oled_v, sizeof(oled_v), "v:- %s", router.reason);
+            }
+            oled_display_set_rotate_line(2, oled_v);
+        }
+
         if (strcmp(msg.channel, LANG_CHAN_SYSTEM) == 0) {
             /* System/heartbeat/cron → always cloud, pinned to a known-reliable model.
              * openrouter/auto occasionally routes to content-restricted models that
@@ -1005,7 +1248,13 @@ static void agent_loop_task(void *arg)
                                (strcasestr(msg.content, "price of")    != NULL) ||
                                (strcasestr(msg.content, "how much is") != NULL) ||
                                (strcasestr(msg.content, "near me")     != NULL) ||
-                               force_memory_tool || turn_has_image;
+                               force_memory_tool || turn_has_image ||
+                               /* Slice 3: router said TOOLS/RACE → must hit
+                                * a tool-capable tier (Ollama/cloud), never
+                                * Apfel which has no tool schemas. */
+                               (router.ack_played &&
+                                (router.mode == ROUTER_MODE_TOOLS ||
+                                 router.mode == ROUTER_MODE_RACE));
 
             if (is_complex) {
                 /* Complex → cloud directly */
@@ -1082,7 +1331,10 @@ static void agent_loop_task(void *arg)
                                           llm_apfel_is_online());
         }
 
-        while (iteration < LANG_AGENT_MAX_TOOL_ITER) {
+        /* Slice 3: router DIRECT shortcut already populated final_text —
+         * skip the entire ReAct loop so we proceed straight to the voice
+         * TTS dispatch. The while body becomes a no-op in this case. */
+        while (!router_direct_shortcut && iteration < LANG_AGENT_MAX_TOOL_ITER) {
             /* Soft per-turn timeout.
              * WebSocket browser turns get 3 min — enough for tool chains while
              * giving the user fast feedback.
