@@ -1129,6 +1129,24 @@ static void agent_loop_task(void *arg)
         bool using_voice_cloud  = false;
         bool is_voice           = (strcmp(msg.chat_id, "ptt") == 0);
 
+        /* Complex-query early bypass: briefing/email/search/research are
+         * always multi-tool ReAct turns. Sending them through the voice
+         * router is a misclassification trap — Apfel (3B, no tool support)
+         * tends to return DIRECT with a short conversational stub like
+         * "Sure, here's your briefing…" and the actual skill never runs.
+         * Detect the keywords here and skip the router so these go straight
+         * down the legacy tier chain (which forces cloud for is_complex). */
+        bool router_skip_complex = (is_voice && (
+            strcasestr(msg.content, "briefing")    != NULL ||
+            strcasestr(msg.content, "morning update") != NULL ||
+            strcasestr(msg.content, "daily update")   != NULL ||
+            strcasestr(msg.content, "what's new")  != NULL ||
+            strcasestr(msg.content, "web search")  != NULL ||
+            strcasestr(msg.content, "search for")  != NULL ||
+            strcasestr(msg.content, " email")      != NULL ||
+            strcasestr(msg.content, "send email")  != NULL ||
+            strcasestr(msg.content, "research")    != NULL));
+
         /* ── Slice 3: EAGLE voice router dispatch ───────────────────
          * Voice turn + kill switch on + no image + not a memory trigger
          * → let Apfel classify the query. On DIRECT the router answer is
@@ -1138,7 +1156,7 @@ static void agent_loop_task(void *arg)
         voice_router_result_t router = {0};
         bool router_direct_shortcut = false;
         if (is_voice && agent_voice_router_enabled() && !turn_has_image &&
-            !force_memory_tool &&
+            !force_memory_tool && !router_skip_complex &&
             strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0) {
             voice_router_try_dispatch(msg.content, msg.chat_id, &router);
             if (router.shortcut_direct && router.final_text) {
@@ -1187,6 +1205,9 @@ static void agent_loop_task(void *arg)
                 snprintf(oled_v, sizeof(oled_v), "v:- %s", router.reason);
             }
             oled_display_set_rotate_line(2, oled_v);
+        } else if (is_voice && router_skip_complex) {
+            ESP_LOGI(TAG, "voice_router: skipped (complex query → legacy tier)");
+            oled_display_set_rotate_line(2, "v:- complex");
         }
 
         if (strcmp(msg.channel, LANG_CHAN_SYSTEM) == 0) {
