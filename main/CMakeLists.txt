@@ -55,6 +55,7 @@ idf_component_register(
         "telegram/telegram_bot.c"
         "camera/uvc_camera.c"
         "tools/tool_capture_image.c"
+        "tools/tool_frame_tv.c"
         "led/led_indicator.c"
         "display/ssd1306.c"
         "display/oled_display.c"
@@ -69,5 +70,5 @@ idf_component_register(
         esp_https_ota esp_event json console vfs app_update esp-tls
         driver esp_timer esp_driver_tsens espressif__mdns joltwallet__littlefs
         mbedtls usb espressif__usb_host_uvc usb_host_uac espressif__esp-sr
-        78__esp-opus
+        78__esp-opus esp_partition espcoredump
 )

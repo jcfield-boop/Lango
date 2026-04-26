@@ -1,4 +1,5 @@
 #include "ws_server.h"
+#include "memory/session_mgr.h"
 #include "langoustine_config.h"
 #include "bus/message_bus.h"
 #include "llm/llm_proxy.h"
@@ -32,6 +33,8 @@
 #include "esp_littlefs.h"
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
+#include "esp_partition.h"
+#include "esp_core_dump.h"
 #include "esp_app_desc.h"
 #include "agent/agent_loop.h"
 #include "tools/tool_device_temp.h"
@@ -868,6 +871,116 @@ static esp_err_t crashlog_delete_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── GET / DELETE /api/coredump ───────────────────────────────────
+ * The coredump partition (64KB at 0x820000 in partitions_s3_32mb.csv)
+ * is automatically populated by ESP-IDF on panic when
+ * CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y. These endpoints expose it:
+ *   GET  /api/coredump        → raw ELF bytes (octet-stream); 404 if none
+ *   GET  /api/coredump/info   → JSON {present, size_bytes, partition_size}
+ *   DELETE /api/coredump      → erase the partition
+ *
+ * Decode on the host with:
+ *   curl -o cd.elf http://192.168.0.44/api/coredump
+ *   espcoredump.py info_corefile -t elf -c cd.elf build/langoustine.elf
+ */
+
+static esp_err_t coredump_info_handler(httpd_req_t *req)
+{
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    apply_cors(req);
+
+    const esp_partition_t *part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, NULL);
+    if (!part) {
+        httpd_resp_sendstr(req, "{\"present\":false,\"error\":\"no coredump partition\"}");
+        return ESP_OK;
+    }
+
+    size_t addr = 0, size = 0;
+    esp_err_t e = esp_core_dump_image_get(&addr, &size);
+    bool present = (e == ESP_OK && size > 0);
+
+    char body[160];
+    snprintf(body, sizeof(body),
+             "{\"present\":%s,\"size_bytes\":%u,\"partition_size\":%u,\"err\":\"%s\"}",
+             present ? "true" : "false",
+             (unsigned)size,
+             (unsigned)part->size,
+             present ? "ok" : esp_err_to_name(e));
+    httpd_resp_sendstr(req, body);
+    return ESP_OK;
+}
+
+static esp_err_t coredump_get_handler(httpd_req_t *req)
+{
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
+    /* Check first that a valid dump exists. */
+    size_t addr = 0, size = 0;
+    esp_err_t e = esp_core_dump_image_get(&addr, &size);
+    if (e != ESP_OK || size == 0) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No coredump present");
+        return ESP_OK;
+    }
+
+    const esp_partition_t *part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, NULL);
+    if (!part) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no coredump partition");
+        return ESP_OK;
+    }
+
+    /* esp_core_dump_image_get() returns an absolute flash address; we want the
+     * offset within the coredump partition for esp_partition_read(). */
+    size_t off = (addr >= part->address) ? (addr - part->address) : 0;
+    if (off + size > part->size) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "coredump out of range");
+        return ESP_OK;
+    }
+
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"coredump.elf\"");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    apply_cors(req);
+
+    /* Stream in 1KB chunks; coredump partition is 64KB max. */
+    uint8_t chunk[1024];
+    size_t remaining = size;
+    while (remaining > 0) {
+        size_t n = remaining > sizeof(chunk) ? sizeof(chunk) : remaining;
+        if (esp_partition_read(part, off, chunk, n) != ESP_OK) {
+            /* Can't send err once chunks started — just abort the stream. */
+            break;
+        }
+        if (httpd_resp_send_chunk(req, (const char *)chunk, (ssize_t)n) != ESP_OK) break;
+        off += n;
+        remaining -= n;
+    }
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
+static esp_err_t coredump_delete_handler(httpd_req_t *req)
+{
+    if (!request_is_authed(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
+    httpd_resp_set_type(req, "application/json");
+    apply_cors(req);
+
+    esp_err_t e = esp_core_dump_image_erase();
+    if (e == ESP_OK) {
+        httpd_resp_sendstr(req, "{\"ok\":true,\"erased\":true}");
+    } else {
+        char body[96];
+        snprintf(body, sizeof(body), "{\"ok\":false,\"err\":\"%s\"}", esp_err_to_name(e));
+        httpd_resp_sendstr(req, body);
+    }
+    return ESP_OK;
+}
+
 /* ── POST /api/file ──────────────────────────────────────────── */
 
 static esp_err_t file_post_handler(httpd_req_t *req)
@@ -975,6 +1088,34 @@ static esp_err_t file_post_handler(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     apply_cors(req);
     httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+/* ── DELETE /api/session?chat_id=<id> ──────────────��────────── */
+
+static esp_err_t session_clear_handler(httpd_req_t *req)
+{
+    if (!request_is_authed(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+        return ESP_OK;
+    }
+
+    char chat_id[64] = "ptt";   /* default: clear PTT/voice session */
+    char query[128]  = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        httpd_query_key_value(query, "chat_id", chat_id, sizeof(chat_id));
+    }
+
+    esp_err_t err = session_clear(chat_id);
+    session_cache_invalidate(chat_id);
+
+    httpd_resp_set_type(req, "application/json");
+    if (err == ESP_OK) {
+        ESP_LOGI("ws_server", "Session cleared via HTTP: %s", chat_id);
+        httpd_resp_sendstr(req, "{\"ok\":true}");
+    } else {
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"not found or already empty\"}");
+    }
     return ESP_OK;
 }
 
@@ -2057,7 +2198,7 @@ esp_err_t ws_server_start(void)
     cfg.ctrl_port                  = LANG_WS_PORT + 1;
     cfg.max_open_sockets           = 8;
     cfg.stack_size                 = 8192;
-    cfg.max_uri_handlers           = 28;  /* 27 handlers registered + 1 spare */
+    cfg.max_uri_handlers           = 29;  /* 28 handlers registered + 1 spare */
     cfg.send_wait_timeout          = 30;
     cfg.recv_wait_timeout          = 120;  /* extended: WS ping keeps connection alive */
     cfg.uri_match_fn               = httpd_uri_match_wildcard;
@@ -2111,9 +2252,20 @@ esp_err_t ws_server_start(void)
     httpd_uri_t crashlog_del_uri  = { .uri = "/api/crashlog", .method = HTTP_DELETE, .handler = crashlog_delete_handler };
     httpd_register_uri_handler(s_server, &crashlog_del_uri);
 
+    /* Coredump — binary panic dump from the coredump partition. */
+    httpd_uri_t coredump_info_uri = { .uri = "/api/coredump/info", .method = HTTP_GET,    .handler = coredump_info_handler };
+    httpd_register_uri_handler(s_server, &coredump_info_uri);
+    httpd_uri_t coredump_get_uri  = { .uri = "/api/coredump",      .method = HTTP_GET,    .handler = coredump_get_handler };
+    httpd_register_uri_handler(s_server, &coredump_get_uri);
+    httpd_uri_t coredump_del_uri  = { .uri = "/api/coredump",      .method = HTTP_DELETE, .handler = coredump_delete_handler };
+    httpd_register_uri_handler(s_server, &coredump_del_uri);
+
     /* Reboot */
     httpd_uri_t reboot_uri = { .uri = "/api/reboot", .method = HTTP_POST, .handler = reboot_handler };
     httpd_register_uri_handler(s_server, &reboot_uri);
+
+    httpd_uri_t session_clear_uri = { .uri = "/api/session", .method = HTTP_DELETE, .handler = session_clear_handler };
+    httpd_register_uri_handler(s_server, &session_clear_uri);
 
     /* Heartbeat */
     httpd_uri_t heartbeat_uri = { .uri = "/api/heartbeat", .method = HTTP_POST, .handler = heartbeat_handler };

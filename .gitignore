@@ -24,3 +24,4 @@ managed_components/
 # Python cache
 __pycache__/
 *.pyc
+.elf-archive/
