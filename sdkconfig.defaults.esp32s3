@@ -128,7 +128,13 @@ CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
 
-# sys_evt task stack: default 2304 can overflow on WiFi disconnect bursts
-# (reason=34 disassoc) while cleaning up httpd sockets. Would like 4096 but
-# SRAM is too tight — agent(28K)+telegram(8K)+heartbeat(4K) leaves no room.
-# Keeping default 2304 until SRAM budget improves.
+# sys_evt task stack: 4096 (default 2304 was too small).
+# Confirmed via espcoredump on 2026-04-26: panic with "stack overflow in task
+# sys_evt" during outbound-TCP collapse + WiFi reconnect burst. Backtrace
+# stopped at vTaskSwitchContext during context-switch overflow detection.
+# SRAM headroom at panic time: heap_min=73 KB, heap_free=80 KB — plenty
+# of room for the +1.7 KB bump that the prior engineer's comment was
+# worried about. Also bumping queue 32→64 so a reconnect burst doesn't
+# drop events under load.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+CONFIG_ESP_SYSTEM_EVENT_QUEUE_SIZE=64
