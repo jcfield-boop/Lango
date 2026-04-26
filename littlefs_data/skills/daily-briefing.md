@@ -18,10 +18,12 @@ Also useful as a heartbeat/cron task.
 5. Compile a concise briefing covering:
    - Date and time
    - Weather in San Francisco (use web_search "SF weather today")
-   - Market snapshot — use **separate** web_search calls so the model attends to each:
-       a. `web_search "ARM Holdings ARM stock price today"`
-       b. `web_search "NASDAQ composite index today"`
-       c. `web_search "GBP USD exchange rate today"`
+   - Market snapshot — fire all three web_search calls **IN PARALLEL** as one
+     assistant turn (i.e. multiple tool_use blocks in the same response, NOT
+     sequential turns — the agent has a 10-iteration cap):
+       1. `web_search "ARM Holdings ARM stock price today"`
+       2. `web_search "NASDAQ composite index today"`
+       3. `web_search "GBP USD exchange rate today"`
      **CRITICAL: if a search result does NOT contain a clearly-stated current
      numeric value (e.g. "GBP/USD: 1.27" or "1.27 USD per GBP"), report
      "rate unavailable" for that metric. Do NOT estimate, guess, or fall
