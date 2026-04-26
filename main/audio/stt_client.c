@@ -414,7 +414,16 @@ esp_err_t stt_client_init(void)
     if (!s_session.valid) {
         esp_err_t err = http_session_init(&s_session, s_endpoint,
                                           http_event_cb,
-                                          10 * 1000, 4096, 4096);
+                                          /* 4s instead of 10s — fail-fast on
+                                           * stuck local LAN sockets. mlx-audio
+                                           * Whisper normally responds in ~3-9s
+                                           * but stuck connect() takes 40s+ via
+                                           * EALREADY before lwIP gives up. The
+                                           * caller falls back to cloud Groq
+                                           * on any local failure, so faster
+                                           * give-up = better latency under
+                                           * flaky wifi. */
+                                          4 * 1000, 4096, 4096);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "STT http_session_init failed: %s", esp_err_to_name(err));
         }

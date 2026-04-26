@@ -1807,8 +1807,13 @@ esp_err_t llm_chat_tools_streaming(const char *system_prompt,
         if (!s_cloud_session.valid || strcmp(s_cloud_url, url) != 0) {
             if (s_cloud_session.valid) http_session_deinit(&s_cloud_session);
             strncpy(s_cloud_url, url, sizeof(s_cloud_url) - 1);
+            /* 30s (was 60s) — covers ~99% of cloud LLM first-byte under
+             * healthy wifi while halving the worst-case stuck-connection
+             * wait. timeout_ms is per-network-op so the full streaming
+             * window can extend much longer; this only bites on connect
+             * + first byte. The agent has its own retry layer above us. */
             http_session_init(&s_cloud_session, s_cloud_url,
-                              sse_http_event_handler, 60 * 1000, 4096, 4096);
+                              sse_http_event_handler, 30 * 1000, 4096, 4096);
         }
         if (!s_cloud_session.valid) {
             sse_state_free(st);
