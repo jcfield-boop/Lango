@@ -527,6 +527,27 @@ static void voice_router_try_dispatch(const char *query,
              llm_router_mode_name(out->mode), latency,
              text[0] ? text : "(none)", ack[0] ? ack : "(none)");
 
+    /* Ack-sanitisation: Apfel sometimes jams a hallucinated answer into the
+     * ack field on TOOLS/RACE turns ("San Francisco tomorrow will be 75°F"
+     * was observed 2026-04-26 16:38). The ack is supposed to be a generic
+     * "working on it" preamble — never an answer — because the router has
+     * no live data. If the ack contains any digit it is almost certainly
+     * fabricated content (no legit ack like "Checking the weather…" needs
+     * a number). Override with a neutral template so the user never hears
+     * a hallucinated value. The cloud will deliver the real answer as seg B. */
+    if ((out->mode == ROUTER_MODE_TOOLS || out->mode == ROUTER_MODE_RACE) && ack[0]) {
+        bool ack_has_digit = false;
+        for (const char *p = ack; *p; p++) {
+            if (*p >= '0' && *p <= '9') { ack_has_digit = true; break; }
+        }
+        if (ack_has_digit) {
+            ESP_LOGW(TAG, "voice_router: ack contained digits ('%.40s'), substituting generic — likely hallucination",
+                     ack);
+            strncpy(ack, "One moment…", sizeof(ack) - 1);
+            ack[sizeof(ack) - 1] = '\0';
+        }
+    }
+
     /* Hedge check on DIRECT — promote to RACE if the text hedges or
      * references time-sensitive material. Treated downstream like TOOLS
      * (ack + cloud); the cloud answer supersedes the router guess. */
