@@ -572,11 +572,16 @@ void app_main(void)
 
             /* Agent watchdog: lightweight Core 0 task that force-restarts
              * the device if the agent is stuck for >10 min.  Small SRAM
-             * stack (2KB) — only reads atomics, logs, calls esp_restart().
+             * stack 4096 (was 2048 — overflowed 2026-04-26 16:50 panic
+             * while logging the "agent stuck" path, where ESP_LOGE with
+             * format strings + ws_server_broadcast_monitor's JSON encode
+             * + httpd client iteration easily push past 2 KB). The
+             * watchdog body looks slim but the failure path does heavy
+             * work; 4 KB has plenty of headroom for everything it does.
              * Must be SRAM: PSRAM-stacked tasks can silently hang when
              * the SPI bus is contended during flash/PSRAM operations. */
             xTaskCreatePinnedToCore(
-                agent_watchdog_task, "ag_wdog", 2048, NULL,
+                agent_watchdog_task, "ag_wdog", 4096, NULL,
                 2, NULL, 0);
 
             /* All services up — mark OTA slot valid so rollback is cancelled.
