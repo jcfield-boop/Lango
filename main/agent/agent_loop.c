@@ -760,9 +760,16 @@ static cJSON *build_tool_results(const llm_response_t *resp, const lang_msg_t *m
         int tasks_spawned = 0;
         TaskHandle_t self = xTaskGetCurrentTaskHandle();
 
-        /* SRAM guard: (16KB stack + 12KB TLS) per task + 28KB safety floor */
+        /* SRAM guard: (16KB stack + 12KB TLS) per task + safety floor.
+         * Floor was 28672 (28KB) with the original 2304-byte sys_evt stack.
+         * After the 2026-04-26 sys_evt 2304→4096 + ag_wdog 2048→4096 bumps
+         * the SRAM baseline shifted ~4 KB, pushing typical idle heap_free
+         * just under n=2's 86 KB threshold (observed 79.4-79.6 KB on the
+         * 04-27/04-28 soak, every parallel decision dropping to sequential).
+         * Trim safety floor to 20480 (20KB) — still leaves ~5 KB headroom
+         * above what the worst-case turn has needed historically. */
         uint32_t free_sram = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-        uint32_t par_needed = (uint32_t)n * (16384u + 12288u) + 28672u;
+        uint32_t par_needed = (uint32_t)n * (16384u + 12288u) + 20480u;
         if (free_sram < par_needed) {
             char wmsg[96];
             snprintf(wmsg, sizeof(wmsg),
