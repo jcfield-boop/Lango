@@ -1297,6 +1297,38 @@ static void agent_loop_task(void *arg)
                                (strcasestr(msg.content, "price of")    != NULL) ||
                                (strcasestr(msg.content, "how much is") != NULL) ||
                                (strcasestr(msg.content, "near me")     != NULL) ||
+                               /* Device-state / IoT / 3D printer queries — these
+                                * need klipper_request/ha_request/gpio/etc tools
+                                * that Apfel can't call. Without these keywords,
+                                * "Check on my 3D printer" routed to Apfel which
+                                * fabricated a confident reply with 0 tool calls
+                                * (observed 2026-04-26 19:59 telegram trace). */
+                               (strcasestr(msg.content, "printer")     != NULL) ||
+                               (strcasestr(msg.content, "klipper")     != NULL) ||
+                               (strcasestr(msg.content, "3d print")    != NULL) ||
+                               (strcasestr(msg.content, "print job")   != NULL) ||
+                               (strcasestr(msg.content, "light")       != NULL) ||
+                               (strcasestr(msg.content, "lamp")        != NULL) ||
+                               (strcasestr(msg.content, "thermostat")  != NULL) ||
+                               (strcasestr(msg.content, "heating")     != NULL) ||
+                               (strcasestr(msg.content, "home assistant") != NULL) ||
+                               (strcasestr(msg.content, "frame tv")    != NULL) ||
+                               (strcasestr(msg.content, " art ")       != NULL) ||
+                               (strcasestr(msg.content, "wall ")       != NULL) ||
+                               (strcasestr(msg.content, "buoy")        != NULL) ||
+                               (strcasestr(msg.content, "surf")        != NULL) ||
+                               (strcasestr(msg.content, "gpio")        != NULL) ||
+                               (strcasestr(msg.content, "reboot")      != NULL) ||
+                               (strcasestr(msg.content, "restart")     != NULL) ||
+                               /* "Check on/the/my/X" is a common stem for device-state
+                                * questions ("Check on my 3D printer", "Check the
+                                * lights"). High recall, low precision — false
+                                * positives just route to cloud, no harm done. */
+                               (strcasestr(msg.content, "check on")    != NULL) ||
+                               (strcasestr(msg.content, "check the")   != NULL) ||
+                               (strcasestr(msg.content, "check my")    != NULL) ||
+                               (strcasestr(msg.content, "how is it")   != NULL) ||
+                               (strcasestr(msg.content, "how's it")    != NULL) ||
                                force_memory_tool || turn_has_image ||
                                /* Slice 3: router said TOOLS/RACE → must hit
                                 * a tool-capable tier (Ollama/cloud), never
