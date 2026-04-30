@@ -5,6 +5,7 @@
 #include "agent/agent_loop.h"
 #include "audio/wake_word.h"
 #include "display/oled_display.h"
+#include "telegram/telegram_bot.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -121,8 +122,13 @@ esp_err_t ota_update_from_url(const char *url)
     oled_display_set_ota(0, "Downloading");
 
     /* Suspend wake word feed task — it competes for Core 0 CPU and SPI bus
-     * during flash erase/write cycles, causing progressive OTA slowdown. */
+     * during flash erase/write cycles, causing progressive OTA slowdown.
+     * Also suspend the Telegram polling loop: its getUpdates long-poll
+     * holds an outbound TCP/TLS session continuously and steals wifi
+     * bandwidth from the OTA download (observed status=unreachable
+     * during 04-29/04-30 OTA attempts even with healthy RSSI). */
     wake_word_suspend();
+    telegram_bot_suspend();
 
     esp_http_client_config_t http_cfg = {
         .url                   = url,
@@ -148,6 +154,7 @@ esp_err_t ota_update_from_url(const char *url)
         status_set(OTA_STATE_ERROR, 0, NULL, msg);
         led_indicator_set(LED_ERROR);
         wake_word_resume();
+        telegram_bot_resume();
         return ret;
     }
 
@@ -163,6 +170,7 @@ esp_err_t ota_update_from_url(const char *url)
         status_set(OTA_STATE_ERROR, 0, NULL, msg);
         led_indicator_set(LED_ERROR);
         wake_word_resume();
+        telegram_bot_resume();
         return ret;
     }
     {
@@ -236,6 +244,7 @@ esp_err_t ota_update_from_url(const char *url)
         oled_display_set_ota(-1, NULL);
         led_indicator_set(LED_ERROR);
         wake_word_resume();
+        telegram_bot_resume();
         return ret;
     }
 

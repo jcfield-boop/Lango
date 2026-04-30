@@ -49,3 +49,14 @@ esp_err_t telegram_remove_allowed_id(const char *id);
 /** Print the current allowlist to stdout. */
 void telegram_list_allowed_ids(void);
 
+/**
+ * Suspend / resume the Telegram polling loop.
+ * Used by ota_manager during OTA download to free up wifi/lwIP
+ * bandwidth — without this, the bot's getUpdates long-poll competes
+ * with the OTA download for outbound TCP and slows it dramatically.
+ * Idempotent. While suspended the polling task vTaskDelay's in 1s
+ * slices and skips the actual HTTP call.
+ */
+void telegram_bot_suspend(void);
+void telegram_bot_resume(void);
+

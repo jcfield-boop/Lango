@@ -2198,7 +2198,14 @@ esp_err_t ws_server_start(void)
     cfg.ctrl_port                  = LANG_WS_PORT + 1;
     cfg.max_open_sockets           = 8;
     cfg.stack_size                 = 8192;
-    cfg.max_uri_handlers           = 29;  /* 28 handlers registered + 1 spare */
+    cfg.max_uri_handlers           = 40;  /* 31 currently registered (added
+                                            * /api/coredump*3 in 04-25 session
+                                            * silently overflowed the prior 29
+                                            * cap — last-registered handlers
+                                            * including /api/ota/status dropped
+                                            * → every OTA poll got 404 → script
+                                            * timed out for days). 40 gives
+                                            * 9 spare for future growth. */
     cfg.send_wait_timeout          = 30;
     cfg.recv_wait_timeout          = 120;  /* extended: WS ping keeps connection alive */
     cfg.uri_match_fn               = httpd_uri_match_wildcard;

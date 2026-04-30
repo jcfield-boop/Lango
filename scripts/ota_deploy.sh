@@ -105,14 +105,25 @@ if ! echo "$RESPONSE" | grep -q '"ok":true'; then
 fi
 
 # ── 6. Poll /api/ota/status until rebooting, then confirm comeback ──
-# ESP32 OTA via WiFi typically runs at 10-20 KB/s due to OTA buffer and yield overhead.
-# Allow ~30 KB/s pessimistic + 90s margin for agent-idle wait + reboot grace.
-MAX_WAIT=$((BINARY_SIZE / 10000 + 90))   # ~10 KB/s pessimistic + generous margin
+# ESP32 OTA via WiFi runs at 4-15 KB/s depending on wifi quality + OTA
+# buffer + flash erase cycles. Allow 4 KB/s pessimistic + 180s margin
+# for agent-idle wait + verify + reboot grace. Soak on 04-30 (with the
+# URI-cap fix that finally exposed real progress numbers): a 2.2 MB
+# binary reached 89% in 428 s under degraded wifi → ~5 KB/s effective.
+# Round down further to 4 KB/s to stay safe under really bad days.
+# 2.2 MB / 4000 + 180 ≈ 730 s.
+MAX_WAIT=$((BINARY_SIZE / 4000 + 180))
 echo "==> Polling OTA status (up to ${MAX_WAIT}s)..."
+
+# Fallback uptime baseline — if /api/ota/status keeps timing out (httpd
+# starved during OTA download is common), we fall back to /api/sysinfo
+# which is smaller (~400 B) and more likely to respond. A drop in
+# uptime relative to PRE_UPTIME proves the OTA reboot landed.
 
 REBOOTING=0
 OTA_ATTEMPT=1
 POLL_START=$(date +%s)
+UNREACHABLE_STREAK=0
 
 while true; do
     ELAPSED=$(( $(date +%s) - POLL_START ))
@@ -153,6 +164,24 @@ while true; do
         fi
         echo "ERROR: OTA failed on device (attempt $OTA_ATTEMPT): $ERR" >&2
         exit 1
+    fi
+
+    # When status polls keep failing (httpd starved by OTA download),
+    # fall back to /api/sysinfo which is smaller and faster to serve.
+    # A drop in uptime relative to PRE_UPTIME proves OTA succeeded.
+    if [ "$STATUS" = "?" ] || [ "$STATUS" = "unreachable" ]; then
+        UNREACHABLE_STREAK=$((UNREACHABLE_STREAK + 1))
+        if [ "$UNREACHABLE_STREAK" -ge 5 ] && [ "$ELAPSED" -ge 60 ]; then
+            POST_UPTIME_PROBE=$(curl -s --connect-timeout 2 --max-time 4 "http://$DEVICE_HOST/api/sysinfo" \
+                | python3 -c "import sys,json; print(json.load(sys.stdin)['uptime_s'])" 2>/dev/null || echo "-1")
+            if [ "$POST_UPTIME_PROBE" -ge 0 ] && [ "$POST_UPTIME_PROBE" -lt "$PRE_UPTIME" ] 2>/dev/null; then
+                printf "\r    sysinfo probe: uptime ${POST_UPTIME_PROBE}s < pre-OTA ${PRE_UPTIME}s — device rebooted, OTA complete\n"
+                exit 0
+            fi
+            UNREACHABLE_STREAK=0
+        fi
+    else
+        UNREACHABLE_STREAK=0
     fi
 
     sleep 4

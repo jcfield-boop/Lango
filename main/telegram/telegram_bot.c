@@ -9,6 +9,12 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdatomic.h>
+
+/* OTA-coordinated suspend flag. Defined here, set/cleared by
+ * telegram_bot_suspend / telegram_bot_resume. Read by the polling
+ * task at the top of each iteration. */
+static _Atomic bool s_polling_paused = false;
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
@@ -442,6 +448,14 @@ static void telegram_poll_task(void *arg)
             continue;
         }
 
+        /* Suspend gate: ota_manager flips this on during firmware download
+         * so the bot's getUpdates long-poll doesn't steal wifi/lwIP from
+         * the OTA HTTP client. Sleep 1s and re-check; cheap. */
+        if (atomic_load(&s_polling_paused)) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
         char params[128];
         snprintf(params, sizeof(params),
                  "getUpdates?offset=%" PRId64 "&timeout=%d",
@@ -457,6 +471,20 @@ static void telegram_poll_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(backoff_s * 1000));
             if (backoff_s < 60) backoff_s *= 2;
         }
+    }
+}
+
+void telegram_bot_suspend(void)
+{
+    if (!atomic_exchange(&s_polling_paused, true)) {
+        ESP_LOGI(TAG, "polling suspended (e.g. for OTA download)");
+    }
+}
+
+void telegram_bot_resume(void)
+{
+    if (atomic_exchange(&s_polling_paused, false)) {
+        ESP_LOGI(TAG, "polling resumed");
     }
 }
 

@@ -495,10 +495,12 @@ esp_err_t stt_transcribe(const uint8_t *audio, size_t audio_len,
     char auth[STT_API_KEY_MAX + 16];
     snprintf(auth, sizeof(auth), "Bearer %s", s_api_key);
 
-    /* Reuse persistent session (lazy init fallback if init was skipped) */
+    /* Reuse persistent session (lazy init fallback if init was skipped).
+     * Note: this lazy path is rarely hit (init runs at boot) — it covers
+     * config-reload edge cases. Same 4s tighten as the main init at line 415. */
     if (!s_session.valid) {
         http_session_init(&s_session, s_endpoint, http_event_cb,
-                          10 * 1000, 4096, 4096);
+                          4 * 1000, 4096, 4096);
     }
     if (!s_session.valid) {
         free(body);
