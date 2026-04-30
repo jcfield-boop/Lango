@@ -4,6 +4,7 @@
 #include "proxy/http_proxy.h"
 #include "gateway/ws_server.h"
 #include "memory/psram_alloc.h"
+#include "wifi/wifi_recovery.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -242,10 +243,12 @@ static char *tg_api_call_direct(const char *method, const char *post_data)
 
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "HTTP request failed: %s", esp_err_to_name(err));
+        wifi_recovery_record_failure("telegram");
         free(resp.buf);
         return NULL;
     }
 
+    wifi_recovery_record_success("telegram");
     return resp.buf;
 }
 

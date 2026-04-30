@@ -3,6 +3,7 @@ idf_component_register(
         "langoustine.c"
         "bus/message_bus.c"
         "wifi/wifi_manager.c"
+        "wifi/wifi_recovery.c"
         "wifi/wifi_onboard.c"
         "llm/llm_proxy.c"
         "agent/agent_loop.c"

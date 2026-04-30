@@ -18,6 +18,7 @@
 #include "langoustine_config.h"
 #include "bus/message_bus.h"
 #include "wifi/wifi_manager.h"
+#include "wifi/wifi_recovery.h"
 #include "memory/psram_alloc.h"
 #include "cJSON.h"
 #include "llm/llm_proxy.h"
@@ -533,6 +534,13 @@ void app_main(void)
         if (wifi_manager_wait_connected(30000) == ESP_OK) {
             ESP_LOGI(TAG, "WiFi connected: %s", wifi_manager_get_ip());
             oled_display_set_ip(wifi_manager_get_ip());
+
+            /* Arm auto-recovery: tracks consecutive outbound HTTP
+             * failures across telegram/llm/stt/tts and triggers a
+             * disconnect+connect when the threshold is crossed.
+             * Spawned here (post wifi-connected) so the worker doesn't
+             * race the initial association. */
+            wifi_recovery_init();
 
             /* Advertise via mDNS */
             mdns_init();

@@ -1307,6 +1307,15 @@ static void agent_loop_task(void *arg)
                                (strcasestr(msg.content, "klipper")     != NULL) ||
                                (strcasestr(msg.content, "3d print")    != NULL) ||
                                (strcasestr(msg.content, "print job")   != NULL) ||
+                               (strcasestr(msg.content, "print stat")  != NULL) ||
+                               (strcasestr(msg.content, "print prog")  != NULL) ||
+                               (strcasestr(msg.content, "moonraker")   != NULL) ||
+                               (strcasestr(msg.content, "filament")    != NULL) ||
+                               (strcasestr(msg.content, "extruder")    != NULL) ||
+                               (strcasestr(msg.content, "hotend")      != NULL) ||
+                               (strcasestr(msg.content, "bed temp")    != NULL) ||
+                               (strcasestr(msg.content, "gcode")       != NULL) ||
+                               (strcasestr(msg.content, "voron")       != NULL) ||
                                (strcasestr(msg.content, "light")       != NULL) ||
                                (strcasestr(msg.content, "lamp")        != NULL) ||
                                (strcasestr(msg.content, "thermostat")  != NULL) ||

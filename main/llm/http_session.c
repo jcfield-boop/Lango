@@ -1,4 +1,5 @@
 #include "llm/http_session.h"
+#include "wifi/wifi_recovery.h"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
 
@@ -87,6 +88,9 @@ esp_err_t http_session_perform(http_session_t *s)
         ESP_LOGW(TAG, "Request failed (%s), resetting session for next call",
                  esp_err_to_name(ret));
         http_session_reset(s);
+        wifi_recovery_record_failure("http_session");
+    } else {
+        wifi_recovery_record_success("http_session");
     }
     return ret;
 }
