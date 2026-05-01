@@ -1,5 +1,6 @@
 ## User
 - Name: James
+- Email: jcfield@gmail.com (use this for any send_email tool call)
 - Role: Product Marketing Manager at Arm.com
 - Timezone: PST
 - **Home:** 1438 Valencia St, San Francisco

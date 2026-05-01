@@ -11,6 +11,7 @@ Personalized 06:20 PDT weekday briefing for James. Fires from cron (brief001).
 5. `web_search "NASDAQ today"` — market context.
 6. **Only on Fri/Sat/Sun:** `noaa_buoy` station 46012 for Pacifica surf (buoy in metres; Linda Mar ≈ 60% of buoy reading; beginner limit 3 ft).
 7. `send_email` with:
+   - to: `jcfield@gmail.com`
    - subject: `☀️ Lango Morning Briefing — [weekday, date]`
    - body: under 400 words, sections in this order:
      - 📈 **ARM & Markets** (ARMH price, NASDAQ snapshot)
