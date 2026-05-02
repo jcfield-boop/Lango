@@ -232,7 +232,21 @@ static void bootstrap_defaults(void)
         "- [ ] Get the current time and write a one-line system status entry to today's daily note.\n");
 }
 
-/* Outbound dispatch task: reads from outbound queue and routes to channels */
+/* Outbound dispatch task: reads from outbound queue and routes to channels.
+ *
+ * Resilience: telegram sends now retry up to LANG_TG_SEND_RETRIES times
+ * with backoff before giving up. Telegram's getUpdates polling and
+ * sendMessage share the same TLS path; transient wifi/DNS hiccups
+ * (the recurring environmental issue 2026-04-25 onwards) made many
+ * sendMessage calls fail outright. WebSocket retries are NOT
+ * attempted — if the client is gone, retrying just leaks. */
+#ifndef LANG_TG_SEND_RETRIES
+#define LANG_TG_SEND_RETRIES   2
+#endif
+#ifndef LANG_TG_SEND_RETRY_MS
+#define LANG_TG_SEND_RETRY_MS  3000
+#endif
+
 static void outbound_dispatch_task(void *arg)
 {
     ESP_LOGI(TAG, "Outbound dispatch started");
@@ -249,9 +263,21 @@ static void outbound_dispatch_task(void *arg)
                 ESP_LOGW(TAG, "WS send failed for %s: %s", msg.chat_id, esp_err_to_name(ws_err));
             }
         } else if (strcmp(msg.channel, LANG_CHAN_TELEGRAM) == 0) {
-            esp_err_t tg_err = telegram_send_message(msg.chat_id, msg.content);
+            esp_err_t tg_err = ESP_FAIL;
+            for (int attempt = 0; attempt <= LANG_TG_SEND_RETRIES; attempt++) {
+                tg_err = telegram_send_message(msg.chat_id, msg.content);
+                if (tg_err == ESP_OK) break;
+                if (attempt < LANG_TG_SEND_RETRIES) {
+                    ESP_LOGW(TAG, "TG send failed for %s (attempt %d/%d), retrying in %dms",
+                             msg.chat_id, attempt + 1, LANG_TG_SEND_RETRIES + 1,
+                             LANG_TG_SEND_RETRY_MS);
+                    vTaskDelay(pdMS_TO_TICKS(LANG_TG_SEND_RETRY_MS));
+                }
+            }
             if (tg_err != ESP_OK) {
-                ESP_LOGW(TAG, "TG send failed for %s", msg.chat_id);
+                ESP_LOGE(TAG, "TG send permanently failed for %s after %d attempts",
+                         msg.chat_id, LANG_TG_SEND_RETRIES + 1);
+                ws_server_broadcast_monitor("error", "Telegram send dropped after retries");
             }
         } else if (strcmp(msg.channel, LANG_CHAN_SYSTEM) == 0) {
             ESP_LOGI(TAG, "System message [%s]: %.128s", msg.chat_id, msg.content);
@@ -580,16 +606,19 @@ void app_main(void)
 
             /* Agent watchdog: lightweight Core 0 task that force-restarts
              * the device if the agent is stuck for >10 min.  Small SRAM
-             * stack 4096 (was 2048 — overflowed 2026-04-26 16:50 panic
-             * while logging the "agent stuck" path, where ESP_LOGE with
-             * format strings + ws_server_broadcast_monitor's JSON encode
-             * + httpd client iteration easily push past 2 KB). The
-             * watchdog body looks slim but the failure path does heavy
-             * work; 4 KB has plenty of headroom for everything it does.
+             * stack 8192 (was 4096, originally 2048).
+             * 2 KB overflowed in the 2026-04-26 16:50 panic while
+             * logging the "agent stuck" path. 4 KB held but code review
+             * 2026-05-02 flagged it as still tight for any failure path
+             * that touches ESP_LOGE + format strings + ws_server_broadcast_monitor
+             * (JSON encode + iterate ws clients) + esp_restart prep —
+             * could easily blow >4 KB under network turbulence. 8 KB
+             * gives 2× safety margin and matches the floor used by
+             * other I/O-touching tasks (telegram, etc).
              * Must be SRAM: PSRAM-stacked tasks can silently hang when
              * the SPI bus is contended during flash/PSRAM operations. */
             xTaskCreatePinnedToCore(
-                agent_watchdog_task, "ag_wdog", 4096, NULL,
+                agent_watchdog_task, "ag_wdog", 8192, NULL,
                 2, NULL, 0);
 
             /* All services up — mark OTA slot valid so rollback is cancelled.

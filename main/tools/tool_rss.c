@@ -11,7 +11,13 @@
 
 static const char *TAG = "tool_rss";
 
-#define RSS_BUF_SIZE    (16 * 1024)
+/* HTTP receive buffer for the raw feed XML/Atom. Lives in PSRAM via
+ * ps_malloc, so size isn't tight against SRAM. Bumped 16→32 KB on
+ * 2026-05-02 after every daily-briefing rss_fetch was hitting the
+ * cap (consistently 16383 bytes from hnrss.org/frontpage = items
+ * silently dropped). Real feeds rarely exceed ~25 KB after normal
+ * RSS payloads; 32 KB has 25% headroom. */
+#define RSS_BUF_SIZE    (32 * 1024)
 #define RSS_MAX_ITEMS   10
 #define RSS_FIELD_MAX   256
 #define RSS_SUMMARY_MAX 200
@@ -22,6 +28,7 @@ typedef struct {
     char *data;
     int   len;
     int   cap;
+    int   dropped;   /* bytes silently discarded because we hit cap */
 } rss_buf_t;
 
 static esp_err_t rss_http_event_cb(esp_http_client_event_t *evt)
@@ -29,7 +36,12 @@ static esp_err_t rss_http_event_cb(esp_http_client_event_t *evt)
     rss_buf_t *r = (rss_buf_t *)evt->user_data;
     if (evt->event_id == HTTP_EVENT_ON_DATA) {
         int copy = evt->data_len;
-        if (r->len + copy > r->cap - 1) copy = r->cap - 1 - r->len;
+        if (r->len + copy > r->cap - 1) {
+            int max_copy = r->cap - 1 - r->len;
+            if (max_copy < 0) max_copy = 0;
+            r->dropped += (copy - max_copy);
+            copy = max_copy;
+        }
         if (copy > 0) {
             memcpy(r->data + r->len, evt->data, copy);
             r->len += copy;
@@ -287,7 +299,7 @@ esp_err_t tool_rss_execute(const char *input_json, char *output, size_t output_s
     }
     buf[0] = '\0';
 
-    rss_buf_t rb = { .data = buf, .len = 0, .cap = RSS_BUF_SIZE };
+    rss_buf_t rb = { .data = buf, .len = 0, .cap = RSS_BUF_SIZE, .dropped = 0 };
 
     esp_http_client_config_t cfg = {
         .url               = url,
@@ -322,7 +334,15 @@ esp_err_t tool_rss_execute(const char *input_json, char *output, size_t output_s
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "RSS: fetched %d bytes from %s", rb.len, url);
+    if (rb.dropped > 0) {
+        /* Feed exceeded our 16 KB buffer — surface this to the caller so
+         * the LLM knows the parsed item set may be incomplete. Daily
+         * briefings hit this consistently on hnrss.org/frontpage. */
+        ESP_LOGW(TAG, "RSS: TRUNCATED — fetched %d bytes, dropped %d (feed > %d B cap) from %s",
+                 rb.len, rb.dropped, RSS_BUF_SIZE, url);
+    } else {
+        ESP_LOGI(TAG, "RSS: fetched %d bytes from %s", rb.len, url);
+    }
 
     /* Parse feed */
     rss_item_t items[RSS_MAX_ITEMS];

@@ -400,12 +400,26 @@ static void cron_process_due_jobs(void)
         strncpy(msg.chat_id, job->chat_id, sizeof(msg.chat_id) - 1);
         msg.content = strdup(job->message);
 
+        bool dispatched = false;
         if (msg.content) {
             esp_err_t err = message_bus_push_inbound(&msg);
             if (err != ESP_OK) {
-                ESP_LOGW(TAG, "Failed to push cron message: %s", esp_err_to_name(err));
+                ESP_LOGW(TAG, "Failed to push cron message: %s — leaving job to retry on next tick",
+                         esp_err_to_name(err));
                 free(msg.content);
+            } else {
+                dispatched = true;
             }
+        } else {
+            ESP_LOGW(TAG, "strdup OOM on cron message — leaving job to retry on next tick");
+        }
+
+        /* If the dispatch failed (queue full, OOM), DON'T advance last_run /
+         * next_run. The job stays "due" so the next heartbeat tick retries.
+         * Without this, a single transient queue full would silently drop
+         * a daily briefing for the whole day. */
+        if (!dispatched) {
+            continue;
         }
 
         /* Update state */
