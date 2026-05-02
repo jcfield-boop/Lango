@@ -11,12 +11,25 @@
 
 static const char *TAG = "wifi_recovery";
 
-/* Threshold: trigger a reconnect after this many consecutive outbound
- * HTTP failures with no successes in between. Five was chosen so a
- * single transient blip (1-2 fails) doesn't kick a reconnect, but a
- * genuine stuck association (5+ fails over a few minutes) does. */
+/* Two trigger paths:
+ *  (a) Consecutive: N fails in a row (no success in between) → fast
+ *      path for outright wifi-stuck-association cases.
+ *  (b) Sliding window: ≥M fails in last W attempts → catches
+ *      flaky-but-not-dead patterns like 2026-05-01 17:06-17:39 where
+ *      8 telegram polls failed across 33 min interleaved with
+ *      successes (consecutive counter reset every 1-2 attempts and
+ *      never crossed the threshold; user observed message delays).
+ * Either path signals the worker. The window length must be small
+ * enough to actually accumulate (telegram polls ~every 30s under
+ * load, so a 10-attempt window spans ~5 min wall clock). */
 #ifndef LANG_WIFI_RECOVERY_THRESHOLD
 #define LANG_WIFI_RECOVERY_THRESHOLD 5
+#endif
+#ifndef LANG_WIFI_RECOVERY_WINDOW_SIZE
+#define LANG_WIFI_RECOVERY_WINDOW_SIZE  10  /* must be ≤ 16 — packed in low bits of s_ring */
+#endif
+#ifndef LANG_WIFI_RECOVERY_WINDOW_FAILS
+#define LANG_WIFI_RECOVERY_WINDOW_FAILS 5   /* ≥5 fails in last 10 → trigger */
 #endif
 
 /* Cooldown: don't trigger another reconnect within this window after
@@ -29,6 +42,12 @@ static const char *TAG = "wifi_recovery";
 static _Atomic int  s_consecutive_failures = 0;
 static _Atomic bool s_in_progress          = false;
 static _Atomic int64_t s_last_recovery_us  = 0;
+
+/* Sliding-window ring buffer of the last WINDOW_SIZE outcomes, packed:
+ *   bits  0-15: ring (bit i = 1 if attempt i was a failure)
+ *   bits 16-19: write index (0..WINDOW_SIZE-1)
+ * Atomic CAS update so multiple subsystems can record concurrently. */
+static _Atomic uint32_t s_ring = 0;
 static SemaphoreHandle_t s_trigger_sem     = NULL;
 static TaskHandle_t      s_worker          = NULL;
 static bool              s_initialised     = false;
@@ -47,6 +66,7 @@ static void recovery_worker(void *arg)
             ESP_LOGI(TAG, "skip — within %ds cooldown of last reconnect",
                      LANG_WIFI_RECOVERY_COOLDOWN_MS / 1000);
             atomic_store(&s_consecutive_failures, 0);
+            atomic_store(&s_ring, 0);
             atomic_store(&s_in_progress, false);
             continue;
         }
@@ -54,8 +74,11 @@ static void recovery_worker(void *arg)
         atomic_store(&s_in_progress, true);
         atomic_store(&s_last_recovery_us, now);
 
-        ESP_LOGW(TAG, "*** triggering wifi reconnect after %d consecutive failures",
-                 atomic_load(&s_consecutive_failures));
+        uint32_t r = atomic_load(&s_ring);
+        int win_fails = __builtin_popcount(r & ((1u << LANG_WIFI_RECOVERY_WINDOW_SIZE) - 1));
+        ESP_LOGW(TAG, "*** triggering wifi reconnect (consec=%d, window=%d/%d)",
+                 atomic_load(&s_consecutive_failures),
+                 win_fails, LANG_WIFI_RECOVERY_WINDOW_SIZE);
 
         /* Disassociate and reassociate. esp_wifi_disconnect tears down
          * the IP layer (DHCP lease released, DNS resolvers cleared);
@@ -71,11 +94,12 @@ static void recovery_worker(void *arg)
         esp_err_t e2 = esp_wifi_connect();
         ESP_LOGI(TAG, "esp_wifi_connect → %s", esp_err_to_name(e2));
 
-        /* Reset counter regardless of disconnect/connect return codes —
+        /* Reset counters regardless of disconnect/connect return codes —
          * the wifi_manager's STA_DISCONNECTED handler will keep retrying
          * if e2 didn't take. We just want to stop counting failures
          * stacked up before this point. */
         atomic_store(&s_consecutive_failures, 0);
+        atomic_store(&s_ring, 0);
 
         /* Hold the in-progress flag for ~3s after connect to give DHCP
          * + DNS time to settle before any caller fires another request.
@@ -111,9 +135,29 @@ esp_err_t wifi_recovery_init(void)
     }
 
     s_initialised = true;
-    ESP_LOGI(TAG, "armed (threshold=%d, cooldown=%ds)",
-             LANG_WIFI_RECOVERY_THRESHOLD, LANG_WIFI_RECOVERY_COOLDOWN_MS / 1000);
+    ESP_LOGI(TAG, "armed (consec=%d, window=%d/%d, cooldown=%ds)",
+             LANG_WIFI_RECOVERY_THRESHOLD,
+             LANG_WIFI_RECOVERY_WINDOW_FAILS, LANG_WIFI_RECOVERY_WINDOW_SIZE,
+             LANG_WIFI_RECOVERY_COOLDOWN_MS / 1000);
     return ESP_OK;
+}
+
+/* Push one bit (1=fail, 0=success) into the sliding-window ring and
+ * return the count of failures currently in the ring. Atomic via CAS
+ * loop so concurrent record_* calls from telegram/llm/etc. compose. */
+static int ring_record(bool failure)
+{
+    uint32_t old, new_val;
+    do {
+        old = atomic_load(&s_ring);
+        uint32_t idx  = (old >> 16) & 0xF;
+        uint32_t bits = old & ((1u << LANG_WIFI_RECOVERY_WINDOW_SIZE) - 1);
+        bits &= ~(1u << idx);                /* clear slot we're overwriting */
+        if (failure) bits |= (1u << idx);    /* set if this attempt failed */
+        idx = (idx + 1) % LANG_WIFI_RECOVERY_WINDOW_SIZE;
+        new_val = (idx << 16) | bits;
+    } while (!atomic_compare_exchange_weak(&s_ring, &old, new_val));
+    return __builtin_popcount(new_val & ((1u << LANG_WIFI_RECOVERY_WINDOW_SIZE) - 1));
 }
 
 void wifi_recovery_record_failure(const char *who)
@@ -122,15 +166,27 @@ void wifi_recovery_record_failure(const char *who)
     if (atomic_load(&s_in_progress)) return;
 
     int n = atomic_fetch_add(&s_consecutive_failures, 1) + 1;
-    ESP_LOGD(TAG, "fail from %s → %d/%d",
-             who ? who : "?", n, LANG_WIFI_RECOVERY_THRESHOLD);
+    int win = ring_record(true);
+    ESP_LOGD(TAG, "fail from %s → consec=%d/%d window=%d/%d",
+             who ? who : "?", n, LANG_WIFI_RECOVERY_THRESHOLD,
+             win, LANG_WIFI_RECOVERY_WINDOW_FAILS);
 
+    /* Path (a): consecutive failures (fast path on outright stuck wifi). */
     if (n >= LANG_WIFI_RECOVERY_THRESHOLD) {
-        ESP_LOGW(TAG, "threshold reached (%d consecutive fails, last from %s) — signalling worker",
+        ESP_LOGW(TAG, "consec threshold reached (%d in a row, last from %s) — signalling worker",
                  n, who ? who : "?");
-        /* Signal — worker will pick it up. xSemaphoreGive from any
-         * task context is safe; from ISR we'd need FromISR variant
-         * but no caller is in ISR context. */
+        xSemaphoreGive(s_trigger_sem);
+        return;
+    }
+
+    /* Path (b): sliding-window failure rate. Catches interleaved
+     * fail/success patterns that don't trip the consecutive counter
+     * but still indicate a degraded link (the 2026-05-01 17:06-17:39
+     * Telegram cluster). */
+    if (win >= LANG_WIFI_RECOVERY_WINDOW_FAILS) {
+        ESP_LOGW(TAG, "window threshold reached (%d/%d fails in last %d, last from %s) — signalling worker",
+                 win, LANG_WIFI_RECOVERY_WINDOW_FAILS,
+                 LANG_WIFI_RECOVERY_WINDOW_SIZE, who ? who : "?");
         xSemaphoreGive(s_trigger_sem);
     }
 }
@@ -139,7 +195,10 @@ void wifi_recovery_record_success(const char *who)
 {
     (void)who;
     if (!s_initialised) return;
-    /* Cheap success: only do the atomic store if non-zero, so the hot
+    ring_record(false);  /* push 0 into the ring — a success doesn't
+                          * by itself wipe the window, only ages out
+                          * old failures by displacing them. */
+    /* Cheap consec-reset: only do the atomic store if non-zero, so the hot
      * path (every successful HTTP) skips a write. */
     if (atomic_load(&s_consecutive_failures) > 0) {
         atomic_store(&s_consecutive_failures, 0);
