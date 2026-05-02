@@ -1045,6 +1045,26 @@ static void agent_loop_task(void *arg)
             ws_server_broadcast_monitor("task", mon);
         }
 
+        /* Persist the user message NOW, before the ReAct loop runs.
+         * Previously the session was only saved at end-of-turn (line
+         * ~1912). If the agent then panicked, was watchdog-killed, or
+         * hit the soft per-turn timeout mid-iteration, the user's
+         * message was lost — next turn started with no record the
+         * user had spoken at all. With this early save, an aborted
+         * turn at least leaves an "orphan user message" in history;
+         * the next turn can respond to it. The assistant response is
+         * still appended at end-of-turn to preserve the (user,
+         * assistant) pairing on success. Skip for system/heartbeat
+         * channel — those don't have user-side history. */
+        if (msg.content && msg.content[0] &&
+            strcmp(msg.channel, LANG_CHAN_SYSTEM) != 0) {
+            esp_err_t e = session_append(msg.chat_id, "user", msg.content);
+            if (e != ESP_OK) {
+                ESP_LOGW(TAG, "Early session_append(user) failed for %s: %s",
+                         msg.chat_id, esp_err_to_name(e));
+            }
+        }
+
         /* OLED: set channel + show incoming message preview */
         {
             const char *ch = msg.channel;
@@ -1908,11 +1928,12 @@ static void agent_loop_task(void *arg)
                 }
             }
 
-            /* Save to session */
-            esp_err_t save_user = session_append(msg.chat_id, "user", msg.content);
+            /* Save assistant response to session. The user message was
+             * already persisted at turn-start so a mid-turn crash
+             * doesn't lose it; here we just close the pair. */
             esp_err_t save_asst = session_append(msg.chat_id, "assistant", final_text);
-            if (save_user != ESP_OK || save_asst != ESP_OK) {
-                ESP_LOGW(TAG, "Session save failed for chat %s", msg.chat_id);
+            if (save_asst != ESP_OK) {
+                ESP_LOGW(TAG, "session_append(assistant) failed for chat %s", msg.chat_id);
             }
 
             session_trim(msg.chat_id, LANG_SESSION_MAX_MSGS);
