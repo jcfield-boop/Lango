@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
+#include <unistd.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -308,20 +310,45 @@ static esp_err_t cron_save_jobs(void)
         return ESP_ERR_NO_MEM;
     }
 
-    FILE *f = fopen(LANG_CRON_FILE, "w");
+    /* Atomic write via temp + rename. Power loss / panic during a plain
+     * fopen("w") + fwrite to LANG_CRON_FILE was a real risk: if the
+     * device cut out mid-write the file would be truncated/corrupt and
+     * cron_load_jobs() would silently start with 0 jobs on next boot
+     * (briefing/surf check/HA digest all gone until manually reseeded).
+     * Write to .tmp, fsync, rename — LittleFS rename is atomic. */
+    char tmp_path[64];
+    int tlen = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", LANG_CRON_FILE);
+    if (tlen <= 0 || tlen >= (int)sizeof(tmp_path)) {
+        free(json_str);
+        return ESP_FAIL;
+    }
+
+    FILE *f = fopen(tmp_path, "w");
     if (!f) {
-        ESP_LOGE(TAG, "Failed to open %s for writing", LANG_CRON_FILE);
+        ESP_LOGE(TAG, "Failed to open %s for writing", tmp_path);
         free(json_str);
         return ESP_FAIL;
     }
 
     size_t len = strlen(json_str);
     size_t written = fwrite(json_str, 1, len, f);
-    fclose(f);
+    int sync_rc = fflush(f);
+    int close_rc = fclose(f);
     free(json_str);
 
-    if (written != len) {
-        ESP_LOGE(TAG, "Cron save incomplete: %d/%d bytes", (int)written, (int)len);
+    if (written != len || sync_rc != 0 || close_rc != 0) {
+        ESP_LOGE(TAG, "Cron tmp write failed: written=%d/%d flush=%d close=%d",
+                 (int)written, (int)len, sync_rc, close_rc);
+        unlink(tmp_path);
+        return ESP_FAIL;
+    }
+
+    /* Atomic swap. On LittleFS, rename is implemented by updating the
+     * directory entry — either the old or the new file is visible, never
+     * a half-written one. */
+    if (rename(tmp_path, LANG_CRON_FILE) != 0) {
+        ESP_LOGE(TAG, "Cron rename %s → %s failed: errno=%d", tmp_path, LANG_CRON_FILE, errno);
+        unlink(tmp_path);
         return ESP_FAIL;
     }
 
