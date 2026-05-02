@@ -129,7 +129,10 @@ Most cheap UVC-compatible webcams work. For PTT mic, the webcam must also expose
 | **Push notifications** | ntfy.sh push to phone — agent-initiated or rule-triggered |
 | **Cron** | Agent-scheduled recurring and one-shot jobs |
 | **Rules engine** | Condition/action automations (temp alerts, HA triggers, …) |
-| **OTA** | Firmware update over WiFi via CLI or HTTP |
+| **EAGLE voice router** | Apfel pre-classifier on the voice channel (`chat_id="ptt"`) — DIRECT answers in ~1 s, TOOLS/RACE play an ack via local TTS while cloud + tools run in parallel as seg B. Hedge detection rescues misclassified turns. Kill switch: `voice_router on\|off\|status` |
+| **WiFi self-recovery** | Background worker watches outbound HTTP failures across telegram/LLM/STT/TTS. After 5 consecutive *or* 5-of-10 sliding-window failures, fires `esp_wifi_disconnect/connect` to clear stuck sockets + DNS. 60s cooldown |
+| **OTA** | Firmware update over WiFi via CLI or HTTP — telegram polling auto-suspends during download to free wifi bandwidth; script falls back to `/api/sysinfo` polling if `/api/ota/status` is starved |
+| **Diagnostic endpoints** | `/api/sysinfo`, `/api/crashlog`, `/api/coredump` (binary ELF for `espcoredump.py`), `/api/coredump/info`, persistent across reboots |
 | **mDNS** | Reachable as `langoustine.local` |
 | **Serial CLI** | Full REPL on UART0 (115200 baud) |
 | **Rate limiting** | Configurable LLM API rate limit (default 60/hour); `rate_limit` CLI command |
@@ -539,6 +542,55 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 ---
 
 ## Changelog
+
+### 2026-05-02 — Resilience pass + OTA reliability breakthrough
+
+A week of soak-driven hardening, all evidence-based on real production logs.
+
+**OTA finally reliable** (`main/gateway/ws_server.c`, `main/ota/ota_manager.c`, `main/telegram/telegram_bot.c`, `scripts/ota_deploy.sh`)
+- Root cause for OTAs that hung at `pct=0%` for 309 s and timed out: `cfg.max_uri_handlers = 29` overflowed silently when 3 new `/api/coredump*` handlers were added in the 04-25 session (28+3=31 > 29). `esp_http_server` dropped overflow handlers; `/api/ota/status` was among the casualties → script polled and got 404 → never saw real progress. **Cap bumped to 40** (9 spare for future growth).
+- `telegram_bot_suspend()` / `_resume()` API; OTA download now suspends Telegram's getUpdates long-poll to free wifi bandwidth.
+- `ota_deploy.sh` falls back to `/api/sysinfo` (smaller endpoint) when `/api/ota/status` is starved during heavy download; `MAX_WAIT` formula now 4 KB/s + 180 s margin.
+- First post-fix OTA: 0→100% in **75 s** for a 2.2 MB binary, vs hanging indefinitely before.
+
+**EAGLE voice router** (`main/agent/agent_loop.c`, `main/llm/llm_proxy.c`, `main/agent/context_builder.c`, `littlefs_data/config/voice_router.md`)
+- Voice channel (`chat_id="ptt"`) gets an Apfel pre-classifier that returns DIRECT (answer immediately, skip cloud) / TOOLS (play ack, run cloud + tools as seg B) / RACE (ack + cloud parallel race). Hedge detection promotes hallucination-prone DIRECT answers to RACE.
+- Ack-sanitisation: any digit in the ack field triggers a generic "One moment…" replacement (Apfel was jamming hallucinated weather like "75°F" into the ack — observed 04-26). 
+- Complex-query bypass: briefing / email / search / research / printer / klipper / IoT keywords skip the router entirely so multi-tool work goes straight to cloud.
+
+**Auto wifi recovery** (`main/wifi/wifi_recovery.{c,h}`, hooks in `http_session.c` + `telegram_bot.c`)
+- Worker task on Core 0 tracks outbound HTTP failures across all subsystems. Two trigger paths: 5 consecutive failures (fast path) or 5-of-10 sliding window (catches interleaved fail/success patterns like the 04-30 telegram hiccup). On trigger: `esp_wifi_disconnect` → 500 ms → `esp_wifi_connect` → 60 s cooldown.
+
+**Stack-overflow remediation** (`main/langoustine.c`, `sdkconfig.defaults.esp32s3`)
+- `sys_evt` task stack 2304 → 4096 after coredump on 04-26 16:50 panic showed it overflowed during a wifi disconnect burst.
+- `ag_wdog` task stack 2048 → 4096 → 8192 after a second coredump showed *its* warning path (ESP_LOGE + JSON encode + ws broadcast) overflowed too.
+- `CONFIG_ESP_SYSTEM_EVENT_QUEUE_SIZE` 32 → 64 so a reconnect burst doesn't drop events.
+
+**Diagnostic endpoints** (`main/gateway/ws_server.c`)
+- `GET /api/coredump/info` → JSON `{present, size_bytes}`
+- `GET /api/coredump` → raw ELF (decode with `espcoredump.py --chip esp32s3 info_corefile -t raw -c <file> build/langoustine.elf`)
+- `DELETE /api/coredump` → erase the partition
+- These two endpoints alone unlocked four firmware fixes this week — without backtraces every panic was just "panic" in the crashlog.
+
+**HTTP session timeouts tightened** (`main/audio/stt_client.c`, `main/llm/llm_proxy.c`)
+- STT local: 10 → 4 s (mlx-audio Whisper on healthy LAN finishes in 3-9 s; faster fallback to cloud Groq when wifi is sick).
+- LLM cloud: 60 → 30 s for connect + first byte (streaming continues without limit after the first byte). Stuck connect()s no longer block a turn for a full minute.
+
+**Cron + session resilience** (`main/cron/cron_service.c`, `main/agent/agent_loop.c`)
+- Cron save now atomic via tmp + rename (a power-loss during write was previously blanking the entire schedule on next boot).
+- Cron dispatch failure no longer advances `last_run` — a single transient queue-full would have dropped the daily briefing for the whole day. Now it stays "due" and retries on the next heartbeat tick.
+- Session checkpoint: user message persisted to `/lfs/sessions/<chat_id>.jsonl` at turn-start (was end-of-turn). Mid-turn agent crashes no longer lose the user's input.
+- Outbound dispatcher retries failed Telegram sends 3× with 3 s backoff (was fire-and-forget).
+
+**Briefing pipeline fixes** (`littlefs_data/skills/morning-briefing.md`, `littlefs_data/skills/daily-briefing.md`, `littlefs_data/config/USER.md`, `littlefs_data/HEARTBEAT.md`)
+- Briefing email recipient was hallucinating to `james@example.com` because the skill never specified `to:` — explicit `jcfield@gmail.com` added.
+- 3 separate web_searches (ARM, NASDAQ, GBP/USD) fire **in parallel** (multiple `tool_use` blocks per turn) instead of sequentially — was tipping the briefing past `LANG_AGENT_MAX_TOOL_ITER=10` and timing out.
+- Removed the `[30m]` soak-logging heartbeat task — every-30-min LLM tick was emitting unreliable formatted numbers (`heap=12290032k`, etc.) for data nobody read; ~$36/year saved.
+- `tool_rss` buffer 16 → 32 KB after every briefing was hitting the cap on hnrss.org.
+
+**Cron schedule reseed** (`littlefs_data/cron.json`)
+- Three weekly jobs (`wknd0004`, `armnw005`, `cmpct006`) had `next_run` drifted into the past. Reseeded to next valid future weekday.
+- New `surf0003`: Friday 17:00 PDT weekend outlook (in addition to Saturday 18:00 surf check).
 
 ### 2026-04-11 — INMP441 mic fix, routing polish, beginner-nuanced surf report
 
