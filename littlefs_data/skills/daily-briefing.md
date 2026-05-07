@@ -44,7 +44,7 @@ Also useful as a heartbeat/cron task.
 | BBC Tech | http://feeds.bbci.co.uk/news/technology/rss.xml | UK tech news |
 
 ## Format
-Keep it brief — 5-10 bullet points max. Use the user's preferred language.
+Substantive — aim for 12-18 bullet points across the sections, each bullet a complete thought (not a fragment). Don't truncate mid-sentence to hit a count. Use the user's preferred language. If a section has nothing to report, say so explicitly rather than dropping it.
 
 ## Cost note
 Using rss_fetch instead of web_search for news saves ~3 Brave Search API credits
