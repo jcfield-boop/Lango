@@ -37,9 +37,13 @@ Fired from cron job `haupd001` daily at 09:00 PDT. Can also be invoked manually
    - `ha_request POST /api/services/update/install` body `{"entity_id": "update.X"}`
    - Record success/failure.
 
-4. **Notifications**
+4. **Notifications — quiet by default; only notify when there's actually something for James to do.**
 
-   **(a) If a Core or OS update is available (manual action required)** — `send_email`:
+   **(a) Email — ONLY if a Core or OS update is available (manual action required).**
+   No email when everything is already current, no email when only auto-installs ran. James asked
+   2026-05-02: "the email about HA updates only needs to be sent if there are updates that need
+   applying." `send_email`:
+   - to: `jcfield@gmail.com`
    - subject: `⚠️ Home Assistant manual update required — [type]`
    - body (under 300 words, no markdown):
      ```
@@ -55,22 +59,15 @@ Fired from cron job `haupd001` daily at 09:00 PDT. Can also be invoked manually
 
      Integration updates already applied (if any): <list>
      ```
-   - Always BCC James at his primary address (already the `send_email` default).
 
-   **(b) Always also send the short Telegram summary** via `telegram_send_message` (chat_id 5538967144):
-   ```
-   🏠 HA Update Check — [date]
-   [If Core update available:]
-     ⚠️ HA Core X.Y.Z → A.B.C — email sent (manual install needed).
-   [If OS update available:]
-     ⚠️ HA OS X.Y.Z → A.B.C — email sent (host reboot needed).
-   [If auto-applied:]
-     ✅ Installed: <entity1>, <entity2>
-   [If nothing to do:]
-     All current. (X entities checked)
-   ```
+   **(b) Telegram — ONLY if something happened that James should know about:**
+   - Core/OS update available → "⚠️ HA Core X.Y.Z → A.B.C — email sent (manual install needed)."
+   - Auto-installs ran → "✅ Installed: <entity1>, <entity2>"
+   - All current → **stay silent. NO Telegram message.** James doesn't need a daily "all good" ping.
+   - Errors (auth fail, partial install fail, etc.) → "🔴 HA update: <error>"
 
-   **(c) If `send_email` fails**, fall back to a longer Telegram message (same content as the email) so James still gets the full detail.
+   **(c) If `send_email` fails on a Core/OS notification**, fall back to a long Telegram message
+   (same body as the email) so James still gets the full detail.
 
 ## Guardrails
 

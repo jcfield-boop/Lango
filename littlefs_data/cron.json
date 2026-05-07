@@ -37,7 +37,7 @@
       "delete_after_run": false,
       "channel": "system",
       "chat_id": "ha-updater",
-      "message": "Run the ha-updater skill: read /lfs/skills/ha-updater.md and execute all steps. Check for HA Core, OS, and integration updates. Auto-install integration/device firmware updates. For Core/OS updates (manual action required), send an email alert AND a short Telegram summary to chat_id 5538967144. If nothing needs attention, send a brief Telegram 'all current' line."
+      "message": "Run the ha-updater skill: read /lfs/skills/ha-updater.md and execute all steps. Auto-install integration/device firmware updates. Notify QUIETLY: only email James for HA Core/OS updates that need manual action; only Telegram-notify on auto-installs that ran or errors. Stay completely silent if everything is already current — no daily \"all good\" ping."
     },
     {
       "id": "surf0003",
