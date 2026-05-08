@@ -22,12 +22,14 @@ they don't compete for tool slots). Can also be invoked manually
 
 ## Steps
 
-1. **Refresh the cache (cheap, optional):**
-   `klipper_request {"method":"GET","endpoint":"/machine/update/refresh?name=full"}`
-   — tells Moonraker to re-check upstream. If this 503s ("update manager
-   refreshing"), continue with the next step using whatever cache exists.
+> **One status call. One notification. Done.** Do NOT call `/machine/update/status`
+> more than once per turn. Do NOT call `/machine/update/refresh` — Moonraker's
+> internal cache is fresh enough (refreshed every hour by Moonraker itself).
+> Calling refresh can cause Moonraker to re-check GitHub mid-skill, change
+> what's reported, and trick the model into sending a second email about the
+> "new" state. (Observed 2026-05-02 first test run — sent two emails.)
 
-2. **Get status:**
+1. **Get status (single call):**
    `klipper_request {"method":"GET","endpoint":"/machine/update/status?refresh=false"}`
 
    Response shape (only the fields we care about):
@@ -59,6 +61,13 @@ they don't compete for tool slots). Can also be invoked manually
 4. **Notifications — quiet by default; only notify when there's actually
    something for James to do.** Mirrors the ha-updater policy James asked for
    2026-05-02.
+
+   **GOLDEN RULE: AT MOST ONE `send_email` AND AT MOST ONE `telegram_send_message`
+   PER TURN.** After the first send_email succeeds, finalise the turn — do NOT
+   re-check status, re-fetch anything, or call send_email again. The skill is
+   triggered fresh by cron the next day; that is when state changes get a new
+   notification. If you find yourself thinking "I should also email about X" —
+   X belongs in the SAME single email, not a follow-up.
 
    **(a) Email — ONLY if klipper itself, moonraker, or system packages need an
    update.** No email when everything is current. No email for client-only
