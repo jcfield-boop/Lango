@@ -135,6 +135,19 @@
       "channel": "system",
       "chat_id": "cron",
       "message": "Run the memory-compactor skill: read MEMORY.md, remove duplicate or superseded entries, merge related facts, keep total size under 8KB. Write the compacted result back to MEMORY.md. Log a one-line summary of what was removed."
+    },
+    {
+      "id": "kupd0001",
+      "name": "Klipper Update Check",
+      "enabled": true,
+      "kind": "every",
+      "interval_s": 86400,
+      "message": "Run the klipper-updater skill: read /lfs/skills/klipper-updater.md and execute all steps. Check Moonraker /machine/update/status for klipper, moonraker, system packages, and client updates. Notify QUIETLY: only email James for klipper/moonraker/system updates that need manual action; only Telegram-notify on errors. Stay completely silent if everything is already current — no daily \"all good\" ping.",
+      "channel": "system",
+      "chat_id": "klipper-updater",
+      "last_run": 0,
+      "next_run": 1777825800,
+      "delete_after_run": false
     }
   ]
 }

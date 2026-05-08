@@ -42,8 +42,27 @@ static bool parse_klipper_creds(klipper_creds_t *c)
  */
 static bool endpoint_blocked(const char *ep)
 {
+    /* Read-only update-manager paths — explicitly allowed so the
+     * klipper-updater skill can probe for available updates the same
+     * way ha-updater hits HA. POST to these still flows through but
+     * Moonraker itself rejects wrong-method requests. We do NOT
+     * whitelist /machine/update/<component> (no trailing slash) which
+     * is the actual install endpoint — Klipper updates require a
+     * service restart and shouldn't auto-apply (could brick a print). */
+    static const char * const ALLOWED_EXACT[] = {
+        "/machine/update/status",
+        "/machine/update/refresh",
+        NULL
+    };
+    for (int i = 0; ALLOWED_EXACT[i]; i++) {
+        if (strcmp(ep, ALLOWED_EXACT[i]) == 0) return false;
+        /* Also accept query string ("?refresh=false" etc) on the same path */
+        size_t plen = strlen(ALLOWED_EXACT[i]);
+        if (strncmp(ep, ALLOWED_EXACT[i], plen) == 0 && ep[plen] == '?') return false;
+    }
+
     static const char * const BLOCKED_PREFIXES[] = {
-        "/machine",          /* system power / update manager */
+        "/machine",          /* system power, service control, update install */
         "/server/files/delete",
         NULL
     };
