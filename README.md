@@ -124,8 +124,8 @@ Most cheap UVC-compatible webcams work. For PTT mic, the webcam must also expose
 | **Webcam PTT** | Hold BOOT button → speak into webcam mic → release → agent responds |
 | **Telegram** | Long-poll bot — full conversation with the same agent |
 | **WebSocket UI** | Browser voice interface at `http://langoustine.local` with quick-action dashboard |
-| **Home Assistant** | Query entity state and call services (lights, switches, climate, etc.) |
-| **Klipper / Moonraker** | 3D printer status, temps, print progress, gcode control |
+| **Home Assistant** | Query entity state and call services (lights, switches, climate, etc.). Daily update check (`haupd001`, 09:00 PDT) auto-applies safe updates, emails on Core/OS that need manual action, silent if all current |
+| **Klipper / Moonraker** | 3D printer status, temps, print progress, gcode control. Daily update-manager check (`kupd0001`, 09:30 PDT) emails when klipper/moonraker/system apt needs manual action; silent if all current |
 | **Push notifications** | ntfy.sh push to phone — agent-initiated or rule-triggered |
 | **Cron** | Agent-scheduled recurring and one-shot jobs |
 | **Rules engine** | Condition/action automations (temp alerts, HA triggers, …) |
@@ -542,6 +542,34 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 ---
 
 ## Changelog
+
+### 2026-05-11 — Quiet-by-default notifications, Klipper updater, schedule hygiene
+
+**Klipper update check** (`main/tools/tool_klipper.c`, `littlefs_data/skills/klipper-updater.md`, `littlefs_data/cron.json`)
+- Mirrors the HA daily check but for Moonraker's `update_manager` (klipper, moonraker, system apt packages, mainsail/fluidd clients). Daily cron `kupd0001` at 09:30 PDT.
+- Firmware-level safety: `endpoint_blocked()` in tool_klipper.c gained an `ALLOWED_EXACT` whitelist for the read-only `/machine/update/status` and `/machine/update/refresh` paths. All other `/machine/*` (shutdown, service control, install endpoints) stays blocked.
+- Skill is **notify-only — never auto-installs.** Klipper updates need a service restart and could disrupt a running print. If a print is active when the check runs, defers notification entirely until next day's tick.
+- "Golden rule" in the skill prompt: at most one `send_email` and one `telegram_send_message` per turn. (Found 2026-05-02 first test: the refresh-then-status pattern caused Moonraker to re-check GitHub mid-turn, klipper's "remote_version" rolled forward to current, model re-fetched and sent a second email. Now we just hit `/machine/update/status` once.)
+
+**HA + Klipper notifications quiet by default** (`littlefs_data/skills/ha-updater.md`, `littlefs_data/skills/klipper-updater.md`, `littlefs_data/cron.json`)
+- Previously the daily HA check always sent SOMETHING — a Telegram "all current" line even when nothing was due. User feedback: "the email about HA updates only needs to be sent if there are updates that need applying."
+- New policy: email ONLY on Core/OS (or klipper/moonraker/system) updates needing manual action; Telegram ONLY on actionable events (update available, auto-install ran, error). Stay completely silent if everything is current — no daily "all good" ping on either channel.
+
+**Briefing length cap loosened** (`littlefs_data/skills/morning-briefing.md`, `littlefs_data/skills/daily-briefing.md`)
+- User feedback 2026-05-02: morning briefings arrive feeling truncated. Root cause was the skill prompt itself — 4o-mini was honouring the explicit `"body: under 400 words"` (across 5 sections = ~50–80 words each, reads as thin headlines not a real briefing).
+- Bumped morning-briefing.md target to 600–900 words with per-section guidance (ARM/Markets gets a paragraph including analyst notes; PC/Chromebook items each get a "why it matters" sentence).
+- daily-briefing.md "5–10 bullets max" → "12–18 across sections, each a complete thought."
+- Email-fail fallback path: was "fall back to Telegram with a condensed version" — replaced with "FULL email body verbatim via `telegram_send_message` (auto-splits at 4096)." James prefers a multi-message Telegram over a stub.
+
+**Mac model health check tool** (`scripts/check_mac_models.sh`)
+- Three-tier monitoring for the Mac-hosted model trio (Ollama, Apfel, mlx-audio). Layer 1 (launchd KeepAlive) and layer 2 (device-side `llm_*_health_check`) were already in place. This adds layer 3: one-shot HTTP probe from any laptop on the LAN, with `--inference` mode that goes beyond HTTP 200 and runs real round-trips (Ollama chat, Apfel completion, Kokoro TTS WAV ≥1 KB). Exit code 0/1 so it pipes into launchd / cron / Telegram alerts.
+- Ollama inference probe is lenient about qwen3 thinking-token output (treats `message.thinking` or `done:true` as healthy).
+
+**Email recipient fix** (`/lfs/config/SERVICES.md`, device-side only — file is gitignored due to secrets)
+- Morning briefings were silently going to a wrong default address for an unknown stretch. Skill prompt had `to: jcfield@gmail.com`; USER.md had the right note; but SERVICES.md `to_address:` default was a stale alternate. When the LLM omitted explicit `to:` in `send_email` calls, `tool_smtp` fell back to the SERVICES.md default. Default corrected on device. Future briefings land in the right inbox regardless of whether the LLM remembers the `to:` field.
+
+**Cron schedule hygiene** (operational note — no commit)
+- Manual `next_run` nudges for testing permanently shift the daily slot, because the post-dispatch advance is `next_run += interval_s` (preserves the nudged offset). Saw this 2026-05-11: brief drifted from 06:20 → 06:55 after two 2026-05-09 test triggers. Lesson: when testing a daily cron via the `next_run := now + 30s` trick, reseed the slot back to its intended HH:MM after the test fires.
 
 ### 2026-05-02 — Resilience pass + OTA reliability breakthrough
 
