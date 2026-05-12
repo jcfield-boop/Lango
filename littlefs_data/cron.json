@@ -148,6 +148,32 @@
       "last_run": 1778544524,
       "next_run": 1778630915,
       "delete_after_run": false
+    },
+    {
+      "id": "tvart001",
+      "name": "Frame TV Daily Art",
+      "enabled": true,
+      "kind": "every",
+      "interval_s": 86400,
+      "message": "Run the frame-tv-daily skill: read /lfs/skills/frame-tv-daily.md and execute its steps. Generate ONE weather-and-season-appropriate piece of ambient art and push it to the Frame TV. Silent on success — no Telegram or email.",
+      "channel": "system",
+      "chat_id": "frame-tv",
+      "last_run": 0,
+      "next_run": 1778677200,
+      "delete_after_run": false
+    },
+    {
+      "id": "msbprep1",
+      "name": "Microsoft Build Prep (one-shot)",
+      "enabled": true,
+      "kind": "at",
+      "at_epoch": 1779811200,
+      "message": "MICROSOFT BUILD PREP — Build is in 7 days (Jun 2-3, Seattle). web_search \"Microsoft Build 2026 sessions ARM Snapdragon Windows on Arm\" and pick the top 3-5 sessions James should attend. web_search \"Microsoft Build 2026 keynote agenda\". send_email to jcfield@gmail.com subject \"📅 MS Build prep — 7 days out\" with: top sessions to attend (time + room if available), key topics to expect, suggested partner meetings to schedule (HP/Dell/Lenovo Arm PCs), travel reminder. Under 400 words. Also telegram_send_message chat 5538967144 with a 3-line summary pointing to the email.",
+      "channel": "system",
+      "chat_id": "msbprep1",
+      "last_run": 0,
+      "next_run": 1779811200,
+      "delete_after_run": true
     }
   ]
 }

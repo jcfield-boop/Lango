@@ -37,6 +37,18 @@ Channel: websocket (alerts sent via Telegram if thresholds exceeded)
    - WiFi < -80 dBm → ALERT
    - Temp > 65°C → ALERT
 7. **Send alert:** If any threshold exceeded OR crash detected, send Telegram message with details
+8. **Activity log (NEW — 2026-05-12):** Once per day at the **first hourly tick after 09:00 PDT**,
+   also call `memory_append_today` with a one-line summary of any notable
+   automation events from the past 24h: did the morning brief send? did a
+   surf check fire? did ha-updater install anything? did kupd0001 find
+   updates? did the printer complete a job? Keep it terse (under 200 chars).
+   Examples:
+     - `09:05 brief sent ✓ · HA all-current · klipper idle · uptime 5d`
+     - `09:08 brief sent ✓ · HA installed 2 (hacs, esphome) · klipper printing benchy 67%`
+   On any other hourly tick (10:00–08:00), SKIP this step — once per day is enough.
+   To check what's already in today's note: `read_file /lfs/memory/YYYY-MM-DD.md`
+   (look at first 50 chars); if it already contains an `## Anomaly summary` line,
+   skip. End-of-day this builds a passive diary useful for weekly retrospectives.
 
 ## Log Format
 ```
