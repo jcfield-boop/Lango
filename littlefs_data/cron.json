@@ -19,11 +19,11 @@
       "enabled": true,
       "kind": "every",
       "interval_s": 86400,
-      "message": "MORNING BRIEFING — read /lfs/skills/morning-briefing.md FIRST (mandatory) and follow it exactly. The skill specifies a 600-900 word email with FIVE sections, in this exact order: (1) 📈 ARM & Markets, (2) 💻 PC/Chromebook Intel (2-3 items, each with a why-it-matters sentence), (3) 📅 This Week (from MEMORY.md), (4) 🏄 Surf (Fri/Sat/Sun only), (5) 🤖 Lango status. Each section is a paragraph, NOT a single bullet — substantive content. send_email to: jcfield@gmail.com — include the explicit to: field in the tool call; do not rely on defaults. If send_email fails, fall back to telegram_send_message (chat_id 5538967144) with the FULL email body verbatim (the bot auto-splits at 4096 chars). Do NOT condense — James wants the full briefing.",
+      "message": "MORNING BRIEFING — read /lfs/skills/morning-briefing.md FIRST (mandatory) and follow it exactly. The skill specifies a 600-900 word email with SIX sections, in this exact order: (1) 📈 ARM & Markets, (2) 💻 PC/Chromebook Intel (2-3 items, each with a why-it-matters sentence), (3) 📅 This Week — pull from BOTH /lfs/memory/MEMORY.md AND /lfs/config/USER.md for TODOs, upcoming events, focus areas. This is the highest-value section when there IS content; check both files thoroughly before saying \"nothing queued\". (4) 🖨️ Printer — query klipper_request /printer/objects/query?print_stats; report state + filename/progress if printing. If Moonraker unreachable: skip gracefully with \"unreachable\" — do not retry. (5) 🏄 Surf (Fri/Sat/Sun only), (6) 🤖 Lango status. Each section is a paragraph (or a short line for Printer/Lango), NOT a single bullet — substantive content. send_email to: jcfield@gmail.com — include the explicit to: field in the tool call; do not rely on defaults. If send_email fails, fall back to telegram_send_message (chat_id 5538967144) with the FULL email body verbatim (the bot auto-splits at 4096 chars). Do NOT condense — James wants the full briefing.",
       "channel": "system",
       "chat_id": "briefing",
-      "last_run": 1778593616,
-      "next_run": 1778680011,
+      "last_run": 1778595806,
+      "next_run": 1778678400,
       "delete_after_run": false
     },
     {
