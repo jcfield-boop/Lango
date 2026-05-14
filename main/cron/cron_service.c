@@ -135,7 +135,11 @@ static esp_err_t cron_load_jobs(void)
     long fsize = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    if (fsize <= 0 || fsize > 8192) {
+    /* Size cap: was 8 KB, bumped to 32 KB 2026-05-14 after the Tier 1
+     * skill additions pushed cron.json to 9654 bytes — silently rejected
+     * for ~32 h with no jobs loaded, no daily briefing. 16 jobs × ~1 KB
+     * avg fits comfortably in 32 KB, with headroom for verbose messages. */
+    if (fsize <= 0 || fsize > (32 * 1024)) {
         ESP_LOGW(TAG, "Cron file invalid size: %ld", fsize);
         fclose(f);
         s_job_count = 0;

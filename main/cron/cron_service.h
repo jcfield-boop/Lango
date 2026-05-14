@@ -18,7 +18,13 @@ typedef struct {
     cron_kind_t kind;
     uint32_t interval_s;   /* For EVERY: interval in seconds */
     int64_t at_epoch;      /* For AT: unix timestamp */
-    char message[512];     /* Message to inject into inbound queue */
+    char message[1536];    /* Message to inject into inbound queue.
+                            * Was 512 — silently truncated brief001's
+                            * detailed guidance (912 bytes) which caused
+                            * the model to skip web_search/rss/klipper
+                            * and email a 4-line stub on 2026-05-14.
+                            * 1536 fits all current cron messages with
+                            * headroom. Truncation now logs at WARN. */
     char channel[16];      /* Reply channel (default "system") */
     char chat_id[32];      /* Reply chat_id (default "cron") */
     int64_t last_run;      /* Last run epoch */
