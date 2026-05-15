@@ -9,8 +9,8 @@
       "message": "ARM pre-market snapshot. web_search \"ARM Holdings ARMH stock pre-market today\". Extract pre-market price, % change vs prev close, one headline if notable. write_file /lfs/memory/arm_stock_today.md (overwrite, under 100 words). No email/Telegram — this feeds the 06:20 morning briefing.",
       "channel": "system",
       "chat_id": "armpre",
-      "last_run": 1778852466,
-      "next_run": 1778936100,
+      "last_run": 1778861550,
+      "next_run": 1778947942,
       "delete_after_run": false
     },
     {
@@ -23,7 +23,7 @@
       "channel": "system",
       "chat_id": "briefing",
       "last_run": 1778855019,
-      "next_run": 1778937600,
+      "next_run": 1778861933,
       "delete_after_run": false
     },
     {
@@ -176,7 +176,7 @@
       "delete_after_run": true
     },
     {
-      "id": "prefetch1",
+      "id": "prefetch",
       "name": "Briefing Prefetch",
       "enabled": true,
       "kind": "every",
@@ -185,7 +185,7 @@
       "channel": "system",
       "chat_id": "brief-prefetch",
       "last_run": 0,
-      "next_run": 1778936700,
+      "next_run": 1778861723,
       "delete_after_run": false
     }
   ]
