@@ -247,8 +247,11 @@
 #define LANG_VOICE_ROUTER_TIMELY_TOKENS \
     "currently|right now|near me|just now|live score|live price"
 
-/* Web Search */
-#define LANG_TAVILY_BUF_SIZE         (32 * 1024)
+/* Web Search — PSRAM-backed response buffer. 32→64KB 2026-05-15:
+ * Tavily/Brave JSON with 5 rich results + raw content was clipping
+ * at 32KB, dropping later results from briefings/searches. 12MB
+ * PSRAM free so size is not a constraint. */
+#define LANG_TAVILY_BUF_SIZE         (64 * 1024)
 
 /* Skills */
 #define LANG_SKILLS_PREFIX           "/lfs/skills/"

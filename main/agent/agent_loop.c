@@ -158,7 +158,13 @@ void agent_set_voice_router_enabled(bool enabled)
              enabled ? "ON" : "OFF");
 }
 
-#define TOOL_OUTPUT_SIZE      (32 * 1024)
+/* 64 KB (was 32 KB). PSRAM-backed (ps_malloc); 12 MB PSRAM is free so
+ * size is not a constraint. Bumped 2026-05-15 — web_search / ha_request /
+ * rss results were truncating at 32 KB, costing answer completeness on
+ * briefings and ad-hoc queries. 64 KB ≈ 16 K tokens, still well within
+ * the 128 K context window of the system/voice models. Peak with n=2
+ * parallel tools = 128 KB PSRAM — negligible. */
+#define TOOL_OUTPUT_SIZE      (64 * 1024)
 #define WS_TOKEN_MIN_CHARS    8
 #define WS_TOKEN_MIN_US       150000
 

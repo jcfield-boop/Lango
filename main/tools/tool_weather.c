@@ -18,7 +18,8 @@ static const char *TAG = "tool_weather";
 
 #define WEATHER_NVS_NS  "weather_config"
 #define WEATHER_NVS_KEY "location"
-#define WEATHER_BUF_SIZE (48 * 1024)  /* wttr.in j1 responses are 35-40KB (8 hourly slots × 3 days) */
+#define WEATHER_BUF_SIZE (64 * 1024)  /* wttr.in j1 ~35-40KB typical; 48→64KB 2026-05-15
+                                       * for spike margin (PSRAM-backed, 12MB free). */
 
 typedef struct {
     char *data;

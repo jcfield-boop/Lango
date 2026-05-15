@@ -12,12 +12,13 @@
 static const char *TAG = "tool_rss";
 
 /* HTTP receive buffer for the raw feed XML/Atom. Lives in PSRAM via
- * ps_malloc, so size isn't tight against SRAM. Bumped 16→32 KB on
- * 2026-05-02 after every daily-briefing rss_fetch was hitting the
- * cap (consistently 16383 bytes from hnrss.org/frontpage = items
- * silently dropped). Real feeds rarely exceed ~25 KB after normal
- * RSS payloads; 32 KB has 25% headroom. */
-#define RSS_BUF_SIZE    (32 * 1024)
+ * ps_malloc, so size isn't tight against SRAM (12 MB PSRAM free).
+ * History: 16→32 KB (2026-05-02), 32→96 KB (2026-05-15). The
+ * newsroom.arm.com/rss feed was observed at 77 KB and the TRUNCATED
+ * warning fired ("dropped 44684 bytes") even at 32 KB — items were
+ * being silently lost from the briefing. 96 KB covers the largest
+ * real feed we've seen with ~20 KB headroom. */
+#define RSS_BUF_SIZE    (96 * 1024)
 #define RSS_MAX_ITEMS   10
 #define RSS_FIELD_MAX   256
 #define RSS_SUMMARY_MAX 200

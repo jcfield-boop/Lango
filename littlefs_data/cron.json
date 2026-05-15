@@ -22,8 +22,8 @@
       "message": "MORNING BRIEFING (fast path) — read /lfs/skills/morning-briefing.md FIRST (read_file ALONE in iter 1). The prefetch1 cron at 06:05 already gathered all live data into /lfs/memory/brief_data.md. Your job: read brief_data.md + USER.md + MEMORY.md + calendar.md + reading.md + family.md (these reads can ALL be parallel in one iteration), then compose the 6-section, 600-900 word email. Do NOT call web_search / rss_fetch / get_weather / klipper — that data is already in brief_data.md. Exception: Fri/Sat/Sun make ONE noaa_buoy call for the Surf section. send_email to jcfield@gmail.com LAST (never batched with read_file). If brief_data.md is missing or >3h stale, follow the skill's SLOW PATH fallback (live gathering). If send_email fails, telegram_send_message chat 5538967144 with the FULL body verbatim.",
       "channel": "system",
       "chat_id": "briefing",
-      "last_run": 1778855019,
-      "next_run": 1778861933,
+      "last_run": 1778861941,
+      "next_run": 1778948333,
       "delete_after_run": false
     },
     {
@@ -180,12 +180,12 @@
       "name": "Briefing Prefetch",
       "enabled": true,
       "kind": "every",
-      "interval_s": 86400,
-      "message": "Run brief-prefetch skill: read /lfs/skills/brief-prefetch.md and execute all steps. Gather weather + ARM/NASDAQ/GBP + HN/ARM RSS + printer state, write consolidated /lfs/memory/brief_data.md. Silent on success — brief001 at 06:20 reads this file.",
+      "interval_s": 14400,
+      "message": "Run brief-prefetch skill: read /lfs/skills/brief-prefetch.md and execute all steps. Refresh /lfs/memory/brief_data.md (weather, ARM/NASDAQ/GBP, HN/ARM RSS, printer). Runs every 4h as an ambient cache: the 06:05 fire feeds the 06:20 morning brief; other fires keep the cache fresh for ad-hoc voice/Telegram weather/market/news/printer queries (see ambient-cache skill). Silent on success.",
       "channel": "system",
       "chat_id": "brief-prefetch",
-      "last_run": 0,
-      "next_run": 1778861723,
+      "last_run": 1778861730,
+      "next_run": 1778936700,
       "delete_after_run": false
     }
   ]
