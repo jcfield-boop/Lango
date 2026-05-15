@@ -543,6 +543,46 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 
 ## Changelog
 
+### 2026-05-15 — Memory analysis, cron-cap fixes, briefing prefetch pattern
+
+A paired SRAM/PSRAM audit + a cluster of "no briefing" incidents drove
+this round.
+
+**Cron silent-truncation bugs (the "no briefing for days" root cause)** (`main/cron/cron_service.c`, `main/cron/cron_service.h`)
+- `cron_load_jobs` rejected any cron.json > 8 KB as "invalid size" and loaded **ZERO** jobs. The Tier-1 utility additions pushed the file to 9.6 KB → no morning brief, no surf check, no update digests for ~32 h, silently. Cap raised 8 KB → 32 KB.
+- Each job's `message` field was `char[512]`; the verbose brief001 directive (912 B) was silently truncated to 511 B, the model lost the "send_email LAST, never parallel" guidance and emailed a 4-line stub before gathering data. `message` raised 512 → 1536 B.
+- Both shipped via serial flash (OTA was wedged by an active agent turn), `728bd85`.
+
+**Memory model (analysis, no code)** — internal SRAM is the hard
+constraint (~68 KB free idle, ~57 KB watermark); PSRAM is 95 % free and
+stable over 5+ day soaks. The parallel-tool guard needs 76 KB for n=2,
+so it always falls back to sequential — every multi-tool briefing runs
+6-9 cloud round-trips serially. Full tiered remediation plan recorded;
+Tier 1 shipped (below), Tier 2 (firmware SRAM reclaim) deferred.
+
+**Briefing prefetch pattern (Tier 1 — performance, no firmware)** (`littlefs_data/skills/brief-prefetch.md`, `littlefs_data/skills/morning-briefing.md`, `littlefs_data/cron.json`)
+- New `prefetch1` cron at 06:05 PDT does all live network fan-out
+  (weather, ARM/NASDAQ/GBP search, HN/ARM RSS, printer state) and
+  writes one consolidated `/lfs/memory/brief_data.md`.
+- `brief001` at 06:20 now just reads that file + the memory/config
+  files and composes — **zero live network in the user-visible turn**,
+  ~2-3 ReAct iterations instead of 6-9. Slow-path fallback retained if
+  the prefetch file is missing/stale.
+- Correct dependency chain reseeded: armpre01 05:55 → prefetch1 06:05
+  → brief001 06:20.
+
+**Email recipient fix** (`/lfs/config/SERVICES.md`, device-only — gitignored)
+- Briefings were silently delivered to a stale `to_address` default
+  (`jfield@me.com`) whenever the LLM omitted an explicit `to:` in
+  `send_email`. Default corrected to `jcfield@gmail.com`.
+
+**Briefing content hardening** (`littlefs_data/skills/morning-briefing.md`, `littlefs_data/cron.json`)
+- 6th section added (🖨️ Printer); exact klipper endpoint baked into
+  the directive; raw HTTP status codes forbidden in the email body
+  (a 404 had leaked into the Printer line).
+- Length target 400 → 600-900 words with per-section guidance after
+  "feels truncated" feedback; the real fix was the cron-cap bug above.
+
 ### 2026-05-11 — Quiet-by-default notifications, Klipper updater, schedule hygiene
 
 **Klipper update check** (`main/tools/tool_klipper.c`, `littlefs_data/skills/klipper-updater.md`, `littlefs_data/cron.json`)
