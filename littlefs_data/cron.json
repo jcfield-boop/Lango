@@ -9,8 +9,8 @@
       "message": "ARM pre-market snapshot. web_search \"ARM Holdings ARMH stock pre-market today\". Extract pre-market price, % change vs prev close, one headline if notable. write_file /lfs/memory/arm_stock_today.md (overwrite, under 100 words). No email/Telegram — this feeds the 06:20 morning briefing.",
       "channel": "system",
       "chat_id": "armpre",
-      "last_run": 1778766067,
-      "next_run": 1778852462,
+      "last_run": 1778852466,
+      "next_run": 1778938862,
       "delete_after_run": false
     },
     {
@@ -19,11 +19,11 @@
       "enabled": true,
       "kind": "every",
       "interval_s": 86400,
-      "message": "MORNING BRIEFING — read /lfs/skills/morning-briefing.md FIRST (use read_file ALONE in iteration 1, do NOT batch it with send_email or any other tool). Follow that skill EXACTLY. You will need at least 4 sequential ReAct iterations: (1) read the skill + arm_stock_today.md + USER.md + MEMORY.md + calendar.md + reading.md + family.md (any read_file calls can be parallel), (2) get_weather + rss_fetch HN + rss_fetch ARM (these CAN be parallel), (3) web_search for ARM stock + NASDAQ + GBP/USD (parallel), (4) klipper_request for printer status (single call), (5) ONLY AT THE END: send_email to jcfield@gmail.com with the 600-900 word body containing ALL six sections per the skill. NEVER call send_email in the same iteration as read_file or web_search — the body must be composed AFTER all data is gathered. If send_email fails, fall back to telegram_send_message chat 5538967144 with the FULL body verbatim.",
+      "message": "MORNING BRIEFING — read /lfs/skills/morning-briefing.md FIRST (use read_file ALONE in iteration 1, do NOT batch it with send_email or any other tool). Follow that skill EXACTLY. You will need at least 4 sequential ReAct iterations: (1) read the skill + arm_stock_today.md + USER.md + MEMORY.md + calendar.md + reading.md + family.md (any read_file calls can be parallel), (2) get_weather + rss_fetch HN + rss_fetch ARM (these CAN be parallel), (3) web_search for ARM stock + NASDAQ + GBP/USD (parallel), (4) klipper_request EXACTLY {\"method\":\"GET\",\"endpoint\":\"/printer/objects/query?print_stats\"} — single call, the ?print_stats query string is mandatory. NEVER put a raw HTTP code (404/500) or raw JSON in the email; if it errors the Printer line is just \"Moonraker unreachable\". (5) ONLY AT THE END: send_email to jcfield@gmail.com with the 600-900 word body containing ALL six sections per the skill. NEVER call send_email in the same iteration as read_file or web_search — the body must be composed AFTER all data is gathered. If send_email fails, fall back to telegram_send_message chat 5538967144 with the FULL body verbatim.",
       "channel": "system",
       "chat_id": "briefing",
-      "last_run": 1778766188,
-      "next_run": 1778766483,
+      "last_run": 1778855019,
+      "next_run": 1778941418,
       "delete_after_run": false
     },
     {
@@ -35,8 +35,8 @@
       "message": "Run ha-updater skill: read /lfs/skills/ha-updater.md FIRST in iteration 1 (alone). Then check HA Core, OS, integration updates per the skill steps. Auto-install integration/device firmware. QUIET-BY-DEFAULT: only email James for HA Core/OS updates needing manual action; only Telegram-notify on auto-installs that ran or errors. If EVERYTHING is current (no Core update, no OS update, no integrations installed), send NOTHING — no email, no Telegram. James does not want a daily \"all good\" ping.",
       "channel": "system",
       "chat_id": "ha-updater",
-      "last_run": 1778766006,
-      "next_run": 1778774400,
+      "last_run": 1778774405,
+      "next_run": 1778860800,
       "delete_after_run": false
     },
     {
@@ -145,8 +145,8 @@
       "message": "Run klipper-updater skill: read /lfs/skills/klipper-updater.md FIRST in iteration 1 (alone). Single call to /machine/update/status?refresh=false. QUIET-BY-DEFAULT: email only on klipper/moonraker/system needing manual action; Telegram only on errors. GOLDEN RULE: at most ONE send_email per turn. If everything is current, send NOTHING. If a print is active, skip notifications entirely.",
       "channel": "system",
       "chat_id": "klipper-updater",
-      "last_run": 1778766017,
-      "next_run": 1778803715,
+      "last_run": 1778803715,
+      "next_run": 1778890115,
       "delete_after_run": false
     },
     {
@@ -158,8 +158,8 @@
       "message": "Run frame-tv-daily skill: read /lfs/skills/frame-tv-daily.md and follow it. Two tool calls only: get_weather, then frame_tv with a weather/season-appropriate prompt. Silent on success — no Telegram or email notification.",
       "channel": "system",
       "chat_id": "frame-tv",
-      "last_run": 1778766127,
-      "next_run": 1778852522,
+      "last_run": 1778852527,
+      "next_run": 1778938922,
       "delete_after_run": false
     },
     {

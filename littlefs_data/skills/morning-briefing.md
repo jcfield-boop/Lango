@@ -13,7 +13,11 @@ Personalized 06:20 PDT weekday briefing for James. Fires from cron (brief001).
 4. `web_search "Arm Holdings Qualcomm Snapdragon PC Chromebook news today"` — pick 2-3 items relevant to James's Arm PMM role covering PC/Chromebook segment.
 5. `web_search "NASDAQ today"` — market context.
 6. **Only on Fri/Sat/Sun:** `noaa_buoy` station 46012 for Pacifica surf (buoy in metres; Linda Mar ≈ 60% of buoy reading; beginner limit 3 ft).
-7. `klipper_request {"method":"GET","endpoint":"/printer/objects/query?print_stats"}` — current 3D printer state. **Skip the request entirely if it errors** (Moonraker down) — just write "Printer: unreachable" in the section. Don't burn iterations retrying.
+7. Printer state — call EXACTLY this, character-for-character (the `?print_stats` query string is REQUIRED — without it Moonraker returns an empty result):
+   `klipper_request {"method":"GET","endpoint":"/printer/objects/query?print_stats"}`
+   - The response shape is `{"result":{"status":{"print_stats":{"state":"printing|standby|complete|error","filename":"...","print_duration":N,...}}}}`.
+   - Derive: `state` → idle (standby/complete) / printing / error. If printing, compute progress from `print_duration` if available + filename.
+   - **NEVER put a raw HTTP status code (404/500/etc) or the raw JSON in the email.** If the call errors OR returns no `print_stats`, the Printer line is simply "Moonraker unreachable" — nothing else. Do not retry. One attempt only.
 8. `send_email` with:
    - to: `jcfield@gmail.com`
    - subject: `☀️ Lango Morning Briefing — [weekday, date]`
