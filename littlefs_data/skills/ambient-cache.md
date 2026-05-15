@@ -44,6 +44,20 @@ weather" nobody needs sub-hour freshness, and a 1-second cached answer
 that always works beats a 30-second live call that fails half the time
 on this network.
 
+## Reliability note (validated 2026-05-15)
+
+This skill is **best-effort, not guaranteed**. On fast/cheap models
+(e.g. the system-channel `gpt-4o-mini`) the model will often reach
+straight for `get_weather` / `web_search` even with this guidance in
+the system prompt — confirmed in two clean cron tests where the cache
+file was fresh but ignored. The *guaranteed* consumer of
+`brief_data.md` is the **morning-briefing skill**, where reading the
+file IS the task. Treat the ad-hoc cache hit as a nice-to-have
+latency/wifi-resilience win when it fires, not a contract. A live
+`get_weather` (~3-4 s, has its own retry) remains an acceptable
+fallback and is what happens today for most ad-hoc voice/system
+queries.
+
 ## Out of scope
 
 - Anything time-critical or transactional (reminders, sending
