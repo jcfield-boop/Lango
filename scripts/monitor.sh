@@ -9,8 +9,11 @@
 # Behaviour:
 #   - Refuses to start if another monitor is already attached (use --force to
 #     kill predecessors and take over).
-#   - Rotates log at $MAX_BYTES (default 50 MB) keeping last $KEEP files
-#     (default 3) → hard ceiling 200 MB total no matter how long it runs.
+#   - Rotates log at $MAX_BYTES (default 300 KB) keeping last $KEEP files
+#     (default 8) → hard ceiling ~2.7 MB total no matter how long it runs.
+#     Sized so the active file always fits a single read into an AI
+#     context window (~75 K tokens) without trimming — pair with
+#     scripts/read-log.sh for tail-bounded access to history.
 #   - Auto-detects the live port (usbserial-* preferred over SLAB; the SLAB
 #     bridge has historically returned 0 bytes).
 #   - Foreground by default; `--bg` to daemonize.
@@ -27,8 +30,12 @@ set -euo pipefail
 LOG_DIR="${LANGO_LOG_DIR:-/tmp/lango_logs}"
 LOG_FILE="$LOG_DIR/serial.log"
 PID_FILE="$LOG_DIR/monitor.pid"
-MAX_BYTES="${LANGO_LOG_MAX_BYTES:-52428800}"   # 50 MB
-KEEP="${LANGO_LOG_KEEP:-3}"
+MAX_BYTES="${LANGO_LOG_MAX_BYTES:-307200}"     # 300 KB — single-Read-safe
+KEEP="${LANGO_LOG_KEEP:-8}"                    # 8 × 300 KB ≈ 2.7 MB total
+# Rationale: ~750 KB/day steady-state baseline → rotates ~2.5×/day,
+# so 8 generations ≈ 3 days of history. Each file is safely Readable
+# in full (≤75 K tokens), and `read-log.sh --tail` bounds any larger
+# query to the last 50 KB by default.
 BAUD="${LANGO_BAUD:-115200}"
 
 mkdir -p "$LOG_DIR"
