@@ -2212,7 +2212,7 @@ esp_err_t ws_server_start(void)
 
     esp_err_t ret = httpd_start(&s_server, &cfg);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start HTTPS server: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to start HTTP server: %s", esp_err_to_name(ret));
         return ret;
     }
 

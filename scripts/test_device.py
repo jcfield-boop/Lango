@@ -31,12 +31,11 @@ def pytest_addoption(parser):
 @pytest.fixture(scope="session")
 def base_url(request):
     ip = request.config.getoption("--ip")
-    return f"https://{ip}"
+    return f"http://{ip}"
 
 @pytest.fixture(scope="session")
 def session(base_url):
     s = requests.Session()
-    s.verify = False          # self-signed cert
     s.timeout = 10
     # Disable persistent keep-alive connections so stale TCP connections
     # (e.g. after the 50 s WebSocket stability test) are never reused.
@@ -45,12 +44,8 @@ def session(base_url):
     # ProtocolError, etc.) with a 1 s backoff.  This is the final safety net
     # for the test that runs immediately after the 50 s WS stability hold.
     retry = Retry(total=3, connect=3, read=3, redirect=False, backoff_factor=1)
-    s.mount("https://", HTTPAdapter(max_retries=retry))
+    s.mount("http://", HTTPAdapter(max_retries=retry))
     return s
-
-# Suppress the InsecureRequestWarning for self-signed cert
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 # ── /api/sysinfo ──────────────────────────────────────────────
@@ -198,8 +193,8 @@ class TestWebSocket:
         except ImportError:
             pytest.skip("websocket-client not installed: pip install websocket-client")
 
-        ip = base_url.replace("https://", "")
-        url = f"wss://{ip}/ws"
+        ip = base_url.replace("http://", "")
+        url = f"ws://{ip}/ws"
         connected = threading.Event()
         error_event = threading.Event()
 
@@ -250,8 +245,8 @@ class TestWebSocketStability:
         # the device's WS client slot is free before we open our connection.
         time.sleep(5)
 
-        ip = base_url.replace("https://", "")
-        url = f"wss://{ip}/ws"
+        ip = base_url.replace("http://", "")
+        url = f"ws://{ip}/ws"
         premature_close = threading.Event()
         connected = threading.Event()
 
@@ -319,7 +314,7 @@ class TestWebSocketStress:
 
     @staticmethod
     def _ws_url(base_url):
-        return "wss://" + base_url.replace("https://", "") + "/ws"
+        return "ws://" + base_url.replace("http://", "") + "/ws"
 
     @staticmethod
     def _make_ws(url, on_open=None, on_message=None, on_close=None, on_error=None):
@@ -631,9 +626,8 @@ class TestHttpStress:
 
         def one_request():
             s = requests.Session()
-            s.verify = False
             retry = Retry(total=3, connect=3, read=3, backoff_factor=0.5)
-            s.mount("https://", HTTPAdapter(max_retries=retry))
+            s.mount("http://", HTTPAdapter(max_retries=retry))
             r = s.get(f"{base_url}/api/sysinfo", timeout=10)
             with lock:
                 results.append(r.status_code)
@@ -786,8 +780,8 @@ class TestSTTPipeline:
         except ImportError:
             pytest.skip("websocket-client not installed: pip install websocket-client")
 
-        ip   = base_url.replace("https://", "")
-        url  = f"wss://{ip}/ws"
+        ip   = base_url.replace("http://", "")
+        url  = f"ws://{ip}/ws"
         chat = "stt_pipeline_test"
         wav  = _make_silent_wav(500, 16000)
 
