@@ -4,35 +4,9 @@ Generated from code review + coredump analysis. Items ordered by priority.
 
 ---
 
-## 🔴 P0 — Do this next
-
-### 1. Drop TLS → plain HTTP/WS
-
-**Why:** Browser mic (`getUserMedia`) was the only reason for HTTPS. With the
-physical INMP441/UAC mic + wake word, the browser UI is text + status only.
-Plain HTTP on port 80 frees ~20–30 KB SRAM per TLS session and eliminates
-self-signed cert warnings. Current idle SRAM is ~27 KB — every TLS connection
-eats into agent headroom.
-
-**Files to change:**
-- `main/gateway/ws_server.c`:
-  - Replace `esp_https_server` with plain `httpd_start()` on port 80
-  - Remove `esp_https_server.h` include and cert extern declarations
-  - Remove the port-80 redirect server (it becomes the main server)
-  - `ws_server_stop()`: call `httpd_stop()` instead of `httpd_ssl_stop()`
-- `main/langoustine_config.h`: remove any HTTPS/cert-related constants
-- `main/CMakeLists.txt`: remove `EMBED_TXTFILES` for cert/key PEM files
-- `littlefs_data/console/index.html`: change `wss:` → `ws:`, `https:` → `http:`
-- `littlefs_data/console/dev.html`: same WS URL fix
-
-**After:** Rebuild + full flash. SRAM free should rise to ~47–57 KB at idle,
-giving comfortable headroom for agent + TLS-free WebSocket sessions.
-
----
-
 ## 🟡 P1 — Feature test checklist
 
-Run these in order after dropping TLS. Each is a go/no-go gate.
+Run these to confirm the current build is solid.
 
 ### Voice pipeline — wake word
 
@@ -43,7 +17,7 @@ Run these in order after dropping TLS. Each is a go/no-go gate.
 5. **Check:** transcript appears in dev console monitor feed
 6. **Check:** LLM response text in monitor feed
 7. **Check:** TTS WAV cached, `tts_id` sent to browser
-8. **Check:** I2S speaker plays response (requires `LANG_I2S_AUDIO_ENABLED=1` — see P2 #1)
+8. **Check:** I2S speaker plays response (`LANG_I2S_AUDIO_ENABLED=1` ✅)
 9. **Check:** no false wake during TTS playback
 
 ### Voice pipeline — PTT (BOOT button + UAC mic)
@@ -54,12 +28,19 @@ Run these in order after dropping TLS. Each is a go/no-go gate.
 4. Same LED/monitor flow as wake word path
 5. **Check:** Opus encoding log line shows compression ratio
 
-### Web UI (after HTTP switch)
+### Web UI
 
 1. Navigate to `http://192.168.0.44` — no cert warning
 2. Type a message, press Enter — tokens stream
 3. Dev console at `http://192.168.0.44/console` — monitor feed live
 4. **Check:** `ws:` WebSocket connects (browser console, no mixed-content errors)
+
+### Frame TV tool
+
+1. Say/type "put an impressionist sunset on the Frame"
+2. **Check:** agent calls `frame_tv` tool, responds with "generating..."
+3. **Check:** Nanoframe app receives POST at port 11436
+4. **Check:** image appears on TV after ~30–60 s
 
 ### Telegram
 
@@ -101,11 +82,12 @@ Watch next natural cron fire (daily briefing) and confirm Telegram delivery.
 ### Agent tools — smoke test
 
 ```
-"What time is it in Tokyo?"          → get_current_time
-"Search for latest Arm news"         → web_search
+"What time is it in Tokyo?"            → get_current_time
+"Search for latest Arm news"           → web_search
 "What's the weather in San Francisco?" → get_weather
-"Read my MEMORY.md"                  → read_file
-"What's the temperature of the ESP?" → device_temp
+"Read my MEMORY.md"                    → read_file
+"What's the temperature of the ESP?"   → device_temp
+"Put a painting of the ocean on the Frame" → frame_tv
 ```
 
 Check each produces a clean response with no stack overflow / WDT reset.
@@ -123,22 +105,13 @@ Check each produces a clean response with no stack overflow / WDT reset.
 
 ## 🟠 P2 — Fixes & features
 
-### 1. Enable I2S speaker playback
-
-`main/langoustine_config.h` line ~134:
-```c
-#define LANG_I2S_AUDIO_ENABLED  1   // was 0
-```
-Hardware is wired (MAX98357A VIN→5V, SD→GPIO42). Fix TTS truncation (#2) first —
-a 80-char limit means only the first sentence gets spoken.
-
-### 2. TTS truncation cuts mid-sentence
+### 1. TTS truncation cuts mid-sentence
 
 `main/agent/agent_loop.c` ~line 617 — truncates at 80 chars hard.
 Walk back to last sentence boundary (`.`, `!`, `?`) before the limit.
 Consider raising limit to 200 chars now that power is stable.
 
-### 3. stt_task stack watermark logging
+### 2. stt_task stack watermark logging
 
 Add after each STT transcription in `audio_pipeline.c`:
 ```c
@@ -147,7 +120,7 @@ ESP_LOGI(TAG, "stt_task stack HWM: %u bytes free",
 ```
 Confirm 24 KB stack has ≥4 KB headroom in practice. If HWM < 4 KB, raise to 26 KB.
 
-### 4. Persistent local HTTP session for STT
+### 3. Persistent local HTTP session for STT
 
 `main/audio/stt_client.c` — `stt_transcribe_local()` creates a fresh
 `esp_http_client` on each call (stack-heavy). Add a `static http_session_t
@@ -155,38 +128,56 @@ s_local_session` (plain TCP, no TLS) initialized on first use. This reduces
 per-call stack depth by ~4 KB and allows stt_task to drop back to 20 KB,
 reclaiming 4 KB SRAM.
 
-### 5. `/api/message` POST endpoint
+### 4. `/api/message` POST endpoint
 
 For external callers (Claude, scripts) to trigger agent turns over HTTP without
 a browser or Telegram. Auth via Bearer token. Returns 202 immediately, response
-goes to specified channel. See original spec in prior PLAN.md.
+goes to specified channel.
+
+### 5. Mac-side credential proxy (NanoClaw-inspired)
+
+Move API keys (Anthropic/OpenRouter/Groq) off the ESP32 NVS into a Mac-side
+proxy that injects credentials at request time. ESP32 authenticates to the
+proxy with a local LAN secret only. `tool_frame_tv` already follows this
+pattern (ESP32 → Mac → cloud). Extends it to LLM/STT/TTS calls.
+
+**Why:** NVS keys survive if the device is stolen/cloned. A proxy means cloud
+keys never leave the Mac. Also enables per-request rate limiting and logging.
 
 ---
 
 ## 🔵 P3 — Nice to have
 
-### 6. `LANG_MAX_TOOL_CALLS` = 2 → 4
-
-Low-risk — parallel spawn only fires if SRAM guard passes. After TLS removal
-(~47 KB free idle), the guard will allow 2 parallel tools again. Raising cap
-to 4 allows compound briefing tasks in one LLM turn.
-
-### 7. Weekly memory compaction cron
+### 6. Weekly memory compaction cron
 
 Already in `cron.json` as job `cmpct006` (system channel, weekly). Confirm it
 fires and actually shrinks MEMORY.md when it runs.
 
+### 7. Context bloat reduction (PICO_AGENT direction)
+
+`agent_loop.c` + `context_builder.c` — current system prompt is 8–15K tokens
+on complex turns, ballooning to 350K+ on multi-tool heartbeat runs. See
+`docs/PICO_AGENT.md` for the full design. Short-term: cap `MEMORY.md` retrieval
+to the top-N most relevant entries rather than the full file.
+
 ---
 
-## ✅ Already fixed
+## ✅ Already done
 
-- stt_task stack overflow (16 KB → 24 KB) — coredump confirmed, flashed
-- SRAM/TLS headroom (28 KB → 24 KB stack, TLS sessions now succeed)
-- Bootloader boot loop after OTA slot reset — full reflash with partition table
-- All cron jobs have `chat_id: 5538967144` — PLAN item #1 resolved
-- OLED layout (IP + RSSI, date row)
-- `tool_get_time` uses NTP directly
-- TTS voice: `autumn` (was `tara`)
-- SERVICES.md hot-reload on save
-- Klipper Moonraker URL port `:7125`
-- Default model: `openrouter/auto`
+- **TLS → plain HTTP** — `httpd_start()` on port 80, no `esp_https_server`, no embedded certs. HTML auto-detects `ws:`/`wss:` from `location.protocol`. Stale "HTTPS" log message fixed.
+- **`LANG_MAX_TOOL_CALLS` 2 → 4** — raised after TLS removal freed ~25 KB SRAM headroom
+- **`LANG_I2S_AUDIO_ENABLED` = 1** — speaker playback active
+- **Samsung Frame TV tool** — `tool_frame_tv`: prompt → Nanoframe Mac app (port 11436) → DALL-E 3 → TV
+- **stt_task stack overflow** (16 KB → 24 KB) — coredump confirmed, flashed
+- **Bootloader boot loop after OTA** — full reflash with partition table
+- **All cron jobs `chat_id: 5538967144`**
+- **OLED layout** (IP + RSSI, date row)
+- **`tool_get_time`** uses NTP directly
+- **TTS voice** `autumn` (was `tara`)
+- **SERVICES.md** hot-reload on save
+- **Klipper Moonraker URL** port `:7125`
+- **Default model** `openrouter/auto`
+- **Briefing prefetch pattern** (cron pre-fetches to `brief_data.md`)
+- **Log rotation hardening** (300 KB cap, 8 gens, PID lock — fixed 159 GB `/tmp` blowup)
+- **Klipper daily probe** (silent when current)
+- **Monday ARM digest** rewritten to use structured email with sources

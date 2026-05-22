@@ -543,6 +543,26 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 
 ## Changelog
 
+### 2026-05-22 — Frame TV tool, tool-call cap raised, docs/plan cleanup
+
+**Samsung Frame TV AI art tool** (`main/tools/tool_frame_tv.c/.h`, `main/tools/tool_registry.c`)
+
+New `frame_tv` tool: ask the agent to "put a painting of the ocean on the Frame" and it expands the prompt into a rich visual description and POSTs it to the Nanoframe Mac app (port 11436). Nanoframe calls DALL-E 3, upscales to 4K, and pushes to the TV via SmartThings. Fire-and-forget 202 response — device replies in ~1 s, image appears in ~30–60 s. URL configurable via `LANG_NANOFRAME_URL`.
+
+**`LANG_MAX_TOOL_CALLS` 2 → 4** (`main/langoustine_config.h`)
+
+TLS removal (done previously) freed ~25 KB SRAM at idle. Raising the parallel tool-call cap from 2 to 4 lets compound briefing tasks complete in a single LLM turn without exhausting heap. The existing SRAM guard still blocks spawns when free heap is too low.
+
+**Log rotation hardening** (`scripts/monitor.sh`, `scripts/read-log.sh`)
+
+Two-commit fix for a 159 GB `/tmp` blowup: PID-file lock prevents stacked readers, 300 KB rotation cap keeps each log file single-`Read`-safe (~75 K tokens), 8 generations = ~2.7 MB total ceiling. `read-log.sh` enforces a hard 200 KB per-call budget across `--tail`, `--bytes`, `--grep`, and cross-generation `--all` modes.
+
+**TLS already gone (confirmed)** — `ws_server.c` uses plain `httpd_start()` on port 80. No embedded certs, no `esp_https_server`. HTML auto-detects `ws:`/`wss:` from `location.protocol`. Stale "HTTPS" log string fixed.
+
+**PLAN.md** — refreshed: P0 TLS item closed, Frame TV and credential-proxy items added, completed items moved to ✅ section.
+
+---
+
 ### 2026-05-15 — Memory analysis, cron-cap fixes, briefing prefetch pattern
 
 A paired SRAM/PSRAM audit + a cluster of "no briefing" incidents drove
