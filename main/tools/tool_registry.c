@@ -615,15 +615,17 @@ esp_err_t tool_registry_init(void)
         .description = "Generate an AI image and display it on the Samsung Frame TV (living room art display). "
                        "Use when the user says anything like: put/show/display/hang a picture on the TV, "
                        "change the art/Frame/wall, or asks to put something on the frame. "
-                       "Expand the user's idea into a rich visual prompt with style, lighting and mood. "
+                       "Expand the user's idea into a rich visual prompt: include subject, art style, "
+                       "lighting, mood, and 16:9 composition. Always append: no people, no text, no logo. "
                        "Generation takes ~30-60 seconds — tell the user it is on its way.",
         .input_schema_json =
             "{\"type\":\"object\","
             "\"properties\":{"
             "\"prompt\":{\"type\":\"string\","
-            "\"description\":\"Rich visual description: subject, art style, lighting, mood, composition. "
-                             "E.g. A golden sunset over the Pacific Ocean, impressionist oil painting, "
-                             "warm amber light on calm waves, 4K wide landscape\"}"
+            "\"description\":\"Rich visual description: subject, art style, lighting, mood, 16:9 composition. "
+                             "E.g. 'A golden sunset over the Pacific Ocean, impressionist oil painting, "
+                             "warm amber light on calm waves, wide landscape, no people, no text, no logo'. "
+                             "Always end with: no people, no text, no logo.\"}"
             "},\"required\":[\"prompt\"]}",
         .execute = tool_frame_tv_execute,
     };
