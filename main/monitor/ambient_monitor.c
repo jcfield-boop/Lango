@@ -273,54 +273,62 @@ static void sonos_monitor_task(void *arg)
     }
 }
 
-/* ── ARM stock live fetch (Yahoo Finance, every 5 min) ─────────── */
+/* ── ARM stock live fetch ──────────────────────────────────────── */
+
+/* Extract a JSON number field from a (possibly truncated) buffer.
+ * Scans for "key": and reads the double that follows. Returns -1 on miss. */
+static double json_extract_double(const char *buf, const char *key)
+{
+    char needle[64];
+    snprintf(needle, sizeof(needle), "\"%s\":", key);
+    const char *p = strstr(buf, needle);
+    if (!p) return -1.0;
+    p += strlen(needle);
+    while (*p == ' ') p++;
+    return strtod(p, NULL);
+}
 
 static void arm_stock_live_task(void *arg)
 {
-    /* Stagger start so all tasks don't wake simultaneously */
-    vTaskDelay(pdMS_TO_TICKS(10000));
+    vTaskDelay(pdMS_TO_TICKS(10000)); /* stagger start */
 
-    char *buf = (char *)ps_malloc(RESP_BUF);
-    if (!buf) { vTaskDelete(NULL); return; }
+    char buf[256];  /* response is ~60 bytes */
 
     for (;;) {
         lan_result_t res;
-        /* Yahoo Finance v7 quote — small focused response */
+        /* Poll the Mac-side arm_stock_server.py rather than Yahoo directly.
+         * Mac handles the Yahoo fetch + caching; ESP32 gets clean LAN JSON. */
         esp_err_t err = lan_request(
             "GET",
-            "https://query2.finance.yahoo.com",
-            "/v7/finance/quote?symbols=ARM&fields=regularMarketPrice,regularMarketChangePercent",
+            "http://192.168.0.51:11437",
+            "/arm_stock",
             NULL, NULL,
-            NULL, buf, RESP_BUF, &res);
+            NULL, buf, sizeof(buf), &res);
 
         if (err == ESP_OK && res.ok) {
-            cJSON *root = cJSON_Parse(buf);
-            if (root) {
-                cJSON *qr     = cJSON_GetObjectItemCaseSensitive(root, "quoteResponse");
-                cJSON *result = qr ? cJSON_GetObjectItemCaseSensitive(qr, "result") : NULL;
-                cJSON *quote  = (cJSON_IsArray(result) && cJSON_GetArraySize(result) > 0)
-                              ? cJSON_GetArrayItem(result, 0) : NULL;
+            double price      = json_extract_double(buf, "price");
+            double change_pct = json_extract_double(buf, "change_pct");
 
-                cJSON *price_j  = quote ? cJSON_GetObjectItemCaseSensitive(quote, "regularMarketPrice") : NULL;
-                cJSON *change_j = quote ? cJSON_GetObjectItemCaseSensitive(quote, "regularMarketChangePercent") : NULL;
-
-                if (cJSON_IsNumber(price_j)) {
-                    double price  = price_j->valuedouble;
-                    double change = cJSON_IsNumber(change_j) ? change_j->valuedouble : 0.0;
-                    char line[22];
-                    /* Format: "ARM $309 +2.3%" — price integer + 1dp change */
-                    int change_i   = (int)(change * 10);   /* ±tenths */
-                    char sign      = change >= 0 ? '+' : '-';
-                    int abs_change = change_i < 0 ? -change_i : change_i;
-                    snprintf(line, sizeof(line), "ARM $%d %c%d.%d%%",
-                             (int)price, sign, abs_change / 10, abs_change % 10);
-                    oled_display_set_arm_header(line);
-                    ESP_LOGI(TAG, "ARM stock live: %s", line);
-                }
-                cJSON_Delete(root);
+            if (price > 0) {
+                char line[22];
+                double abs_c = change_pct < 0 ? -change_pct : change_pct;
+                char sign    = change_pct >= 0 ? '+' : '-';
+                int abs_i    = (int)(abs_c * 10);
+                int p4       = (int)price % 10000;
+                int ci       = (abs_i > 99) ? 99 : abs_i;
+                char chg[8];
+                chg[0] = sign;
+                chg[1] = (char)('0' + (ci / 10));
+                chg[2] = '.';
+                chg[3] = (char)('0' + (ci % 10));
+                chg[4] = '%';
+                chg[5] = '\0';
+                snprintf(line, sizeof(line), "ARM $%d %s", p4, chg);
+                oled_display_set_arm_header(line);
+                ESP_LOGI(TAG, "ARM: %s", line);
             }
         } else {
-            ESP_LOGW(TAG, "ARM stock fetch failed (err=%d ok=%d)", err, res.ok);
+            ESP_LOGW(TAG, "ARM fetch failed err=%d http=%d", err, res.http_status);
         }
 
         vTaskDelay(pdMS_TO_TICKS(STOCK_POLL_MS));
