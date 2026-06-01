@@ -47,7 +47,7 @@
 ### 2026 Upcoming
 - **GTC:** March 16–19 (San Jose — no travel)
 - **Google I/O:** May 19–20 (Mountain View — no travel)
-- **Microsoft Build:** June 2–3 (Seattle — travel required)
+- **Microsoft Build:** June 2–3 (Fort Mason, SF — no travel)
 - **Computex:** June 2–5 (Taipei — overlaps Build; travel TBD)
 - **IFA Berlin:** Expected September (Berlin — travel required)
 - **PC OEM Private Events:** HP, Dell, Lenovo (TBD—user to add as needed)

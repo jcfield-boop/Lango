@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Langoustine Console</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:monospace;background:#1a1a1a;color:#e0e0e0;height:100vh;display:flex;flex-direction:column;font-size:14px}
+header{background:#2d2d2d;padding:8px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #444;flex-shrink:0;flex-wrap:wrap}
+header h1{font-size:0.95rem;color:#7ec8e3}
+#ip{color:#888;font-size:0.8rem}
+#mem{color:#7ee38e;font-size:0.75rem;margin-left:6px;white-space:nowrap}
+#tok{color:#c8e37e;font-size:0.75rem;margin-left:6px;white-space:nowrap}
+#uptime{color:#777;font-size:0.75rem;margin-left:6px;white-space:nowrap}
+#uptime.crash{color:#e3b97e}
+#ws-dot{width:8px;height:8px;border-radius:50%;background:#555;flex-shrink:0;transition:background .3s}
+#ws-dot.on{background:#7ee38e}
+#ws-dot.err{background:#e37e7e}
+button{background:#3a3a3a;color:#ddd;border:1px solid #555;padding:5px 11px;cursor:pointer;border-radius:3px;font-family:monospace;font-size:0.82rem}
+button:hover{background:#4a4a4a}
+#reboot-btn{background:#5a1f1f;border-color:#8b3333;margin-left:auto;color:#ffaaaa}
+#reboot-btn:hover{background:#6b2020}
+nav{background:#222;display:flex;border-bottom:1px solid #444;flex-shrink:0;flex-wrap:wrap}
+nav button{border:none;border-bottom:2px solid transparent;border-radius:0;padding:8px 14px;color:#888;background:transparent}
+nav button.active{color:#7ec8e3;border-bottom-color:#7ec8e3}
+nav button:hover{color:#ddd;background:#2d2d2d}
+#crash-banner{display:none;background:#5a3000;border-bottom:2px solid #e3b97e;padding:6px 14px;font-size:0.82rem;color:#e3b97e;flex-shrink:0;align-items:center;gap:10px}
+#crash-banner span{flex:1}
+#crash-banner button{background:none;border:none;color:#e3b97e;cursor:pointer;padding:2px 6px;font-size:1rem;line-height:1}
+#content{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+#log-filter-row{display:none;gap:6px;padding:4px 10px;background:#1e1e1e;border-bottom:1px solid #2d2d2d;flex-shrink:0}
+#log-filter{flex:1;background:#222;color:#ddd;border:1px solid #3a3a3a;padding:3px 8px;font-family:monospace;font-size:0.78rem;border-radius:3px;outline:none}
+#log-filter:focus{border-color:#555}
+#log-filter-clear{background:none;border:none;color:#555;cursor:pointer;font-size:0.85rem;padding:0 4px}
+#log-filter-clear:hover{color:#aaa}
+#log-panel{flex:1;overflow-y:auto;padding:8px 10px;min-height:0;display:none}
+.entry{padding:1px 0;line-height:1.5;word-break:break-word;overflow-wrap:anywhere}
+.ts{color:#555;margin-right:6px;user-select:none}
+.llm{color:#7ec8e3}.tool{color:#c8e37e}.done{color:#7ee38e}
+.task{color:#b07ee3}.msg{color:#e3b97e}.err{color:#e37e7e}.ws{color:#777}
+#file-panel{flex:1;display:none;flex-direction:column;padding:10px;gap:8px;min-height:0}
+#file-panel .toolbar{display:flex;gap:8px;align-items:center;flex-shrink:0}
+#status{color:#7ee38e;font-size:0.8rem}
+textarea{flex:1;background:#222;color:#ddd;border:1px solid #444;padding:10px;font-family:monospace;font-size:0.83rem;resize:none;line-height:1.6;outline:none;min-height:0}
+textarea:focus{border-color:#555}
+#settings-panel{flex:1;display:none;flex-direction:column;padding:16px;gap:12px;min-height:0;overflow-y:auto}
+#settings-panel label{font-size:0.82rem;color:#aaa;display:block;margin-bottom:3px}
+#settings-panel input[type=text],#settings-panel input[type=password]{width:100%;background:#222;color:#ddd;border:1px solid #444;padding:6px 10px;font-family:monospace;font-size:0.83rem;border-radius:3px;outline:none;box-sizing:border-box}
+#settings-panel input:focus{border-color:#555}
+.settings-row{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap}
+.settings-row .field{flex:1;min-width:180px}
+#cfg-status{color:#7ee38e;font-size:0.8rem}
+#skill-panel{flex:1;display:none;flex-direction:row;gap:8px;padding:10px;min-height:0}
+#skill-list-col{width:148px;flex-shrink:0;display:flex;flex-direction:column;gap:4px;overflow-y:auto}
+#skill-edit-col{flex:1;display:flex;flex-direction:column;gap:6px;min-height:0}
+#skill-edit-col .toolbar{display:flex;gap:6px;align-items:center;flex-shrink:0;flex-wrap:wrap}
+.skill-item{background:#2d2d2d;border:1px solid #444;padding:4px 8px;cursor:pointer;font-size:0.8rem;color:#aaa;text-align:left;border-radius:3px;width:100%}
+.skill-item:hover{background:#3a3a3a;color:#ddd}
+.skill-item.active{color:#7ec8e3;border-color:#7ec8e3}
+#skill-name{background:#222;color:#ddd;border:1px solid #444;padding:4px 8px;font-family:monospace;font-size:0.82rem;border-radius:3px;outline:none;width:160px}
+#skill-name:focus{border-color:#555}
+#skill-status{color:#7ee38e;font-size:0.8rem}
+#del-skill-btn{margin-left:auto;background:#5a1f1f;border-color:#8b3333;color:#ffaaaa}
+#del-skill-btn:hover{background:#6b2020}
+#new-skill-btn{width:100%;margin-bottom:6px}
+#chat-bar{display:none;gap:6px;padding:6px 10px;background:#222;border-top:1px solid #333;flex-shrink:0}
+#chat-input{flex:1;background:#1a1a1a;color:#ddd;border:1px solid #444;padding:5px 8px;font-family:monospace;font-size:0.82rem;border-radius:3px;outline:none}
+#chat-input:focus{border-color:#555}
+.toggle{position:relative;display:inline-block;width:34px;height:18px;flex-shrink:0}
+.toggle input{opacity:0;width:0;height:0;position:absolute}
+.toggle-slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#444;border-radius:18px;transition:.25s}
+.toggle-slider:before{position:absolute;content:"";width:12px;height:12px;left:3px;bottom:3px;background:#888;border-radius:50%;transition:.25s}
+.toggle input:checked+.toggle-slider{background:#2d5a3d}
+.toggle input:checked+.toggle-slider:before{transform:translateX(16px);background:#7ee38e}
+#cron-panel{flex:1;display:none;flex-direction:column;padding:10px;gap:8px;min-height:0;overflow-y:auto}
+.cron-table{width:100%;border-collapse:collapse;font-size:0.8rem}
+.cron-table th{color:#888;text-align:left;padding:4px 8px;border-bottom:1px solid #333;font-weight:normal;white-space:nowrap}
+.cron-table td{padding:4px 8px;border-bottom:1px solid #2d2d2d;vertical-align:top;word-break:break-word}
+.cron-table tr:hover td{background:#222}
+.ck-every{color:#c8e37e}.ck-at{color:#7ec8e3}.ck-dis{color:#555}
+#cron-status{color:#7ee38e;font-size:0.8rem}
+#crashlog-panel{flex:1;display:none;flex-direction:column;padding:10px;gap:8px;min-height:0;overflow-y:auto}
+.crash-table{width:100%;border-collapse:collapse;font-size:0.8rem}
+.crash-table th{color:#888;text-align:left;padding:4px 8px;border-bottom:1px solid #333;font-weight:normal}
+.crash-table td{padding:4px 8px;border-bottom:1px solid #2d2d2d}
+.crash-table .reason-panic,.crash-table .reason-int_wdt,.crash-table .reason-task_wdt{color:#e37e7e;font-weight:bold}
+.crash-table .reason-brownout{color:#e3b97e;font-weight:bold}
+#crashlog-status{color:#7ee38e;font-size:0.8rem}
+#dash-panel{flex:1;display:none;flex-direction:column;padding:14px;gap:14px;min-height:0;overflow-y:auto}
+.ds-cards{display:flex;gap:10px;flex-wrap:wrap}
+.ds-card{background:#2a2a2a;border:1px solid #444;border-radius:6px;padding:10px 14px;min-width:100px;flex:1}
+.ds-card .label{font-size:0.7rem;color:#888;text-transform:uppercase;margin-bottom:2px}
+.ds-card .val{font-size:1.1rem;color:#7ec8e3;font-weight:bold}
+#dash-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.qa-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:16px 8px;background:#2a2a2a;border:1px solid #444;border-radius:8px;cursor:pointer;transition:all 0.15s;min-height:80px;font-family:monospace;color:#ddd}
+.qa-btn:hover{background:#3a3a3a;border-color:#7ec8e3}
+.qa-btn .icon{font-size:1.6rem}
+.qa-btn .lbl{font-size:0.75rem;text-align:center}
+.qa-btn.sent{background:#1a3a1a;border-color:#7ee38e}
+@media(max-width:600px){#dash-grid{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<header>
+  <span id="ws-dot"></span>
+  <h1>&#x1F99E; Langoustine</h1>
+  <span id="ip"></span>
+  <span id="mem"></span>
+  <span id="tok"></span>
+  <span id="uptime"></span>
+  <button onclick="doHeartbeat()">&#x2665; Heartbeat</button>
+  <button id="reboot-btn" onclick="doReboot()">&#x21BA; Reboot</button>
+</header>
+<div id="crash-banner"><span id="crash-banner-msg"></span><button onclick="dismissCrashBanner()" title="Dismiss">&#x2715;</button></div>
+<nav>
+  <button class="active" onclick="showTab('dash',this)">&#x26A1;</button>
+  <button onclick="showTab('log',this)">Live Log</button>
+  <button id="clear-log-btn" onclick="clearLog()" style="border:none;border-radius:0;padding:8px 10px;color:#666;background:transparent;font-size:0.75rem" title="Clear browser log">&#x2715;</button>
+  <button id="clear-device-log-btn" onclick="clearDeviceLog()" style="border:none;border-radius:0;padding:8px 10px;color:#666;background:transparent;font-size:0.75rem" title="Clear device log ring buffer">&#x1F5D1;</button>
+  <button onclick="showTab('soul',this)">SOUL.md</button>
+  <button onclick="showTab('user',this)">USER.md</button>
+  <button onclick="showTab('memory',this)">MEMORY.md</button>
+  <button onclick="showTab('heartbeat',this)">HEARTBEAT.md</button>
+  <button onclick="showTab('services',this)">SERVICES.md</button>
+  <button onclick="showTab('skills',this)">Skills</button>
+  <button onclick="showTab('crons',this)">Crons</button>
+  <button onclick="showTab('crashlog',this)">Crash Log</button>
+  <button onclick="showTab('settings',this)">Settings</button>
+</nav>
+<div id="content">
+  <div id="dash-panel" style="display:flex">
+    <div class="ds-cards">
+      <div class="ds-card"><div class="label">Uptime</div><div class="val" id="ds-uptime">--</div></div>
+      <div class="ds-card"><div class="label">SRAM</div><div class="val" id="ds-sram">--</div></div>
+      <div class="ds-card"><div class="label">WiFi</div><div class="val" id="ds-rssi">--</div></div>
+      <div class="ds-card"><div class="label">Searches</div><div class="val" id="ds-cost">--</div></div>
+    </div>
+    <div id="dash-grid"></div>
+  </div>
+  <div id="log-filter-row">
+    <input id="log-filter" type="text" placeholder="Filter logs…" oninput="filterLog(this.value)" spellcheck="false">
+    <button id="log-filter-clear" onclick="clearLogFilter()" title="Clear filter">&#x2715;</button>
+  </div>
+  <div id="log-panel"></div>
+  <div id="chat-bar">
+    <input id="chat-input" type="text" placeholder="Send a message to Langoustine..." maxlength="512" onkeydown="if(event.key==='Enter')sendMsg()" spellcheck="false">
+    <button onclick="sendMsg()">&#x27A4;</button>
+  </div>
+  <div id="file-panel">
+    <div class="toolbar">
+      <button onclick="saveFile()">&#x1F4BE; Save</button>
+      <span id="status"></span>
+    </div>
+    <textarea id="editor" spellcheck="false"></textarea>
+  </div>
+  <div id="skill-panel">
+    <div id="skill-list-col">
+      <button id="new-skill-btn" onclick="newSkill()">+ New</button>
+    </div>
+    <div id="skill-edit-col">
+      <div class="toolbar">
+        <input id="skill-name" type="text" placeholder="skill-name" maxlength="48" spellcheck="false">
+        <button onclick="saveSkill()">&#x1F4BE; Save</button>
+        <span id="skill-status"></span>
+        <button id="del-skill-btn" onclick="deleteSkill()">&#x1F5D1; Delete</button>
+      </div>
+      <textarea id="skill-editor" spellcheck="false"></textarea>
+    </div>
+  </div>
+  <div id="cron-panel">
+    <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+      <button onclick="loadCronList()">&#x21BA; Refresh</button>
+      <span id="cron-status"></span>
+    </div>
+    <table class="cron-table">
+      <thead><tr><th>Name</th><th>Schedule</th><th>Next run</th><th>Message</th><th></th></tr></thead>
+      <tbody id="cron-body"></tbody>
+    </table>
+  </div>
+  <div id="crashlog-panel">
+    <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+      <button onclick="loadCrashlog()">&#x21BA; Refresh</button>
+      <span id="crashlog-status"></span>
+    </div>
+    <table class="crash-table">
+      <thead><tr><th>Timestamp (build-approx UTC)</th><th>Reason</th><th>Firmware</th></tr></thead>
+      <tbody id="crashlog-body"></tbody>
+    </table>
+  </div>
+  <div id="settings-panel">
+    <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
+      <label class="toggle"><input id="cfg-verbose" type="checkbox"><span class="toggle-slider"></span></label>
+      <span style="color:#aaa;font-size:0.82rem">Verbose Logs</span>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+      <button onclick="loadConfig()">&#x21BA; Load</button>
+      <button onclick="saveConfig()">&#x1F4BE; Save</button>
+      <span id="cfg-status"></span>
+    </div>
+    <div style="margin-top:6px">
+      <label style="font-size:0.82rem;color:#aaa">Speaker Volume</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="cfg-volume" type="range" min="0" max="255" value="64" style="flex:1;accent-color:#7ec8e3">
+        <span id="cfg-volume-val" style="color:#ddd;font-size:0.82rem;min-width:40px;text-align:right">25%</span>
+      </div>
+    </div>
+    <p style="color:#555;font-size:0.75rem;margin:6px 0">API keys and voice settings are configured in the <strong style="color:#888">SERVICES.md</strong> tab.</p>
+    <hr style="border:none;border-top:1px solid #333;margin:8px 0">
+    <div class="field">
+      <label>Firmware Update URL</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="ota-url" type="text" placeholder="http://192.168.x.x:8765/langoustine.bin" maxlength="256" style="flex:1">
+        <button id="ota-btn" onclick="doOTA()">&#x21AF; Flash OTA</button>
+      </div>
+    </div>
+    <div id="ota-progress" style="display:none;flex-direction:column;gap:4px">
+      <div style="background:#333;border-radius:3px;height:6px;overflow:hidden">
+        <div id="ota-bar" style="background:#7ec8e3;height:100%;width:0;transition:width 0.4s"></div>
+      </div>
+      <span id="ota-msg" style="font-size:0.78rem;color:#aaa"></span>
+    </div>
+  </div>
+</div>
+<script>
+var ws,curTab='dash',curFile=null,curSkill=null,reconnectTimer=null;
+var logEl=document.getElementById('log-panel');
+var dot=document.getElementById('ws-dot');
+document.getElementById('ip').textContent=location.host;
+
+/* ── WebSocket ── */
+function connect(){
+  clearTimeout(reconnectTimer);reconnectTimer=null;
+  if(ws){ws.onclose=null;try{ws.close()}catch(e){}}
+  dot.className='';
+  var _proto=location.protocol==='https:'?'wss:':'ws:';
+  ws=new WebSocket(_proto+'//'+location.host+'/ws');
+  ws.onopen=function(){dot.className='on';addLog('ws','Connected')};
+  ws.onclose=function(){
+    dot.className='err';
+    addLog('err','Disconnected — retry in 4s');
+    clearTimeout(reconnectTimer);
+    reconnectTimer=setTimeout(connect,4000);
+  };
+  ws.onerror=function(){addLog('err','WebSocket error')};
+  ws.onmessage=function(ev){
+    if(typeof ev.data!=='string') return;
+    try{
+      var d=JSON.parse(ev.data);
+      if(d.type==='monitor')  addLog(d.event,'['+d.event+'] '+d.msg);
+      else if(d.type==='token') addLog('llm','[token] '+d.content);
+      else if(d.type==='message'){
+        var p=d.content||'';
+        if(p.length>400) p=p.substring(0,400)+'...';
+        addLog('msg','[resp] '+p);
+      }
+      else if(d.type==='status') addLog('ws','[status] '+d.stage);
+      else if(d.type==='error')  addLog('err','[error] '+d.code+': '+d.message);
+    }catch(e){addLog('ws',ev.data)}
+  };
+}
+
+setInterval(function(){if(ws&&ws.readyState===1){try{ws.send('{"type":"ping"}');}catch(e){}}},25000);
+
+function ts(){var n=new Date();return pad(n.getHours())+':'+pad(n.getMinutes())+':'+pad(n.getSeconds())}
+function pad(n){return n<10?'0'+n:n}
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+var LOG_MAX=250,LOG_TRIM=80;
+function addLog(cls,text){
+  var el=document.createElement('div');
+  el.className='entry';
+  el.innerHTML='<span class="ts">'+ts()+'</span><span class="'+esc(cls)+'">'+esc(text)+'</span>';
+  var fv=(document.getElementById('log-filter')||{}).value||'';
+  if(fv&&el.textContent.toLowerCase().indexOf(fv.toLowerCase())===-1) el.style.display='none';
+  logEl.appendChild(el);
+  if(logEl.children.length>LOG_MAX){
+    var n=logEl.children.length-LOG_MAX+LOG_TRIM;
+    for(var i=0;i<n;i++) logEl.removeChild(logEl.firstChild);
+    var sep=document.createElement('div');
+    sep.className='entry';
+    sep.innerHTML='<span class="ts">'+ts()+'</span><span class="ws">--- '+n+' older entries removed ---</span>';
+    logEl.insertBefore(sep,logEl.firstChild);
+  }
+  logEl.scrollTop=logEl.scrollHeight;
+}
+function clearLog(){logEl.innerHTML='';addLog('ws','Log cleared')}
+function clearDeviceLog(){
+  fetch('/api/logs/clear',{method:'POST'})
+    .then(function(r){
+      if(r.ok){clearLog();addLog('ws','Device log ring buffer cleared');}
+      else{addLog('err','Clear failed: '+r.status);}
+    })
+    .catch(function(){addLog('err','Clear device log failed');});
+}
+
+/* ── Log filter ── */
+function filterLog(val){
+  var v=val.toLowerCase();
+  Array.from(logEl.children).forEach(function(el){
+    el.style.display=(!v||el.textContent.toLowerCase().indexOf(v)!==-1)?'':'none';
+  });
+}
+function clearLogFilter(){
+  document.getElementById('log-filter').value='';
+  filterLog('');
+}
+
+/* ── Tabs ── */
+var FILE_TABS=['soul','user','memory','heartbeat','services'];
+function showTab(tab,btn){
+  document.querySelectorAll('nav button').forEach(function(b){b.classList.remove('active')});
+  btn.classList.add('active');
+  curTab=tab;
+  var isLog=tab==='log';
+  document.getElementById('dash-panel').style.display=tab==='dash'?'flex':'none';
+  document.getElementById('log-filter-row').style.display=isLog?'flex':'none';
+  document.getElementById('log-panel').style.display=isLog?'block':'none';
+  document.getElementById('chat-bar').style.display=isLog?'flex':'none';
+  document.getElementById('file-panel').style.display=(FILE_TABS.indexOf(tab)!==-1)?'flex':'none';
+  document.getElementById('skill-panel').style.display=tab==='skills'?'flex':'none';
+  document.getElementById('cron-panel').style.display=tab==='crons'?'flex':'none';
+  document.getElementById('crashlog-panel').style.display=tab==='crashlog'?'flex':'none';
+  document.getElementById('settings-panel').style.display=tab==='settings'?'flex':'none';
+  if(tab==='dash'){refreshDashboard();return}
+  if(tab==='skills'){loadSkillList();return}
+  if(tab==='crons'){loadCronList();return}
+  if(tab==='crashlog'){loadCrashlog();return}
+  if(tab==='settings'){loadConfig();return}
+  if(FILE_TABS.indexOf(tab)!==-1){
+    curFile=tab;
+    setStatus('Loading...');
+    fetch('/api/file?name='+tab)
+      .then(function(r){return r.text()})
+      .then(function(t){document.getElementById('editor').value=t;setStatus('')})
+      .catch(function(){setStatus('Load failed')});
+  }
+}
+
+/* ── File editor ── */
+function saveFile(){
+  if(!curFile) return;
+  setStatus('Saving...');
+  fetch('/api/file?name='+curFile,{
+    method:'POST',
+    body:document.getElementById('editor').value,
+    headers:{'Content-Type':'text/plain;charset=utf-8'}
+  })
+  .then(function(r){return r.json()})
+  .then(function(j){
+    setStatus(j.ok?'Saved \u2713':'Save failed');
+    setTimeout(function(){setStatus('')},3000);
+  })
+  .catch(function(){setStatus('Save failed')});
+}
+function setStatus(msg){document.getElementById('status').textContent=msg}
+
+/* ── Skills ── */
+function loadSkillList(){
+  fetch('/api/skills')
+  .then(function(r){return r.json()})
+  .then(function(names){
+    var col=document.getElementById('skill-list-col');
+    col.querySelectorAll('.skill-item').forEach(function(el){col.removeChild(el)});
+    names.forEach(function(n){
+      var b=document.createElement('button');
+      b.className='skill-item'+(n===curSkill?' active':'');
+      b.textContent=n;
+      b.onclick=function(){selectSkill(n)};
+      col.appendChild(b);
+    });
+  }).catch(function(){});
+}
+function selectSkill(name){
+  curSkill=name;
+  document.getElementById('skill-name').value=name;
+  setSkillStatus('Loading...');
+  document.querySelectorAll('.skill-item').forEach(function(b){b.classList.toggle('active',b.textContent===name)});
+  fetch('/api/skill?name='+encodeURIComponent(name))
+  .then(function(r){return r.text()})
+  .then(function(t){document.getElementById('skill-editor').value=t;setSkillStatus('')})
+  .catch(function(){setSkillStatus('Load failed')});
+}
+function newSkill(){
+  curSkill=null;
+  document.getElementById('skill-name').value='';
+  document.getElementById('skill-editor').value='# New Skill\n\nDescribe what this skill does.\n\n## When to use\n\n## How to use\n1. \n';
+  setSkillStatus('');
+  document.querySelectorAll('.skill-item').forEach(function(b){b.classList.remove('active')});
+  document.getElementById('skill-name').focus();
+}
+function saveSkill(){
+  var name=document.getElementById('skill-name').value.trim();
+  if(!name){setSkillStatus('Name required');return}
+  setSkillStatus('Saving...');
+  fetch('/api/skill?name='+encodeURIComponent(name),{
+    method:'POST',
+    body:document.getElementById('skill-editor').value,
+    headers:{'Content-Type':'text/plain;charset=utf-8'}
+  })
+  .then(function(r){return r.json()})
+  .then(function(j){
+    if(j.ok){curSkill=name;loadSkillList();setSkillStatus('Saved \u2713');setTimeout(function(){setSkillStatus('')},3000);}
+    else setSkillStatus('Save failed');
+  }).catch(function(){setSkillStatus('Save failed')});
+}
+function deleteSkill(){
+  if(!curSkill||!confirm('Delete "'+curSkill+'"?')) return;
+  fetch('/api/skill?name='+encodeURIComponent(curSkill),{method:'DELETE'})
+  .then(function(r){return r.json()})
+  .then(function(j){
+    if(j.ok){curSkill=null;document.getElementById('skill-name').value='';document.getElementById('skill-editor').value='';loadSkillList();}
+  }).catch(function(){});
+}
+function setSkillStatus(msg){document.getElementById('skill-status').textContent=msg}
+
+/* ── Crash Log ── */
+function loadCrashlog(){
+  document.getElementById('crashlog-status').textContent='Loading...';
+  fetch('/api/file?name=crashlog')
+  .then(function(r){return r.text()})
+  .then(function(txt){
+    document.getElementById('crashlog-status').textContent='';
+    var tbody=document.getElementById('crashlog-body');
+    tbody.innerHTML='';
+    var rows=txt.split('\n').filter(function(l){
+      return l.startsWith('|')&&l.indexOf('Timestamp')===-1&&l.indexOf('|---|')===-1&&l.trim().length>3;
+    });
+    if(!rows.length){
+      tbody.innerHTML='<tr><td colspan="3" style="color:#555;padding:16px 8px">No crashes logged — device appears stable &#x2713;</td></tr>';
+      return;
+    }
+    rows.reverse().forEach(function(row){
+      var cols=row.split('|').map(function(c){return c.trim()}).filter(function(c,i){return i>0&&i<4});
+      if(cols.length<3) return;
+      var reason=cols[1].replace(/\*\*/g,'');
+      var tr=document.createElement('tr');
+      tr.innerHTML='<td style="white-space:nowrap;color:#888">'+esc(cols[0])+'</td>'
+        +'<td class="reason-'+esc(reason)+'">'+esc(reason)+'</td>'
+        +'<td style="color:#777;font-size:0.78rem">'+esc(cols[2])+'</td>';
+      tbody.appendChild(tr);
+    });
+  })
+  .catch(function(){
+    document.getElementById('crashlog-status').textContent='';
+    document.getElementById('crashlog-body').innerHTML=
+      '<tr><td colspan="3" style="color:#555;padding:16px 8px">No crash log yet (first boot after firmware update, or no abnormal resets)</td></tr>';
+  });
+}
+
+/* ── Sysinfo + Crash Banner ── */
+var CRASH_REASONS=['panic','task_wdt','int_wdt','brownout'];
+function fmtUptime(s){
+  if(s<60) return s+'s';
+  if(s<3600){var m=Math.floor(s/60);return m+'m '+(s%60)+'s';}
+  var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);
+  return h+'h '+m+'m';
+}
+function fetchSysinfo(){
+  fetch('/api/sysinfo')
+  .then(function(r){return r.json()})
+  .then(function(d){
+    var hf=Math.round(d.heap_free/1024),hm=Math.round(d.heap_min/1024);
+    var su=Math.round((d.lfs_used||d.spiffs_used||0)/1024);
+    var st=Math.round((d.lfs_total||d.spiffs_total||0)/1024);
+    var pf=d.psram_free?Math.round(d.psram_free/1024):0;
+    var memStr='RAM '+hf+'K (min '+hm+'K)  FS '+su+'/'+st+'K';
+    if(pf>0) memStr+='  PSRAM '+pf+'K';
+    document.getElementById('mem').textContent=memStr;
+    var ti=d.tokens_in||0,to=d.tokens_out||0,cost=d.cost_millicents||0;
+    var sc=d.search_calls||0,sCost=d.search_cost_millicents||0;
+    var total=cost+sCost;
+    var tokStr='Tok '+ti+'\u2191'+to+'\u2193';
+    if(sc>0) tokStr+='  Search '+sc;
+    if(total>0) tokStr+='  $'+(total/100000).toFixed(4);
+    document.getElementById('tok').textContent=tokStr;
+    var uptimeEl=document.getElementById('uptime'),upS=d.uptime_s||0,rsn=d.reset_reason||'';
+    var isCrash=CRASH_REASONS.indexOf(rsn)!==-1;
+    uptimeEl.className=isCrash?'crash':'';
+    uptimeEl.textContent=isCrash?'\u26a0 '+rsn+' \u2192 up '+fmtUptime(upS):'up '+fmtUptime(upS);
+    uptimeEl.dataset.uptime=upS;
+    /* Show crash banner once per session per uptime value */
+    if(isCrash&&!sessionStorage.getItem('crash-banner-'+upS)){
+      document.getElementById('crash-banner-msg').textContent=
+        '\u26a0\ufe0f Last reset: '+rsn+' \u2014 check Crash Log tab for details';
+      document.getElementById('crash-banner').style.display='flex';
+    }
+  }).catch(function(){});
+}
+function dismissCrashBanner(){
+  var upS=document.getElementById('uptime').dataset.uptime||'0';
+  sessionStorage.setItem('crash-banner-'+upS,'1');
+  document.getElementById('crash-banner').style.display='none';
+}
+
+/* ── Settings ── */
+function updateVolLabel(){var v=document.getElementById('cfg-volume').value;document.getElementById('cfg-volume-val').textContent=Math.round(v*100/255)+'%'}
+document.addEventListener('DOMContentLoaded',function(){var sl=document.getElementById('cfg-volume');if(sl)sl.addEventListener('input',updateVolLabel)});
+function loadConfig(){
+  document.getElementById('cfg-status').textContent='Loading...';
+  fetch('/api/config')
+  .then(function(r){return r.json()})
+  .then(function(d){
+    document.getElementById('cfg-verbose').checked=!!d.verbose_logs;
+    if(d.volume!==undefined){document.getElementById('cfg-volume').value=d.volume;updateVolLabel()}
+    document.getElementById('cfg-status').textContent='';
+  }).catch(function(){document.getElementById('cfg-status').textContent='Load failed'});
+}
+function saveConfig(){
+  var body={verbose_logs:document.getElementById('cfg-verbose').checked,volume:parseInt(document.getElementById('cfg-volume').value)};
+  document.getElementById('cfg-status').textContent='Saving...';
+  fetch('/api/config',{method:'POST',body:JSON.stringify(body),headers:{'Content-Type':'application/json'}})
+  .then(function(r){return r.json()})
+  .then(function(j){
+    document.getElementById('cfg-status').textContent=j.ok?'Saved \u2713':'Save failed';
+    setTimeout(function(){document.getElementById('cfg-status').textContent=''},3000);
+    if(j.ok) loadConfig();
+  }).catch(function(){document.getElementById('cfg-status').textContent='Save failed'});
+}
+
+/* ── Cron jobs ── */
+function fmtInterval(s){
+  if(s<60) return 'every '+s+'s';
+  if(s<3600){var m=Math.floor(s/60),r=s%60;return 'every '+m+'m'+(r?r+'s':'');}
+  var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);
+  return 'every '+h+'h'+(m?m+'m':'');
+}
+function fmtCronNext(job,now){
+  if(!job.enabled) return '<span class="ck-dis">disabled</span>';
+  if(!job.next_run||job.next_run<=0) return '<span class="ck-dis">\u2014</span>';
+  var d=job.next_run-now;
+  if(d<0) return '<span class="err">overdue</span>';
+  return 'in '+fmtUptime(d);
+}
+function loadCronList(){
+  setCronStatus('Loading...');
+  fetch('/api/crons')
+  .then(function(r){return r.json()})
+  .then(function(d){
+    setCronStatus('');
+    var tbody=document.getElementById('cron-body');
+    tbody.innerHTML='';
+    if(!d.jobs||!d.jobs.length){
+      tbody.innerHTML='<tr><td colspan="5" style="color:#555;padding:16px 8px">No cron jobs scheduled</td></tr>';
+      return;
+    }
+    d.jobs.forEach(function(j){
+      var tr=document.createElement('tr');
+      var sched=j.kind==='every'
+        ?'<span class="ck-every">'+esc(fmtInterval(j.interval_s))+'</span>'
+        :'<span class="ck-at">at '+esc(new Date(j.at_epoch*1000).toLocaleTimeString())+'</span>';
+      var msg=j.message.length>42?j.message.substring(0,42)+'\u2026':j.message;
+      tr.innerHTML='<td>'+(j.enabled?'':'<span class="ck-dis">\u23f8 </span>')+esc(j.name)+'</td>'
+        +'<td>'+sched+'</td>'+'<td>'+fmtCronNext(j,d.now_epoch)+'</td>'
+        +'<td style="color:#888" title="'+esc(j.message)+'">'+esc(msg)+'</td>'
+        +'<td><button style="font-size:0.75rem;padding:2px 7px;background:#5a1f1f;border-color:#8b3333;color:#ffaaaa"'
+        +' onclick="deleteCron(\''+j.id+'\',\''+esc(j.name)+'\')">&#x2715;</button></td>';
+      tbody.appendChild(tr);
+    });
+  }).catch(function(){setCronStatus('Load failed')});
+}
+function deleteCron(id,name){
+  if(!confirm('Delete cron job "'+name+'"?')) return;
+  fetch('/api/cron?id='+encodeURIComponent(id),{method:'DELETE'})
+  .then(function(r){return r.json()})
+  .then(function(j){if(j.ok)loadCronList();else setCronStatus('Delete failed');})
+  .catch(function(){setCronStatus('Delete failed')});
+}
+function setCronStatus(msg){document.getElementById('cron-status').textContent=msg}
+
+/* ── Chat ── */
+function sendMsg(){
+  var input=document.getElementById('chat-input');
+  var text=input.value.trim();
+  if(!text) return;
+
+  /* /say command — direct TTS to speaker, no LLM */
+  if(text.toLowerCase().startsWith('/say ')){
+    var sayText=text.substring(5).trim();
+    if(!sayText) return;
+    addLog('msg','[you] '+text);
+    input.value='';
+    addLog('info','[say] sending to speaker...');
+    fetch('/api/say',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text:sayText})
+    }).then(function(r){return r.json();}).then(function(d){
+      addLog(d.ok?'info':'err','[say] '+(d.ok?'speaking: "'+sayText+'"':'failed: '+(d.error||'unknown')));
+    }).catch(function(e){
+      addLog('err','[say] error: '+e.message);
+    });
+    return;
+  }
+
+  if(!ws||ws.readyState!==1) return;
+  ws.send(JSON.stringify({type:'prompt',content:text,chat_id:'ws_console'}));
+  addLog('msg','[you] '+text);
+  input.value='';
+}
+
+/* ── OTA Update ── */
+var otaPollTimer=null;
+function doOTA(){
+  var url=document.getElementById('ota-url').value.trim();
+  if(!url){alert('Enter a firmware binary URL first.');return;}
+  if(!confirm('Flash firmware from:\n'+url+'\n\nDevice will reboot after flashing.')) return;
+  document.getElementById('ota-btn').disabled=true;
+  document.getElementById('ota-progress').style.display='flex';
+  document.getElementById('ota-bar').style.width='0';
+  setOtaMsg('aaa','Starting OTA...');
+  fetch('/api/ota',{method:'POST',body:JSON.stringify({url:url}),headers:{'Content-Type':'application/json'}})
+  .then(function(r){return r.json()})
+  .then(function(j){
+    if(!j.ok){setOtaDone('err','OTA failed: '+(j.error||'unknown'));return;}
+    pollOtaStatus();
+  }).catch(function(e){setOtaDone('err','Request failed: '+e.message);});
+}
+function pollOtaStatus(){
+  if(otaPollTimer){clearTimeout(otaPollTimer);otaPollTimer=null;}
+  fetch('/api/ota/status')
+  .then(function(r){return r.json()})
+  .then(function(d){
+    var pct=d.progress_pct||0;
+    var labels={idle:'Idle',pending:'Waiting for agent to finish...',
+      downloading:'Downloading '+pct+'%'+(d.new_version?' \u2192 v'+d.new_version:''),
+      verifying:'Verifying image...',rebooting:'Rebooting\u2026',error:'Error'};
+    var label=labels[d.state]||d.state;
+    if(d.error_msg&&d.state==='error') label+=': '+d.error_msg;
+    document.getElementById('ota-bar').style.width=
+      d.state==='rebooting'?'100%':(d.state==='verifying'?'95%':pct+'%');
+    setOtaMsg('aaa',label);
+    if(d.state==='rebooting'){
+      addLog('err','OTA complete \u2014 device rebooting, reconnecting...');
+      setOtaDone('done','Flashed \u2713 Reconnecting...');
+    } else if(d.state==='error'){
+      setOtaDone('err','OTA error'+(d.error_msg?': '+d.error_msg:''));
+    } else if(d.state==='idle'&&document.getElementById('ota-btn').disabled){
+      setOtaDone('done','Done \u2713');
+    } else {
+      otaPollTimer=setTimeout(pollOtaStatus,1500);
+    }
+  }).catch(function(){otaPollTimer=setTimeout(pollOtaStatus,2000);});
+}
+function setOtaMsg(cls,msg){
+  var el=document.getElementById('ota-msg');
+  el.className=cls; el.textContent=msg;
+}
+function setOtaDone(cls,msg){
+  if(otaPollTimer){clearTimeout(otaPollTimer);otaPollTimer=null;}
+  setOtaMsg(cls,msg);
+  document.getElementById('ota-btn').disabled=false;
+}
+
+/* ── Heartbeat + Reboot ── */
+function doHeartbeat(){
+  fetch('/api/heartbeat',{method:'POST'})
+  .then(function(r){return r.json()})
+  .then(function(d){addLog('ws',d.triggered?'Heartbeat: agent triggered':'Heartbeat: no tasks found');})
+  .catch(function(){addLog('err','Heartbeat request failed')});
+}
+function doReboot(){
+  if(!confirm('Reboot Langoustine now?')) return;
+  fetch('/api/reboot',{method:'POST'})
+  .then(function(){addLog('err','Rebooting \u2014 reconnecting...')})
+  .catch(function(){addLog('err','Reboot sent')});
+}
+
+/* ── Dashboard Quick Actions ── */
+var defaultQuickActions=[
+  {icon:'\u2600\uFE0F',label:'Briefing',action:'Run the daily morning briefing'},
+  {icon:'\uD83C\uDFC4',label:'Surf Check',action:'Check surf conditions at Pacifica Linda Mar for this weekend'},
+  {icon:'\uD83D\uDCC8',label:'ARM Stock',action:'What is the ARM stock price right now?'},
+  {icon:'\uD83D\uDCA1',label:'Lights On',action:'Turn on all the lights'},
+  {icon:'\uD83C\uDF19',label:'Lights Off',action:'Turn off all the lights'},
+  {icon:'\u26C5',label:'Weather',action:'What is the weather in San Francisco?'},
+  {icon:'\uD83D\uDDA8\uFE0F',label:'Printer',action:'Use the klipper_request tool to check my 3D printer. Query /printer/objects/query?print_stats for print state/progress/filename, and /printer/objects/query?heater_bed&extruder for temperatures. Summarise what\'s printing, how long it\'s been running, and current temps.'},
+  {icon:'\uD83D\uDCCA',label:'System Info',action:'Give me a system health report'},
+  {icon:'\uD83D\uDE02',label:'Joke',action:'Tell me a joke. Make it original and funny \u2014 not a classic dad joke.'},
+  {icon:'\uD83D\uDD04',label:'Restart',action:'__reboot__'}
+];
+var quickActions=defaultQuickActions;
+function renderDashGrid(actions){
+  var g=document.getElementById('dash-grid');if(!g)return;
+  g.innerHTML='';
+  actions.forEach(function(qa){
+    var b=document.createElement('div');b.className='qa-btn';
+    b.innerHTML='<span class="icon">'+qa.icon+'</span><span class="lbl">'+qa.label+'</span>';
+    b.onclick=function(){sendQuickAction(qa.action,b)};
+    g.appendChild(b);
+  });
+}
+(function loadQuickActions(){
+  renderDashGrid(defaultQuickActions);
+  fetch('/api/file?name=quickactions').then(function(r){
+    if(!r.ok)throw new Error(r.status);return r.json();
+  }).then(function(data){
+    if(Array.isArray(data)&&data.length>0){quickActions=data;renderDashGrid(data);}
+  }).catch(function(){/* keep defaults */});
+})();
+function sendQuickAction(action,btn){
+  if(action==='__reboot__'){doReboot();return}
+  if(ws&&ws.readyState===1){
+    ws.send(JSON.stringify({type:'prompt',content:action,chat_id:'ws_dash'}));
+    btn.classList.add('sent');
+    setTimeout(function(){btn.classList.remove('sent')},1000);
+    addLog('ws','> '+action);
+    /* switch to log tab to see response */
+    var logBtn=document.querySelector('nav button:nth-child(2)');
+    if(logBtn)showTab('log',logBtn);
+  } else {
+    addLog('err','WebSocket not connected');
+  }
+}
+function refreshDashboard(){
+  fetch('/api/sysinfo').then(function(r){return r.json()}).then(function(d){
+    var up=d.uptime_s||0;
+    var h=Math.floor(up/3600),m=Math.floor((up%3600)/60);
+    document.getElementById('ds-uptime').textContent=h+'h '+m+'m';
+    var sram=d.heap_free||0;
+    document.getElementById('ds-sram').textContent=Math.round(sram/1024)+'KB';
+    var rssi=d.wifi_rssi||0;
+    var bars=rssi>-50?'\u2588\u2588\u2588\u2588':rssi>-60?'\u2588\u2588\u2588':rssi>-70?'\u2588\u2588':'\u2588';
+    document.getElementById('ds-rssi').textContent=rssi+'dBm '+bars;
+    document.getElementById('ds-cost').textContent=(d.search_calls||0)+' ($'+(((d.search_cost_millicents||0)/100000).toFixed(3))+')';
+  }).catch(function(){});
+}
+refreshDashboard();
+
+connect();
+fetchSysinfo();
+setInterval(function(){fetchSysinfo();if(curTab==='dash')refreshDashboard();if(curTab==='crons')loadCronList();},15000);
+</script>
+</body>
+</html>

@@ -1,0 +1,810 @@
+#include "telegram_bot.h"
+#include "langoustine_config.h"
+#include "bus/message_bus.h"
+#include "proxy/http_proxy.h"
+#include "gateway/ws_server.h"
+#include "memory/psram_alloc.h"
+
+#include <string.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "esp_heap_caps.h"
+#include "esp_http_client.h"
+#include "esp_crt_bundle.h"
+#include "nvs.h"
+#include "cJSON.h"
+
+static const char *TAG = "telegram";
+
+static char s_bot_token[128] = LANG_SECRET_TG_TOKEN;
+static int64_t s_update_offset = 0;
+static int64_t s_last_saved_offset = -1;
+static int64_t s_last_offset_save_us = 0;
+
+#define TG_OFFSET_NVS_KEY            "update_offset"
+#define TG_ALLOWED_IDS_NVS_KEY "allowed_ids"
+#define TG_ALLOWED_MAX 8
+static char s_allowed_ids[TG_ALLOWED_MAX][24] = {{0}};
+static int  s_allowed_count = 0;
+#define TG_DEDUP_CACHE_SIZE          64
+#define TG_OFFSET_SAVE_INTERVAL_US   (5LL * 1000 * 1000)
+#define TG_OFFSET_SAVE_STEP          10
+
+static uint64_t s_seen_msg_keys[TG_DEDUP_CACHE_SIZE] = {0};
+static size_t s_seen_msg_idx = 0;
+
+/* HTTP response accumulator */
+typedef struct {
+    char *buf;
+    size_t len;
+    size_t cap;
+} http_resp_t;
+
+static uint64_t fnv1a64(const char *s)
+{
+    uint64_t h = 1469598103934665603ULL;
+    if (!s) {
+        return h;
+    }
+    while (*s) {
+        h ^= (unsigned char)(*s++);
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+static uint64_t make_msg_key(const char *chat_id, int msg_id)
+{
+    uint64_t h = fnv1a64(chat_id);
+    return (h << 16) ^ (uint64_t)(msg_id & 0xFFFF) ^ ((uint64_t)msg_id << 32);
+}
+
+static bool seen_msg_contains(uint64_t key)
+{
+    for (size_t i = 0; i < TG_DEDUP_CACHE_SIZE; i++) {
+        if (s_seen_msg_keys[i] == key) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void seen_msg_insert(uint64_t key)
+{
+    s_seen_msg_keys[s_seen_msg_idx] = key;
+    s_seen_msg_idx = (s_seen_msg_idx + 1) % TG_DEDUP_CACHE_SIZE;
+}
+
+static void save_update_offset_if_needed(bool force)
+{
+    if (s_update_offset <= 0) {
+        return;
+    }
+
+    int64_t now = esp_timer_get_time();
+    bool should_save = force;
+    if (!should_save && s_last_saved_offset >= 0) {
+        if ((s_update_offset - s_last_saved_offset) >= TG_OFFSET_SAVE_STEP) {
+            should_save = true;
+        } else if ((now - s_last_offset_save_us) >= TG_OFFSET_SAVE_INTERVAL_US) {
+            should_save = true;
+        }
+    } else if (!should_save) {
+        should_save = true;
+    }
+
+    if (!should_save) {
+        return;
+    }
+
+    nvs_handle_t nvs;
+    if (nvs_open(LANG_NVS_TG, NVS_READWRITE, &nvs) != ESP_OK) {
+        return;
+    }
+
+    if (nvs_set_i64(nvs, TG_OFFSET_NVS_KEY, s_update_offset) == ESP_OK) {
+        if (nvs_commit(nvs) == ESP_OK) {
+            s_last_saved_offset = s_update_offset;
+            s_last_offset_save_us = now;
+        }
+    }
+    nvs_close(nvs);
+}
+
+static esp_err_t http_event_handler(esp_http_client_event_t *evt)
+{
+    http_resp_t *resp = (http_resp_t *)evt->user_data;
+    if (evt->event_id == HTTP_EVENT_ON_DATA) {
+        if (resp->len + evt->data_len >= resp->cap) {
+            size_t new_cap = resp->cap * 2;
+            if (new_cap < resp->len + evt->data_len + 1) {
+                new_cap = resp->len + evt->data_len + 1;
+            }
+            char *tmp = ps_realloc(resp->buf, new_cap);
+            if (!tmp) return ESP_ERR_NO_MEM;
+            resp->buf = tmp;
+            resp->cap = new_cap;
+        }
+        memcpy(resp->buf + resp->len, evt->data, evt->data_len);
+        resp->len += evt->data_len;
+        resp->buf[resp->len] = '\0';
+    }
+    return ESP_OK;
+}
+
+/* ── Proxy path: manual HTTP over CONNECT tunnel ────────────── */
+
+static char *tg_api_call_via_proxy(const char *path, const char *post_data)
+{
+    proxy_conn_t *conn = proxy_conn_open("api.telegram.org", 443,
+                                          (LANG_TG_POLL_TIMEOUT_S + 5) * 1000);
+    if (!conn) return NULL;
+
+    /* Build HTTP request */
+    char header[512];
+    int hlen;
+    if (post_data) {
+        hlen = snprintf(header, sizeof(header),
+            "POST /bot%s/%s HTTP/1.1\r\n"
+            "Host: api.telegram.org\r\n"
+            "Content-Type: application/json\r\n"
+            "Content-Length: %d\r\n"
+            "Connection: close\r\n\r\n",
+            s_bot_token, path, (int)strlen(post_data));
+    } else {
+        hlen = snprintf(header, sizeof(header),
+            "GET /bot%s/%s HTTP/1.1\r\n"
+            "Host: api.telegram.org\r\n"
+            "Connection: close\r\n\r\n",
+            s_bot_token, path);
+    }
+
+    if (proxy_conn_write(conn, header, hlen) < 0) {
+        proxy_conn_close(conn);
+        return NULL;
+    }
+    if (post_data && proxy_conn_write(conn, post_data, strlen(post_data)) < 0) {
+        proxy_conn_close(conn);
+        return NULL;
+    }
+
+    /* Read response — accumulate until connection close */
+    size_t cap = 4096, len = 0;
+    char *buf = ps_calloc(1, cap);
+    if (!buf) { proxy_conn_close(conn); return NULL; }
+
+    int timeout = (LANG_TG_POLL_TIMEOUT_S + 5) * 1000;
+    while (1) {
+        if (len + 1024 >= cap) {
+            cap *= 2;
+            char *tmp = ps_realloc(buf, cap);
+            if (!tmp) break;
+            buf = tmp;
+        }
+        int n = proxy_conn_read(conn, buf + len, cap - len - 1, timeout);
+        if (n <= 0) break;
+        len += n;
+    }
+    buf[len] = '\0';
+    proxy_conn_close(conn);
+
+    /* Skip HTTP headers — find \r\n\r\n */
+    char *body = strstr(buf, "\r\n\r\n");
+    if (!body) { free(buf); return NULL; }
+    body += 4;
+
+    /* Return just the body */
+    char *result = strdup(body);
+    free(buf);
+    return result;
+}
+
+/* ── Direct path: esp_http_client ───────────────────────────── */
+
+static char *tg_api_call_direct(const char *method, const char *post_data)
+{
+    char url[256];
+    snprintf(url, sizeof(url), "https://api.telegram.org/bot%s/%s", s_bot_token, method);
+
+    http_resp_t resp = {
+        .buf = ps_calloc(1, 4096),
+        .len = 0,
+        .cap = 4096,
+    };
+    if (!resp.buf) return NULL;
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .event_handler = http_event_handler,
+        .user_data = &resp,
+        .timeout_ms = (LANG_TG_POLL_TIMEOUT_S + 5) * 1000,
+        .buffer_size = 2048,
+        .buffer_size_tx = 2048,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        free(resp.buf);
+        return NULL;
+    }
+
+    if (post_data) {
+        esp_http_client_set_method(client, HTTP_METHOD_POST);
+        esp_http_client_set_header(client, "Content-Type", "application/json");
+        esp_http_client_set_post_field(client, post_data, strlen(post_data));
+    }
+
+    esp_err_t err = esp_http_client_perform(client);
+    esp_http_client_cleanup(client);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "HTTP request failed: %s", esp_err_to_name(err));
+        free(resp.buf);
+        return NULL;
+    }
+
+    return resp.buf;
+}
+
+static char *tg_api_call(const char *method, const char *post_data)
+{
+    if (http_proxy_is_enabled()) {
+        return tg_api_call_via_proxy(method, post_data);
+    }
+    return tg_api_call_direct(method, post_data);
+}
+
+/* Copy desc string into caller-owned buffer BEFORE freeing cJSON tree.
+ * Previous version returned a pointer into the cJSON tree after cJSON_Delete()
+ * — use-after-free that corrupted PSRAM (cJSON hooks → ps_malloc). */
+static bool tg_response_is_ok(const char *resp, char *out_desc, size_t desc_size)
+{
+    if (out_desc && desc_size > 0) {
+        out_desc[0] = '\0';
+    }
+    if (!resp) {
+        return false;
+    }
+
+    cJSON *root = cJSON_Parse(resp);
+    if (root) {
+        cJSON *ok_field = cJSON_GetObjectItem(root, "ok");
+        bool ok = cJSON_IsTrue(ok_field);
+        if (!ok && out_desc && desc_size > 0) {
+            cJSON *desc = cJSON_GetObjectItem(root, "description");
+            if (desc && cJSON_IsString(desc)) {
+                strncpy(out_desc, desc->valuestring, desc_size - 1);
+                out_desc[desc_size - 1] = '\0';
+            }
+        }
+        cJSON_Delete(root);
+        return ok;
+    }
+
+    /* Proxy or gateway can occasionally return non-standard payload framing. */
+    if (strstr(resp, "\"ok\":true") != NULL) {
+        return true;
+    }
+
+    return false;
+}
+
+static bool chat_id_is_allowed(const char *id)
+{
+    if (s_allowed_count == 0) return true;  /* empty list = open */
+    for (int i = 0; i < s_allowed_count; i++) {
+        if (strcmp(s_allowed_ids[i], id) == 0) return true;
+    }
+    return false;
+}
+
+static void save_allowed_ids_to_nvs(void)
+{
+    /* Build comma-separated string */
+    char buf[TG_ALLOWED_MAX * 24 + TG_ALLOWED_MAX] = {0};
+    int off = 0;
+    for (int i = 0; i < s_allowed_count; i++) {
+        if (i > 0) buf[off++] = ',';
+        int n = snprintf(buf + off, sizeof(buf) - off, "%s", s_allowed_ids[i]);
+        if (n > 0) off += n;
+    }
+    nvs_handle_t nvs;
+    if (nvs_open(LANG_NVS_TG, NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_str(nvs, TG_ALLOWED_IDS_NVS_KEY, buf);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+    }
+}
+
+static void process_updates(const char *json_str)
+{
+    cJSON *root = cJSON_Parse(json_str);
+    if (!root) return;
+
+    cJSON *ok = cJSON_GetObjectItem(root, "ok");
+    if (!cJSON_IsTrue(ok)) {
+        cJSON_Delete(root);
+        return;
+    }
+
+    cJSON *result = cJSON_GetObjectItem(root, "result");
+    if (!cJSON_IsArray(result)) {
+        cJSON_Delete(root);
+        return;
+    }
+
+    cJSON *update;
+    cJSON_ArrayForEach(update, result) {
+        /* Track offset and skip stale/duplicate updates */
+        cJSON *update_id = cJSON_GetObjectItem(update, "update_id");
+        int64_t uid = -1;
+        if (cJSON_IsNumber(update_id)) {
+            uid = (int64_t)update_id->valuedouble;
+        }
+        if (uid >= 0) {
+            if (uid < s_update_offset) {
+                continue;
+            }
+            s_update_offset = uid + 1;
+            save_update_offset_if_needed(false);
+        }
+
+        /* Extract message */
+        cJSON *message = cJSON_GetObjectItem(update, "message");
+        if (!message) continue;
+
+        cJSON *text = cJSON_GetObjectItem(message, "text");
+        if (!text || !cJSON_IsString(text)) continue;
+
+        cJSON *chat = cJSON_GetObjectItem(message, "chat");
+        if (!chat) continue;
+
+        cJSON *chat_id = cJSON_GetObjectItem(chat, "id");
+        if (!chat_id) continue;
+
+        int msg_id_val = -1;
+        cJSON *message_id = cJSON_GetObjectItem(message, "message_id");
+        if (cJSON_IsNumber(message_id)) {
+            msg_id_val = (int)message_id->valuedouble;
+        }
+
+        char chat_id_str[32];
+        if (cJSON_IsString(chat_id) && chat_id->valuestring) {
+            strncpy(chat_id_str, chat_id->valuestring, sizeof(chat_id_str) - 1);
+            chat_id_str[sizeof(chat_id_str) - 1] = '\0';
+        } else if (cJSON_IsNumber(chat_id)) {
+            snprintf(chat_id_str, sizeof(chat_id_str), "%.0f", chat_id->valuedouble);
+        } else {
+            continue;
+        }
+
+        if (!chat_id_is_allowed(chat_id_str)) {
+            ESP_LOGD(TAG, "Ignoring message from unlisted chat_id: %s", chat_id_str);
+            continue;
+        }
+
+        if (msg_id_val >= 0) {
+            uint64_t msg_key = make_msg_key(chat_id_str, msg_id_val);
+            if (seen_msg_contains(msg_key)) {
+                ESP_LOGW(TAG, "Drop duplicate message update_id=%" PRId64 " chat=%s message_id=%d",
+                         uid, chat_id_str, msg_id_val);
+                continue;
+            }
+            seen_msg_insert(msg_key);
+        }
+
+        ESP_LOGI(TAG, "Message update_id=%" PRId64 " message_id=%d from chat %s: %.40s...",
+                 uid, msg_id_val, chat_id_str, text->valuestring);
+
+        char mon_msg[80];
+        snprintf(mon_msg, sizeof(mon_msg), "[tg] %s: %.40s", chat_id_str, text->valuestring);
+        ws_server_broadcast_monitor("task", mon_msg);
+
+        char vpreview[240];
+        snprintf(vpreview, sizeof(vpreview), "[%s] %.200s", chat_id_str, text->valuestring);
+        ws_server_broadcast_monitor_verbose("telegram", vpreview);
+
+        /* Push to inbound bus */
+        lang_msg_t msg = {0};
+        strncpy(msg.channel, LANG_CHAN_TELEGRAM, sizeof(msg.channel) - 1);
+        strncpy(msg.chat_id, chat_id_str, sizeof(msg.chat_id) - 1);
+        msg.content = strdup(text->valuestring);
+        if (msg.content) {
+            if (message_bus_push_inbound(&msg) != ESP_OK) {
+                ESP_LOGW(TAG, "Inbound queue full, drop telegram message");
+                free(msg.content);
+            }
+        }
+    }
+
+    /* Force-save offset after processing all updates in this cycle,
+     * so no messages are replayed if the device reboots shortly after. */
+    save_update_offset_if_needed(true);
+
+    cJSON_Delete(root);
+}
+
+static void telegram_poll_task(void *arg)
+{
+    ESP_LOGI(TAG, "Telegram polling task started");
+    int backoff_s = 1;  /* exponential backoff: 1,2,4,8,16,…,60s on consecutive failures */
+
+    while (1) {
+        if (s_bot_token[0] == '\0') {
+            ESP_LOGW(TAG, "No bot token configured, waiting...");
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            continue;
+        }
+
+        char params[128];
+        snprintf(params, sizeof(params),
+                 "getUpdates?offset=%" PRId64 "&timeout=%d",
+                 s_update_offset, LANG_TG_POLL_TIMEOUT_S);
+
+        char *resp = tg_api_call(params, NULL);
+        if (resp) {
+            backoff_s = 1;  /* reset on success */
+            process_updates(resp);
+            free(resp);
+        } else {
+            ESP_LOGW(TAG, "Telegram poll failed, backing off %ds", backoff_s);
+            vTaskDelay(pdMS_TO_TICKS(backoff_s * 1000));
+            if (backoff_s < 60) backoff_s *= 2;
+        }
+    }
+}
+
+/* --- Public API --- */
+
+esp_err_t telegram_bot_init(void)
+{
+    /* NVS overrides take highest priority (set via CLI) */
+    nvs_handle_t nvs;
+    if (nvs_open(LANG_NVS_TG, NVS_READONLY, &nvs) == ESP_OK) {
+        char tmp[128] = {0};
+        size_t len = sizeof(tmp);
+        if (nvs_get_str(nvs, LANG_NVS_KEY_TG_TOKEN, tmp, &len) == ESP_OK && tmp[0]) {
+            strncpy(s_bot_token, tmp, sizeof(s_bot_token) - 1);
+        }
+
+        int64_t offset = 0;
+        if (nvs_get_i64(nvs, TG_OFFSET_NVS_KEY, &offset) == ESP_OK && offset > 0) {
+            s_update_offset = offset;
+            s_last_saved_offset = offset;
+            ESP_LOGI(TAG, "Loaded Telegram update offset: %" PRId64, s_update_offset);
+        }
+
+        /* Load allowed chat IDs */
+        char allowed_buf[TG_ALLOWED_MAX * 24 + TG_ALLOWED_MAX] = {0};
+        size_t allowed_len = sizeof(allowed_buf);
+        if (nvs_get_str(nvs, TG_ALLOWED_IDS_NVS_KEY, allowed_buf, &allowed_len) == ESP_OK && allowed_buf[0]) {
+            /* Parse comma-separated list */
+            s_allowed_count = 0;
+            char *saveptr = NULL;
+            char *tok = strtok_r(allowed_buf, ",", &saveptr);
+            while (tok && s_allowed_count < TG_ALLOWED_MAX) {
+                /* trim whitespace */
+                while (*tok == ' ') tok++;
+                size_t tlen = strlen(tok);
+                while (tlen > 0 && tok[tlen-1] == ' ') { tok[--tlen] = '\0'; }
+                if (tlen > 0 && tlen < sizeof(s_allowed_ids[0])) {
+                    strncpy(s_allowed_ids[s_allowed_count], tok, sizeof(s_allowed_ids[0]) - 1);
+                    s_allowed_count++;
+                }
+                tok = strtok_r(NULL, ",", &saveptr);
+            }
+            if (s_allowed_count > 0) {
+                ESP_LOGI(TAG, "Telegram: %d allowed chat IDs loaded", s_allowed_count);
+            }
+        }
+        nvs_close(nvs);
+    }
+
+    /* s_bot_token is already initialized from LANG_SECRET_TG_TOKEN as fallback */
+
+    if (s_bot_token[0]) {
+        ESP_LOGI(TAG, "Telegram bot token loaded (len=%d)", (int)strlen(s_bot_token));
+    } else {
+        ESP_LOGW(TAG, "No Telegram bot token. Use CLI: set_tg_token <TOKEN>");
+    }
+    return ESP_OK;
+}
+
+esp_err_t telegram_bot_start(void)
+{
+    /* Stack in PSRAM — safe with XIP.  Frees 8KB SRAM. */
+    BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
+        telegram_poll_task, "tg_poll",
+        LANG_TG_POLL_STACK, NULL,
+        LANG_TG_POLL_PRIO, NULL,
+        0,  /* Core 0 (network core) */
+        MALLOC_CAP_SPIRAM);
+
+    return (ret == pdPASS) ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t telegram_add_allowed_id(const char *id)
+{
+    if (!id || id[0] == '\0') return ESP_ERR_INVALID_ARG;
+    if (strlen(id) >= sizeof(s_allowed_ids[0])) return ESP_ERR_INVALID_ARG;
+    for (int i = 0; i < s_allowed_count; i++) {
+        if (strcmp(s_allowed_ids[i], id) == 0) return ESP_OK;  /* already in list */
+    }
+    if (s_allowed_count >= TG_ALLOWED_MAX) return ESP_ERR_NO_MEM;
+    strncpy(s_allowed_ids[s_allowed_count], id, sizeof(s_allowed_ids[0]) - 1);
+    s_allowed_count++;
+    save_allowed_ids_to_nvs();
+    ESP_LOGI(TAG, "Telegram: added allowed ID: %s (%d total)", id, s_allowed_count);
+    return ESP_OK;
+}
+
+esp_err_t telegram_remove_allowed_id(const char *id)
+{
+    if (!id) return ESP_ERR_INVALID_ARG;
+    for (int i = 0; i < s_allowed_count; i++) {
+        if (strcmp(s_allowed_ids[i], id) == 0) {
+            /* Shift remaining entries down */
+            for (int j = i; j < s_allowed_count - 1; j++) {
+                strncpy(s_allowed_ids[j], s_allowed_ids[j+1], sizeof(s_allowed_ids[0]));
+            }
+            memset(s_allowed_ids[s_allowed_count - 1], 0, sizeof(s_allowed_ids[0]));
+            s_allowed_count--;
+            save_allowed_ids_to_nvs();
+            ESP_LOGI(TAG, "Telegram: removed allowed ID: %s (%d remaining)", id, s_allowed_count);
+            return ESP_OK;
+        }
+    }
+    return ESP_ERR_NOT_FOUND;
+}
+
+void telegram_list_allowed_ids(void)
+{
+    if (s_allowed_count == 0) {
+        printf("Telegram allowlist: empty (all IDs allowed)\n");
+        return;
+    }
+    printf("Telegram allowlist (%d entries):\n", s_allowed_count);
+    for (int i = 0; i < s_allowed_count; i++) {
+        printf("  [%d] %s\n", i, s_allowed_ids[i]);
+    }
+}
+
+esp_err_t telegram_send_message(const char *chat_id, const char *text)
+{
+    if (s_bot_token[0] == '\0') {
+        ESP_LOGW(TAG, "Cannot send: no bot token");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Split long messages at 4096-char boundary */
+    size_t text_len = strlen(text);
+    size_t offset = 0;
+    int all_ok = 1;
+
+    while (offset < text_len) {
+        size_t chunk = text_len - offset;
+        if (chunk > LANG_TG_MAX_MSG_LEN) {
+            chunk = LANG_TG_MAX_MSG_LEN;
+        }
+
+        /* Build JSON body */
+        cJSON *body = cJSON_CreateObject();
+        cJSON_AddStringToObject(body, "chat_id", chat_id);
+
+        /* Create null-terminated chunk */
+        char *segment = malloc(chunk + 1);
+        if (!segment) {
+            cJSON_Delete(body);
+            return ESP_ERR_NO_MEM;
+        }
+        memcpy(segment, text + offset, chunk);
+        segment[chunk] = '\0';
+
+        cJSON_AddStringToObject(body, "text", segment);
+        cJSON_AddStringToObject(body, "parse_mode", "Markdown");
+
+        char *json_str = cJSON_PrintUnformatted(body);
+        cJSON_Delete(body);
+        free(segment);
+
+        if (!json_str) {
+            all_ok = 0;
+            offset += chunk;
+            continue;
+        }
+
+        ESP_LOGI(TAG, "Sending telegram chunk to %s (%d bytes)", chat_id, (int)chunk);
+        char *resp = tg_api_call("sendMessage", json_str);
+        free(json_str);
+
+        int sent_ok = 0;
+        bool markdown_failed = false;
+        if (resp) {
+            char desc[128] = {0};
+            sent_ok = tg_response_is_ok(resp, desc, sizeof(desc));
+            if (!sent_ok) {
+                markdown_failed = true;
+                ESP_LOGI(TAG, "Markdown rejected by Telegram for %s: %s",
+                         chat_id, desc[0] ? desc : "unknown");
+            }
+        }
+
+        if (!sent_ok) {
+            /* Retry without parse_mode */
+            cJSON *body2 = cJSON_CreateObject();
+            cJSON_AddStringToObject(body2, "chat_id", chat_id);
+            char *seg2 = malloc(chunk + 1);
+            if (seg2) {
+                memcpy(seg2, text + offset, chunk);
+                seg2[chunk] = '\0';
+                cJSON_AddStringToObject(body2, "text", seg2);
+                free(seg2);
+            }
+            char *json2 = cJSON_PrintUnformatted(body2);
+            cJSON_Delete(body2);
+            if (json2) {
+                char *resp2 = tg_api_call("sendMessage", json2);
+                free(json2);
+                if (resp2) {
+                    char desc2[128] = {0};
+                    sent_ok = tg_response_is_ok(resp2, desc2, sizeof(desc2));
+                    if (!sent_ok) {
+                        ESP_LOGE(TAG, "Plain send failed: %s", desc2[0] ? desc2 : "unknown");
+                        ESP_LOGE(TAG, "Telegram raw response: %.300s", resp2);
+                    }
+                    free(resp2);
+                } else {
+                    ESP_LOGE(TAG, "Plain send failed: no HTTP response");
+                }
+            } else {
+                ESP_LOGE(TAG, "Plain send failed: no JSON body");
+            }
+        }
+
+        if (!sent_ok) {
+            all_ok = 0;
+            char err_msg[64];
+            snprintf(err_msg, sizeof(err_msg), "[tg->%s] send failed", chat_id);
+            ws_server_broadcast_monitor("error", err_msg);
+        } else {
+            if (markdown_failed) {
+                ESP_LOGI(TAG, "Plain-text fallback succeeded for %s", chat_id);
+            }
+            ESP_LOGI(TAG, "Telegram send success to %s (%d bytes)", chat_id, (int)chunk);
+            char ok_msg[64];
+            snprintf(ok_msg, sizeof(ok_msg), "[tg->%s] sent", chat_id);
+            ws_server_broadcast_monitor("done", ok_msg);
+        }
+
+        free(resp);
+        offset += chunk;
+    }
+
+    return all_ok ? ESP_OK : ESP_FAIL;
+}
+
+int32_t telegram_send_get_id(const char *chat_id, const char *text)
+{
+    if (s_bot_token[0] == '\0' || !chat_id || !text) return -1;
+
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "chat_id", chat_id);
+    cJSON_AddStringToObject(body, "text", text);
+    char *json_str = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (!json_str) return -1;
+
+    char *resp = tg_api_call("sendMessage", json_str);
+    free(json_str);
+    if (!resp) return -1;
+
+    int32_t msg_id = -1;
+    cJSON *root = cJSON_Parse(resp);
+    free(resp);
+    if (root) {
+        cJSON *ok = cJSON_GetObjectItem(root, "ok");
+        if (cJSON_IsTrue(ok)) {
+            cJSON *result = cJSON_GetObjectItem(root, "result");
+            if (result) {
+                cJSON *mid = cJSON_GetObjectItem(result, "message_id");
+                if (mid && cJSON_IsNumber(mid)) {
+                    msg_id = (int32_t)mid->valuedouble;
+                }
+            }
+        }
+        cJSON_Delete(root);
+    }
+
+    if (msg_id > 0) {
+        char mon[64];
+        snprintf(mon, sizeof(mon), "[tg->%s] placeholder id=%d", chat_id, (int)msg_id);
+        ws_server_broadcast_monitor_verbose("telegram", mon);
+    } else {
+        ESP_LOGW(TAG, "telegram_send_get_id failed for %s", chat_id);
+    }
+    return msg_id;
+}
+
+esp_err_t telegram_edit_message(const char *chat_id, int32_t message_id, const char *text)
+{
+    if (s_bot_token[0] == '\0') return ESP_ERR_INVALID_STATE;
+    if (message_id <= 0 || !chat_id || !text) return ESP_ERR_INVALID_ARG;
+
+    size_t text_len = strlen(text);
+
+    /* If text fits in one message, edit the placeholder directly */
+    size_t first_chunk = text_len;
+    if (first_chunk > LANG_TG_MAX_MSG_LEN) {
+        first_chunk = LANG_TG_MAX_MSG_LEN;
+        /* Try to break at a newline within the last 200 chars for cleaner split */
+        for (size_t i = first_chunk; i > first_chunk - 200 && i > 0; i--) {
+            if (text[i] == '\n') { first_chunk = i; break; }
+        }
+    }
+
+    /* Edit placeholder with first chunk */
+    char *segment = malloc(first_chunk + 1);
+    if (!segment) return ESP_ERR_NO_MEM;
+    memcpy(segment, text, first_chunk);
+    segment[first_chunk] = '\0';
+
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "chat_id", chat_id);
+    cJSON_AddNumberToObject(body, "message_id", (double)message_id);
+    cJSON_AddStringToObject(body, "text", segment);
+    free(segment);
+
+    char *json_str = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (!json_str) return ESP_ERR_NO_MEM;
+
+    char *resp = tg_api_call("editMessageText", json_str);
+    free(json_str);
+    if (!resp) return ESP_FAIL;
+
+    char desc[128] = {0};
+    bool ok = tg_response_is_ok(resp, desc, sizeof(desc));
+    free(resp);
+
+    if (!ok) {
+        if (desc[0] && strstr(desc, "message is not modified")) {
+            return ESP_OK;
+        }
+        ESP_LOGW(TAG, "editMessageText id=%d failed: %s", (int)message_id, desc[0] ? desc : "unknown");
+        return ESP_FAIL;
+    }
+
+    /* Send overflow as continuation messages (telegram_send_message splits at 4096) */
+    if (text_len > first_chunk) {
+        ESP_LOGI(TAG, "Message overflow: %d chars remaining, sending as continuation",
+                 (int)(text_len - first_chunk));
+        return telegram_send_message(chat_id, text + first_chunk);
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t telegram_set_token(const char *token)
+{
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(LANG_NVS_TG, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS open failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = nvs_set_str(nvs, LANG_NVS_KEY_TG_TOKEN, token);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS write failed: %s", esp_err_to_name(err));
+        nvs_close(nvs);
+        return err;
+    }
+    nvs_commit(nvs);
+    nvs_close(nvs);
+
+    strncpy(s_bot_token, token, sizeof(s_bot_token) - 1);
+    ESP_LOGI(TAG, "Telegram bot token saved");
+    return ESP_OK;
+}

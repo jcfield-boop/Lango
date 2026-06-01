@@ -15,6 +15,8 @@
 #include "audio/wake_word.h"
 #include "config/services_config.h"
 #include "tools/tool_say.h"
+#include "tools/tool_smtp.h"
+#include "telegram/telegram_bot.h"
 #include "mcp/mcp_server.h"
 
 #include <stdio.h>
@@ -1907,6 +1909,152 @@ static esp_err_t say_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── /api/relay — Claude↔ESP32 outbox relay ───────────────────── *
+ *
+ * POST /api/relay
+ * Body: one of:
+ *   {"type":"email",    "to":"a@b.com", "subject":"...", "body":"..."}
+ *   {"type":"telegram", "chat_id":"5538967144", "text":"..."}
+ *
+ * Returns {"ok":true} immediately; send runs in a background task.
+ * Auth: Bearer token (same as all other /api/* endpoints).
+ * Used by Cowork/Claude to send emails and Telegram messages via the
+ * device's existing SMTP and Telegram credentials without duplicating
+ * the cron-generated content.
+ */
+
+typedef struct {
+    char type[16];       /* "email" or "telegram" */
+    char to[128];
+    char subject[256];
+    char *body;          /* ps_malloc'd — freed by task */
+    char chat_id[32];
+} relay_args_t;
+
+static void relay_async_task(void *arg)
+{
+    relay_args_t *a = (relay_args_t *)arg;
+    char result[256];
+
+    if (strcmp(a->type, "email") == 0) {
+        /* Build input JSON for tool_smtp_execute */
+        cJSON *req = cJSON_CreateObject();
+        if (req) {
+            cJSON_AddStringToObject(req, "subject", a->subject);
+            cJSON_AddStringToObject(req, "body",    a->body);
+            if (a->to[0]) cJSON_AddStringToObject(req, "to", a->to);
+            char *js = cJSON_PrintUnformatted(req);
+            cJSON_Delete(req);
+            if (js) {
+                tool_smtp_execute(js, result, sizeof(result));
+                ESP_LOGI(TAG, "/api/relay email: %s", result);
+                free(js);
+            }
+        }
+    } else if (strcmp(a->type, "telegram") == 0) {
+        esp_err_t err = telegram_send_message(a->chat_id, a->body);
+        ESP_LOGI(TAG, "/api/relay telegram chat=%s: %s",
+                 a->chat_id, err == ESP_OK ? "OK" : esp_err_to_name(err));
+    } else {
+        ESP_LOGW(TAG, "/api/relay: unknown type '%s'", a->type);
+    }
+
+    free(a->body);
+    free(a);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t relay_post_handler(httpd_req_t *req)
+{
+    if (!request_is_authed(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+        return ESP_OK;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    apply_cors(req);
+
+    /* Read body — relay payloads can be large (briefing emails ~4KB) */
+    size_t body_max = 8192;
+    char *raw = ps_malloc(body_max);
+    if (!raw) { httpd_resp_send_500(req); return ESP_OK; }
+    memset(raw, 0, body_max);
+    int rcv = httpd_req_recv(req, raw, body_max - 1);
+    if (rcv <= 0) {
+        free(raw);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body");
+        return ESP_OK;
+    }
+
+    cJSON *root = cJSON_Parse(raw);
+    free(raw);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_OK;
+    }
+
+    cJSON *jtype = cJSON_GetObjectItem(root, "type");
+    if (!cJSON_IsString(jtype)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing 'type'");
+        return ESP_OK;
+    }
+
+    relay_args_t *args = calloc(1, sizeof(relay_args_t));
+    if (!args) { cJSON_Delete(root); httpd_resp_send_500(req); return ESP_OK; }
+
+    strncpy(args->type, jtype->valuestring, sizeof(args->type) - 1);
+
+    if (strcmp(args->type, "email") == 0) {
+        cJSON *jsubj = cJSON_GetObjectItem(root, "subject");
+        cJSON *jbody = cJSON_GetObjectItem(root, "body");
+        cJSON *jto   = cJSON_GetObjectItem(root, "to");
+        if (!cJSON_IsString(jsubj) || !cJSON_IsString(jbody)) {
+            cJSON_Delete(root); free(args);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "email needs 'subject' and 'body'");
+            return ESP_OK;
+        }
+        strncpy(args->subject, jsubj->valuestring, sizeof(args->subject) - 1);
+        if (jto && cJSON_IsString(jto)) strncpy(args->to, jto->valuestring, sizeof(args->to) - 1);
+        args->body = strdup(jbody->valuestring);
+
+    } else if (strcmp(args->type, "telegram") == 0) {
+        cJSON *jchat = cJSON_GetObjectItem(root, "chat_id");
+        cJSON *jtext = cJSON_GetObjectItem(root, "text");
+        if (!cJSON_IsString(jtext)) {
+            cJSON_Delete(root); free(args);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "telegram needs 'text'");
+            return ESP_OK;
+        }
+        if (jchat && cJSON_IsString(jchat))
+            strncpy(args->chat_id, jchat->valuestring, sizeof(args->chat_id) - 1);
+        else
+            strncpy(args->chat_id, "5538967144", sizeof(args->chat_id) - 1); /* default */
+        args->body = strdup(jtext->valuestring);
+
+    } else {
+        cJSON_Delete(root); free(args);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "type must be 'email' or 'telegram'");
+        return ESP_OK;
+    }
+
+    cJSON_Delete(root);
+
+    if (!args->body) { free(args); httpd_resp_send_500(req); return ESP_OK; }
+
+    /* SMTP needs ~16KB stack for TLS; Telegram is lighter but share the same path */
+    BaseType_t ok = xTaskCreatePinnedToCore(
+        relay_async_task, "relay", 16 * 1024, args, 5, NULL, 0);
+    if (ok != pdPASS) {
+        free(args->body); free(args);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Task create failed");
+        return ESP_OK;
+    }
+
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
 /* ── /api/speaker-test — 440 Hz tone, no TTS needed ───────────── */
 
 static void speaker_test_task(void *arg)
@@ -2323,6 +2471,10 @@ esp_err_t ws_server_start(void)
     /* Inbound message injection */
     httpd_uri_t message_uri = { .uri = "/api/message", .method = HTTP_POST, .handler = message_post_handler };
     httpd_register_uri_handler(s_server, &message_uri);
+
+    /* Claude↔ESP32 outbox relay (email + telegram) */
+    httpd_uri_t relay_uri = { .uri = "/api/relay", .method = HTTP_POST, .handler = relay_post_handler };
+    httpd_register_uri_handler(s_server, &relay_uri);
 
     /* MCP (Model Context Protocol) */
     httpd_uri_t mcp_uri = { .uri = "/mcp", .method = HTTP_POST, .handler = mcp_post_handler };

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.lango.relay</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/jamesfield/Lango/scripts/lango_relay.py</string>
+    </array>
+
+    <!-- Auto-start at login and restart if it crashes -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Optional: set LANGO_AUTH_TOKEN here if auth is enabled on the device -->
+    <!-- <key>EnvironmentVariables</key>
+    <dict>
+        <key>LANGO_AUTH_TOKEN</key>
+        <string>your-token-here</string>
+    </dict> -->
+
+    <key>StandardOutPath</key>
+    <string>/Users/jamesfield/Library/Logs/lango_relay.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jamesfield/Library/Logs/lango_relay.log</string>
+</dict>
+</plist>

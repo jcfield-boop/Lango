@@ -1,0 +1,12 @@
+[
+  {"icon":"\u2600\uFE0F","label":"Briefing","action":"Run the daily morning briefing"},
+  {"icon":"\uD83C\uDFC4","label":"Surf Check","action":"Check surf conditions at Pacifica Linda Mar for this weekend"},
+  {"icon":"\uD83D\uDCC8","label":"ARM Stock","action":"What is the ARM stock price right now?"},
+  {"icon":"\uD83D\uDCA1","label":"Lights On","action":"Turn on all the lights"},
+  {"icon":"\uD83C\uDF19","label":"Lights Off","action":"Turn off all the lights"},
+  {"icon":"\u26C5","label":"Weather","action":"What is the weather in San Francisco?"},
+  {"icon":"\uD83D\uDDA8\uFE0F","label":"Printer","action":"Use the klipper_request tool to check my 3D printer. Query /printer/objects/query?print_stats for print state/progress/filename, and /printer/objects/query?heater_bed&extruder for temperatures. Summarise what's printing, how long it's been running, and current temps."},
+  {"icon":"\uD83D\uDCCA","label":"System Info","action":"Give me a system health report"},
+  {"icon":"\uD83D\uDE02","label":"Joke","action":"Tell me a joke. Make it original and funny — not a classic dad joke."},
+  {"icon":"\uD83D\uDD04","label":"Restart","action":"__reboot__"}
+]

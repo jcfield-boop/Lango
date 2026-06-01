@@ -1,0 +1,134 @@
+# Langoustine - ESP32-S3-WROOM-1-N32R16V Target Configuration
+CONFIG_IDF_TARGET="esp32s3"
+
+# Flash 32MB + QIO
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+
+# CPU 240MHz
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# PSRAM 16MB OPI (Octal PSRAM)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_SIZE=16777216
+# PSRAM-first heap: all plain malloc/calloc goes to PSRAM by default.
+# Only explicit MALLOC_CAP_INTERNAL/DMA allocations stay in SRAM (DMA
+# buffers, FreeRTOS queue internals, ISR stacks). This uses the 16MB
+# PSRAM as the primary heap and keeps ~512KB SRAM free for the things
+# that genuinely require fast/DMA-capable memory.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
+# Reserve 128KB internal SRAM for DMA-capable allocations (I2S, USB)
+# and FreeRTOS task stacks. Reduced from 256KB because WiFi/lwIP now
+# allocates from PSRAM (SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y).
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=131072
+CONFIG_SPIRAM_MEMTEST=n
+
+# Execute code + read-only data from PSRAM (copied from flash at boot).
+# OPI PSRAM is ~7x faster than quad flash (150 vs 20 MB/s), and crucially
+# code execution is NOT interrupted during flash write operations (NVS,
+# OTA, LittleFS saves). Costs ~500ms boot time and ~1-2MB PSRAM.
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+
+# WiFi/lwIP: allocate RX/TX buffers from PSRAM instead of SRAM.
+# Frees ~25-50KB internal SRAM for task stacks and DMA.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# MbedTLS: use PSRAM for TLS buffers + smaller output buffer
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
+CONFIG_MBEDTLS_CLIENT_SSL_SESSION_TICKETS=y
+CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS=y
+CONFIG_ESP_HTTPS_SERVER_ENABLE=y
+
+# WebSocket support (required for browser voice UI)
+CONFIG_HTTPD_WS_SUPPORT=y
+
+# Custom partition table
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_s3_32mb.csv"
+
+# Watchdog: 60s to cover slow LLM + TTS API calls + parallel tool HTTPS requests.
+# Previously 30s — tool wait timeout was 60s, causing WDT to fire before agent could recover.
+# Tool wait timeout is now 25s, so WDT at 60s gives a clean safety net.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=60
+
+# LittleFS: longer filename support
+CONFIG_LITTLEFS_OBJ_NAME_LEN=64
+
+# SNTP: also accept NTP server from DHCP option 42 (belt-and-suspenders alongside hardcoded servers)
+CONFIG_LWIP_DHCP_GET_NTP_SRV=y
+
+# Socket file descriptors: default MAX_SOCKETS=16 uses FDs 48–63 (FD_SETSIZE=64).
+# With HTTPS+HTTP servers + WSS + Telegram + TLS API sessions all open concurrently,
+# the 64th FD is hit and accept() fails with ENFILE. Bump to 24 to give headroom.
+CONFIG_LWIP_MAX_SOCKETS=24
+
+# WiFi TX power: 20dBm default causes 300mA current surge → hardware brownout on marginal USB supplies.
+# 10dBm (40*0.25): sustained HTTPS TX at 13dBm still triggers hardware BOD during LLM API calls.
+# 10dBm is typically the minimum allowed by ESP-IDF kconfig range. Increase once PSU is stable.
+CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=10
+
+# WiFi memory optimization
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=3
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=12
+CONFIG_ESP_WIFI_RX_BA_WIN=3
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=16
+
+# Console: UART primary only (GPIO43/44)
+# USB Serial/JTAG secondary disabled — GPIO19/20 are dedicated to USB OTG host (webcam)
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# USB OTG host configuration for UVC webcam
+# Larger control transfer buffer to fit UVC descriptor sets (> default 256 bytes)
+CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=2048
+# Bias isochronous buffers toward IN (camera → ESP) for better MJPEG throughput
+CONFIG_USB_HOST_HW_BUFFER_BIAS_IN=y
+
+# Brownout detector: default level 7 (~3.5V) fires on WiFi startup current surge on USB power.
+# Disable for USB-powered bring-up; re-enable (or set level 0) for production on clean PSU.
+CONFIG_ESP_BROWNOUT_DET=n
+
+# ESP-SR WakeNet9 model selection: "Hi ESP" wake word
+CONFIG_SR_WN_WN9_HIESP=y
+
+# Debug build — disable for production
+# NOTE: CONFIG_COMPILER_OPTIMIZATION_NONE=y (-O0) causes sys_evt stack overflow
+# at default 2304-byte stack; keep default -Os optimization instead.
+# Heap corruption detection: catches double-free at ~10% overhead; clears on fix
+CONFIG_HEAP_CORRUPTION_DETECTION_BASIC=y
+# Stack overflow: canary value written at bottom of each task stack; checked on context switch.
+# Catches overflow before it silently corrupts adjacent heap memory.
+CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
+# Allow FreeRTOS task stacks to be allocated from PSRAM (S3 has 16MB — use it).
+# With ALWAYSINTERNAL=0, all pvPortMalloc calls (including task stacks) go to PSRAM.
+# ESP-IDF 6.0 on ESP32-S3 handles flash-write cache coherency correctly even with
+# PSRAM stacks; the original IDF 4.x restriction no longer applies.
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+
+# Coredump: UART only (not flash). ELF format to flash was disabled because the coredump
+# exceeded the 64KB partition and overflowed into the adjacent srmodels partition at 0x830000,
+# Coredump to flash for post-mortem analysis.
+# Partition: 64KB at 0x820000, safely below model at 0x830000.
+# Pull after a panic with:
+#   python -m esp_coredump --port /dev/cu.usbserial-* info_corefile build/langoustine.elf
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+
+# Default log level: INFO. Keep MAXIMUM at DEBUG so runtime log_level commands still work.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
+# sys_evt task stack: default 2304 can overflow on WiFi disconnect bursts
+# (reason=34 disassoc) while cleaning up httpd sockets. Would like 4096 but
+# SRAM is too tight — agent(28K)+telegram(8K)+heartbeat(4K) leaves no room.
+# Keeping default 2304 until SRAM budget improves.

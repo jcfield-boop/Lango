@@ -16,7 +16,8 @@
     {
       "id": "brief001",
       "name": "Morning Briefing",
-      "enabled": true,
+      "enabled": false,
+      "_disabled_reason": "Claude (Cowork) owns briefing composition; ESP32 handles relay via /api/relay",
       "kind": "every",
       "interval_s": 86400,
       "message": "MORNING BRIEFING (fast path) — read /lfs/skills/morning-briefing.md FIRST (read_file ALONE in iter 1). The prefetch1 cron at 06:05 already gathered all live data into /lfs/memory/brief_data.md. Your job: read brief_data.md + USER.md + MEMORY.md + calendar.md + reading.md + family.md (these reads can ALL be parallel in one iteration), then compose the 6-section, 600-900 word email. Do NOT call web_search / rss_fetch / get_weather / klipper — that data is already in brief_data.md. Exception: Fri/Sat/Sun make ONE noaa_buoy call for the Surf section. send_email to jcfield@gmail.com LAST (never batched with read_file). If brief_data.md is missing or >3h stale, follow the skill's SLOW PATH fallback (live gathering). If send_email fails, telegram_send_message chat 5538967144 with the FULL body verbatim.",
@@ -70,7 +71,8 @@
     {
       "id": "wire0003",
       "name": "Monday Wirecutter Deals",
-      "enabled": true,
+      "enabled": false,
+      "_disabled_reason": "Claude (Cowork) scheduled task lango-wirecutter-deals handles this",
       "kind": "every",
       "interval_s": 604800,
       "dow": "mon",
@@ -84,7 +86,8 @@
     {
       "id": "wknd0004",
       "name": "Friday Weekend Planner",
-      "enabled": true,
+      "enabled": false,
+      "_disabled_reason": "Weekend planner moved to Claude (Cowork) scheduled task to avoid duplicate Telegram messages",
       "kind": "every",
       "interval_s": 604800,
       "dow": "fri",
@@ -98,7 +101,8 @@
     {
       "id": "armnw005",
       "name": "Sunday ARM Ecosystem News",
-      "enabled": true,
+      "enabled": false,
+      "_disabled_reason": "Claude (Cowork) owns ARM digest; Monday 06:50 HEARTBEAT.md task handles this",
       "kind": "every",
       "interval_s": 604800,
       "dow": "sun",
