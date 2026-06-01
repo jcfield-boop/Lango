@@ -40,6 +40,8 @@ static char s_ota_label[16]      = "";
 static int  s_print_pct          = -1;
 static int  s_print_eta_mins     = -1;
 static char s_print_fname[22]    = "";
+/* ARM stock header (top-right, always visible) */
+static char s_arm_hdr[22]        = "";
 
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -132,12 +134,14 @@ static void draw_idle_screen(void)
     ssd1306_str_2x(0, 0, time_str);
 
     portENTER_CRITICAL(&s_mux);
-    bool o = s_ollama_online, a = s_audio_online, f = s_apfel_online;
+    char arm_hdr[22];
+    strncpy(arm_hdr, s_arm_hdr, sizeof(arm_hdr) - 1);
+    arm_hdr[sizeof(arm_hdr) - 1] = '\0';
     portEXIT_CRITICAL(&s_mux);
-    char svc[10];
-    snprintf(svc, sizeof(svc), "O%cA%cF%c", o ? '+' : '-', a ? '+' : '-', f ? '+' : '-');
-    ssd1306_str(66, 0, svc);
-    draw_rssi(90, 8, rssi);
+
+    /* Top-right: ARM price row 0, RSSI bars row 8 */
+    if (arm_hdr[0]) ssd1306_str(64, 0, arm_hdr);
+    draw_rssi(108, 8, rssi);
 
     /* ── Row 18: date ────────────────────────────────────────────── */
     static const char *days[]   = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
@@ -542,6 +546,18 @@ void oled_display_set_rotate_line(int slot, const char *text)
     portENTER_CRITICAL(&s_mux);
     strncpy(s_rotate_lines[slot], text, 21);
     s_rotate_lines[slot][21] = '\0';
+    portEXIT_CRITICAL(&s_mux);
+}
+
+void oled_display_set_arm_header(const char *line)
+{
+    portENTER_CRITICAL(&s_mux);
+    if (line) {
+        strncpy(s_arm_hdr, line, 21);
+        s_arm_hdr[21] = '\0';
+    } else {
+        s_arm_hdr[0] = '\0';
+    }
     portEXIT_CRITICAL(&s_mux);
 }
 

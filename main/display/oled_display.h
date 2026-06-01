@@ -52,6 +52,10 @@ void oled_display_set_channel(const char *channel);
  *  Slot 5: Sonos now-playing (set by ambient_monitor). */
 void oled_display_set_rotate_line(int slot, const char *text);
 
+/** Set the ARM stock line shown persistently in the top-right header.
+ *  Format e.g. "ARM $309 +2.3%". Pass empty string to clear. Thread-safe. */
+void oled_display_set_arm_header(const char *line);
+
 /** Show a 3D print progress bar in the stats row while printing.
  *  pct: 0-100 (pass -1 to clear and show normal SRAM stats).
  *  eta_mins: estimated minutes remaining (-1 if unknown).

@@ -17,6 +17,7 @@ static const char *TAG = "ambient";
 
 #define KLIPPER_POLL_MS  (20 * 1000)
 #define SONOS_POLL_MS    (15 * 1000)
+#define STOCK_POLL_MS    (5 * 60 * 1000)   /* 5 minutes */
 #define RESP_BUF         4096
 
 /* ── Credential helpers ──────────────────────────────────────── */
@@ -272,12 +273,66 @@ static void sonos_monitor_task(void *arg)
     }
 }
 
+/* ── ARM stock live fetch (Yahoo Finance, every 5 min) ─────────── */
+
+static void arm_stock_live_task(void *arg)
+{
+    /* Stagger start so all tasks don't wake simultaneously */
+    vTaskDelay(pdMS_TO_TICKS(10000));
+
+    char *buf = (char *)ps_malloc(RESP_BUF);
+    if (!buf) { vTaskDelete(NULL); return; }
+
+    for (;;) {
+        lan_result_t res;
+        /* Yahoo Finance v7 quote — small focused response */
+        esp_err_t err = lan_request(
+            "GET",
+            "https://query2.finance.yahoo.com",
+            "/v7/finance/quote?symbols=ARM&fields=regularMarketPrice,regularMarketChangePercent",
+            NULL, NULL,
+            NULL, buf, RESP_BUF, &res);
+
+        if (err == ESP_OK && res.ok) {
+            cJSON *root = cJSON_Parse(buf);
+            if (root) {
+                cJSON *qr     = cJSON_GetObjectItemCaseSensitive(root, "quoteResponse");
+                cJSON *result = qr ? cJSON_GetObjectItemCaseSensitive(qr, "result") : NULL;
+                cJSON *quote  = (cJSON_IsArray(result) && cJSON_GetArraySize(result) > 0)
+                              ? cJSON_GetArrayItem(result, 0) : NULL;
+
+                cJSON *price_j  = quote ? cJSON_GetObjectItemCaseSensitive(quote, "regularMarketPrice") : NULL;
+                cJSON *change_j = quote ? cJSON_GetObjectItemCaseSensitive(quote, "regularMarketChangePercent") : NULL;
+
+                if (cJSON_IsNumber(price_j)) {
+                    double price  = price_j->valuedouble;
+                    double change = cJSON_IsNumber(change_j) ? change_j->valuedouble : 0.0;
+                    char line[22];
+                    /* Format: "ARM $309 +2.3%" — price integer + 1dp change */
+                    int change_i   = (int)(change * 10);   /* ±tenths */
+                    char sign      = change >= 0 ? '+' : '-';
+                    int abs_change = change_i < 0 ? -change_i : change_i;
+                    snprintf(line, sizeof(line), "ARM $%d %c%d.%d%%",
+                             (int)price, sign, abs_change / 10, abs_change % 10);
+                    oled_display_set_arm_header(line);
+                    ESP_LOGI(TAG, "ARM stock live: %s", line);
+                }
+                cJSON_Delete(root);
+            }
+        } else {
+            ESP_LOGW(TAG, "ARM stock fetch failed (err=%d ok=%d)", err, res.ok);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(STOCK_POLL_MS));
+    }
+}
+
 /* ── Public API ───────────────────────────────────────────────── */
 
 void ambient_monitor_start(void)
 {
     xTaskCreate(klipper_monitor_task, "klipper_mon", 4096, NULL, 2, NULL);
     xTaskCreate(sonos_monitor_task,   "sonos_mon",   4096, NULL, 2, NULL);
-    ESP_LOGI(TAG, "Ambient monitor tasks started (Klipper %ds, Sonos %ds)",
-             KLIPPER_POLL_MS / 1000, SONOS_POLL_MS / 1000);
+    xTaskCreate(arm_stock_live_task,  "arm_stock",   6144, NULL, 2, NULL);
+    ESP_LOGI(TAG, "Ambient monitor tasks started");
 }

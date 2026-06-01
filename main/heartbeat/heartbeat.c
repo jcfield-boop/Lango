@@ -335,8 +335,9 @@ static void refresh_arm_stock_oled(void)
     char line[22] = "";
     ambient_parse_arm_stock(content, line, sizeof(line));
     if (line[0]) {
-        oled_display_set_rotate_line(4, line);
-        ESP_LOGI(TAG, "ARM stock OLED: %s", line);
+        /* Seed header with cached value — live task will override once online */
+        oled_display_set_arm_header(line);
+        ESP_LOGI(TAG, "ARM stock (cached): %s", line);
     }
 }
 
