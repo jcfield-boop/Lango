@@ -1917,7 +1917,7 @@ static esp_err_t say_post_handler(httpd_req_t *req)
  *   {"type":"telegram", "chat_id":"5538967144", "text":"..."}
  *
  * Returns {"ok":true} immediately; send runs in a background task.
- * Auth: Bearer token (same as all other /api/* endpoints).
+ * Auth: Bearer token (same as all other /api/... endpoints).
  * Used by Cowork/Claude to send emails and Telegram messages via the
  * device's existing SMTP and Telegram credentials without duplicating
  * the cron-generated content.
