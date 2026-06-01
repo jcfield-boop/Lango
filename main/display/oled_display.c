@@ -72,53 +72,75 @@ static void draw_rssi(int x, int y, int rssi)
 
 /* ── Display screens ─────────────────────────────────────────────── */
 
+/* ── Diagnostics screen (SRAM / uptime / IP — shown periodically) ── */
+static void draw_diag_screen(void)
+{
+    portENTER_CRITICAL(&s_mux);
+    char ip_copy[20];
+    strncpy(ip_copy, s_ip_addr, sizeof(ip_copy) - 1);
+    ip_copy[sizeof(ip_copy) - 1] = '\0';
+    char tok_copy[32];
+    strncpy(tok_copy, s_token_info, sizeof(tok_copy) - 1);
+    tok_copy[sizeof(tok_copy) - 1] = '\0';
+    portEXIT_CRITICAL(&s_mux);
+
+    ssd1306_str(0, 0,  "-- diagnostics --");
+
+    uint32_t sram  = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    uint32_t psram = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    char stat[22];
+    snprintf(stat, sizeof(stat), "S:%luK  P:%luM",
+             (unsigned long)(sram / 1024), (unsigned long)(psram / (1024 * 1024)));
+    ssd1306_str(0, 10, stat);
+
+    if (tok_copy[0]) ssd1306_str(0, 20, tok_copy);
+
+    int64_t uptime_s = esp_timer_get_time() / 1000000LL;
+    int hrs  = (int)(uptime_s / 3600);
+    int mins = (int)((uptime_s % 3600) / 60);
+    char up[22];
+    snprintf(up, sizeof(up), "Up: %dh %02dm", hrs, mins);
+    ssd1306_str(0, 30, up);
+
+    if (ip_copy[0]) ssd1306_str(0, 40, ip_copy);
+
+    int rssi = get_rssi();
+    char rssi_str[22];
+    snprintf(rssi_str, sizeof(rssi_str), "WiFi: %d dBm", rssi);
+    ssd1306_str(0, 50, rssi_str);
+}
+
+/* ── Main idle screen ─────────────────────────────────────────────── */
 static void draw_idle_screen(void)
 {
+    /* Every 2 min show diagnostics for 5s (10 renders at 2Hz) */
+    static int render_tick = 0;
+    render_tick++;
+    if ((render_tick % 240) >= 230) {
+        draw_diag_screen();
+        return;
+    }
+
     time_t now = time(NULL);
     struct tm tm;
     localtime_r(&now, &tm);
     int rssi = get_rssi();
 
-    /* ── Row 0-15: Large time (HH:MM) on left, IP on right ──────── */
+    /* ── Row 0-15: Large HH:MM (left) + service status + RSSI (right) */
     char time_str[8];
     snprintf(time_str, sizeof(time_str), "%02d:%02d", tm.tm_hour, tm.tm_min);
     ssd1306_str_2x(0, 0, time_str);
-    /* 5 chars × 12px = 60px for 2x time. IP starts after. */
 
     portENTER_CRITICAL(&s_mux);
-    char ip_copy[20];
-    strncpy(ip_copy, s_ip_addr, sizeof(ip_copy) - 1);
-    ip_copy[sizeof(ip_copy) - 1] = '\0';
+    bool o = s_ollama_online, a = s_audio_online, f = s_apfel_online;
     portEXIT_CRITICAL(&s_mux);
+    char svc[10];
+    snprintf(svc, sizeof(svc), "O%cA%cF%c", o ? '+' : '-', a ? '+' : '-', f ? '+' : '-');
+    ssd1306_str(66, 0, svc);
+    draw_rssi(90, 8, rssi);
 
-    if (ip_copy[0]) {
-        /* Abbreviate to last 2 octets so full IP fits (e.g. "192.168.0.44" → "0.44") */
-        char *last_dot = strrchr(ip_copy, '.');
-        if (last_dot) {
-            char *prev_dot = NULL;
-            for (char *p = ip_copy; p < last_dot; p++) {
-                if (*p == '.') prev_dot = p;
-            }
-            if (prev_dot) {
-                memmove(ip_copy, prev_dot + 1, strlen(prev_dot));
-            }
-        }
-        /* Small 1x font IP on row 0 */
-        ssd1306_str(64, 0, ip_copy);
-    }
-
-    /* Local service status on row 8: O+ A+ F+ or O- A- F- */
-    {
-        portENTER_CRITICAL(&s_mux);
-        bool o = s_ollama_online, a = s_audio_online, f = s_apfel_online;
-        portEXIT_CRITICAL(&s_mux);
-        char svc[16];
-        snprintf(svc, sizeof(svc), "O%c A%c F%c", o ? '+' : '-', a ? '+' : '-', f ? '+' : '-');
-        ssd1306_str(64, 8, svc);
-    }
-
-    /* ── Row 18: date (left) + RSSI bars (right) ─────────────────── */
-    static const char *days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+    /* ── Row 18: date ────────────────────────────────────────────── */
+    static const char *days[]   = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
     static const char *months[] = {"Jan","Feb","Mar","Apr","May","Jun",
                                    "Jul","Aug","Sep","Oct","Nov","Dec"};
     char date_str[22];
@@ -126,106 +148,83 @@ static void draw_idle_screen(void)
              days[tm.tm_wday], months[tm.tm_mon], tm.tm_mday);
     ssd1306_str(0, 18, date_str);
 
-    /* RSSI bars right-aligned on the date row */
-    draw_rssi(106, 18, rssi);
-
-    /* Separator line */
+    /* Separator */
     ssd1306_hline(0, 28, 128, true);
 
-    /* ── Row 30: rotating info line (cycles every 5s at 2Hz) ───── */
-    {
-        static int rotate_tick = 0;
-        rotate_tick++;
-        int phase = (rotate_tick / 10) % 6;  /* 5s per phase, 6 slots = 30s cycle */
-
-        portENTER_CRITICAL(&s_mux);
-        char info_line[22];
-        if (s_rotate_lines[phase][0]) {
-            strncpy(info_line, s_rotate_lines[phase], 21);
-        } else {
-            strncpy(info_line, s_provider_info[0] ? s_provider_info : "Ready", 21);
-        }
-        info_line[21] = '\0';
-        portEXIT_CRITICAL(&s_mux);
-        ssd1306_str(0, 30, info_line);
-    }
-
-    /* ── Row 40-48: print progress (if printing) or stats ───────── */
+    /* ── Rows 32 + 43: two rotating info lines or print bar ─────── */
     portENTER_CRITICAL(&s_mux);
     char msg_copy[128];
     strncpy(msg_copy, s_message, sizeof(msg_copy) - 1);
     msg_copy[sizeof(msg_copy) - 1] = '\0';
-    char tok_copy[32];
-    strncpy(tok_copy, s_token_info, sizeof(tok_copy) - 1);
-    tok_copy[sizeof(tok_copy) - 1] = '\0';
-    int print_pct      = s_print_pct;
-    int print_eta      = s_print_eta_mins;
-    char print_fname[22];
-    strncpy(print_fname, s_print_fname, sizeof(print_fname) - 1);
-    print_fname[sizeof(print_fname) - 1] = '\0';
+    int print_pct  = s_print_pct;
+    int print_eta  = s_print_eta_mins;
+    char fname[22];
+    strncpy(fname, s_print_fname, sizeof(fname) - 1);
+    fname[sizeof(fname) - 1] = '\0';
     portEXIT_CRITICAL(&s_mux);
 
     if (msg_copy[0]) {
+        /* Message preview spans both rows */
         char line[22];
-        strncpy(line, msg_copy, 21);
-        line[21] = '\0';
-        ssd1306_str(0, 40, line);
-
+        strncpy(line, msg_copy, 21); line[21] = '\0';
+        ssd1306_str(0, 32, line);
         if (strlen(msg_copy) > 21) {
-            strncpy(line, msg_copy + 21, 21);
-            line[21] = '\0';
-            ssd1306_str(0, 48, line);
+            strncpy(line, msg_copy + 21, 21); line[21] = '\0';
+            ssd1306_str(0, 43, line);
         }
     } else if (print_pct >= 0) {
-        /* Print progress bar: [########--] 78%  (21 chars) */
+        /* Print progress bar row 32 */
         char bar[22];
-        int filled = (print_pct * 10) / 100;  /* 0-10 blocks */
+        int filled = (print_pct * 10) / 100;
         bar[0] = '[';
         for (int i = 0; i < 10; i++) bar[1 + i] = (i < filled) ? '#' : '-';
         bar[11] = ']';
-        /* clamp so compiler knows it fits in " XX%" (4 chars + NUL) */
-        int pct_disp = (print_pct < 0) ? 0 : (print_pct > 100) ? 100 : print_pct;
+        int pct_d = (print_pct > 100) ? 100 : print_pct;
         char pct_str[6];
-        snprintf(pct_str, sizeof(pct_str), " %d%%", pct_disp);
+        snprintf(pct_str, sizeof(pct_str), " %d%%", pct_d);
         strncat(bar, pct_str, sizeof(bar) - 13);
-        ssd1306_str(0, 40, bar);
+        ssd1306_str(0, 32, bar);
 
-        /* Row 48: ETA + filename (each component bounded) */
+        /* ETA + filename row 43 */
         char eta_line[22] = "";
-        if (print_eta >= 0 && print_fname[0]) {
-            char eta_str[6];  /* "~999m" */
-            int eta_clamped = (print_eta > 999) ? 999 : print_eta;
-            snprintf(eta_str, sizeof(eta_str), "~%dm", eta_clamped);
-            snprintf(eta_line, sizeof(eta_line), "%-5s %.14s", eta_str, print_fname);
+        if (print_eta >= 0 && fname[0]) {
+            int ec = (print_eta > 999) ? 999 : print_eta;
+            char es[6]; snprintf(es, sizeof(es), "~%dm", ec);
+            snprintf(eta_line, sizeof(eta_line), "%-5s %.14s", es, fname);
         } else if (print_eta >= 0) {
-            int eta2 = (print_eta > 999) ? 999 : print_eta;
-            snprintf(eta_line, sizeof(eta_line), "~%dm left", eta2);
-        } else if (print_fname[0]) {
-            strncpy(eta_line, print_fname, sizeof(eta_line) - 1);
+            int ec = (print_eta > 999) ? 999 : print_eta;
+            snprintf(eta_line, sizeof(eta_line), "~%dm left", ec);
+        } else if (fname[0]) {
+            strncpy(eta_line, fname, sizeof(eta_line) - 1);
             eta_line[sizeof(eta_line) - 1] = '\0';
         }
-        if (eta_line[0]) ssd1306_str(0, 48, eta_line);
+        if (eta_line[0]) ssd1306_str(0, 43, eta_line);
     } else {
-        if (tok_copy[0]) {
-            ssd1306_str(0, 40, tok_copy);
-        }
+        /* Two rotating lines, 2s each, slots offset by 3 */
+        static int rot_tick = 0;
+        rot_tick++;
+        int phaseA = (rot_tick / 4) % 6;   /* 2s per slot at 2Hz */
+        int phaseB = (phaseA + 3) % 6;
 
-        /* System stats */
-        uint32_t sram  = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-        uint32_t psram = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-        char stat_line[32];
-        snprintf(stat_line, sizeof(stat_line), "S:%luK P:%luM",
-                 (unsigned long)(sram / 1024), (unsigned long)(psram / (1024 * 1024)));
-        ssd1306_str(0, tok_copy[0] ? 48 : 40, stat_line);
+        portENTER_CRITICAL(&s_mux);
+        char lineA[22], lineB[22];
+        const char *srcA = s_rotate_lines[phaseA][0] ? s_rotate_lines[phaseA]
+                         : (s_provider_info[0] ? s_provider_info : "Ready");
+        strncpy(lineA, srcA, 21); lineA[21] = '\0';
+        strncpy(lineB, s_rotate_lines[phaseB], 21); lineB[21] = '\0';
+        portEXIT_CRITICAL(&s_mux);
+
+        ssd1306_str(0, 32, lineA);
+        if (lineB[0]) ssd1306_str(0, 43, lineB);
     }
 
-    /* ── Row 56: uptime ─────────────────────────────────────────── */
-    int64_t uptime_s = esp_timer_get_time() / 1000000LL;
-    int hrs = (int)(uptime_s / 3600);
-    int mins = (int)((uptime_s % 3600) / 60);
-    char up_line[22];
-    snprintf(up_line, sizeof(up_line), "Up:%dh%02dm", hrs, mins);
-    ssd1306_str(0, 56, up_line);
+    /* ── Row 54: daily message count ─────────────────────────────── */
+    portENTER_CRITICAL(&s_mux);
+    int msgs = s_msg_count_today;
+    portEXIT_CRITICAL(&s_mux);
+    char summary[22];
+    snprintf(summary, sizeof(summary), "%d msgs today", msgs);
+    ssd1306_str(0, 54, summary);
 }
 
 static void draw_active_screen(void)
