@@ -60,6 +60,7 @@ idf_component_register(
         "led/led_indicator.c"
         "display/ssd1306.c"
         "display/oled_display.c"
+        "monitor/ambient_monitor.c"
         "config/services_config.c"
         "config/services_parser.c"
         "diag/log_buffer.c"

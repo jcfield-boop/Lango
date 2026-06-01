@@ -27,6 +27,7 @@
 #include "memory/psram_alloc.h"
 #include "display/oled_display.h"
 #include "llm/llm_proxy.h"
+#include "monitor/ambient_monitor.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -318,9 +319,33 @@ static bool heartbeat_send(void)
 
 /* ── Dedicated task (replaces timer callback) ────────────────── */
 
+/* ── ARM stock OLED refresh (slot 4) ────────────────────────── */
+
+static void refresh_arm_stock_oled(void)
+{
+    FILE *f = fopen("/lfs/memory/arm_stock_today.md", "r");
+    if (!f) return;
+
+    char content[256] = "";
+    size_t n = fread(content, 1, sizeof(content) - 1, f);
+    fclose(f);
+    if (!n) return;
+    content[n] = '\0';
+
+    char line[22] = "";
+    ambient_parse_arm_stock(content, line, sizeof(line));
+    if (line[0]) {
+        oled_display_set_rotate_line(4, line);
+        ESP_LOGI(TAG, "ARM stock OLED: %s", line);
+    }
+}
+
 static void heartbeat_task_main(void *arg)
 {
     (void)arg;
+
+    /* Show ARM stock once at startup from yesterday's file (may be stale) */
+    refresh_arm_stock_oled();
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(LANG_HEARTBEAT_INTERVAL_MS));
@@ -337,6 +362,9 @@ static void heartbeat_task_main(void *arg)
                 oled_display_set_rotate_line(1, "No tasks pending");
             }
         }
+
+        /* Refresh ARM stock slot 4 — picks up latest arm_stock_today.md */
+        refresh_arm_stock_oled();
     }
 }
 

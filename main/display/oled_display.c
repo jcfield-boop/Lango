@@ -33,9 +33,13 @@ static bool s_apfel_online      = false;
 static char s_channel[8]        = "";
 static int  s_msg_count_today   = 0;
 static int  s_msg_count_yday    = -1;
-static char s_rotate_lines[4][22] = { "", "", "", "" };
+static char s_rotate_lines[6][22] = { "", "", "", "", "", "" };
 static int  s_ota_pct            = -1;  /* <0 = no OTA screen */
 static char s_ota_label[16]      = "";
+/* print progress: -1 = not printing */
+static int  s_print_pct          = -1;
+static int  s_print_eta_mins     = -1;
+static char s_print_fname[22]    = "";
 
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -132,7 +136,7 @@ static void draw_idle_screen(void)
     {
         static int rotate_tick = 0;
         rotate_tick++;
-        int phase = (rotate_tick / 10) % 4;  /* 5s per phase */
+        int phase = (rotate_tick / 10) % 6;  /* 5s per phase, 6 slots = 30s cycle */
 
         portENTER_CRITICAL(&s_mux);
         char info_line[22];
@@ -146,7 +150,7 @@ static void draw_idle_screen(void)
         ssd1306_str(0, 30, info_line);
     }
 
-    /* ── Row 40-48: message preview or token counts ─────────────── */
+    /* ── Row 40-48: print progress (if printing) or stats ───────── */
     portENTER_CRITICAL(&s_mux);
     char msg_copy[128];
     strncpy(msg_copy, s_message, sizeof(msg_copy) - 1);
@@ -154,6 +158,11 @@ static void draw_idle_screen(void)
     char tok_copy[32];
     strncpy(tok_copy, s_token_info, sizeof(tok_copy) - 1);
     tok_copy[sizeof(tok_copy) - 1] = '\0';
+    int print_pct      = s_print_pct;
+    int print_eta      = s_print_eta_mins;
+    char print_fname[22];
+    strncpy(print_fname, s_print_fname, sizeof(print_fname) - 1);
+    print_fname[sizeof(print_fname) - 1] = '\0';
     portEXIT_CRITICAL(&s_mux);
 
     if (msg_copy[0]) {
@@ -167,17 +176,46 @@ static void draw_idle_screen(void)
             line[21] = '\0';
             ssd1306_str(0, 48, line);
         }
+    } else if (print_pct >= 0) {
+        /* Print progress bar: [########--] 78%  (21 chars) */
+        char bar[22];
+        int filled = (print_pct * 10) / 100;  /* 0-10 blocks */
+        bar[0] = '[';
+        for (int i = 0; i < 10; i++) bar[1 + i] = (i < filled) ? '#' : '-';
+        bar[11] = ']';
+        /* clamp so compiler knows it fits in " XX%" (4 chars + NUL) */
+        int pct_disp = (print_pct < 0) ? 0 : (print_pct > 100) ? 100 : print_pct;
+        char pct_str[6];
+        snprintf(pct_str, sizeof(pct_str), " %d%%", pct_disp);
+        strncat(bar, pct_str, sizeof(bar) - 13);
+        ssd1306_str(0, 40, bar);
+
+        /* Row 48: ETA + filename (each component bounded) */
+        char eta_line[22] = "";
+        if (print_eta >= 0 && print_fname[0]) {
+            char eta_str[6];  /* "~999m" */
+            int eta_clamped = (print_eta > 999) ? 999 : print_eta;
+            snprintf(eta_str, sizeof(eta_str), "~%dm", eta_clamped);
+            snprintf(eta_line, sizeof(eta_line), "%-5s %.14s", eta_str, print_fname);
+        } else if (print_eta >= 0) {
+            int eta2 = (print_eta > 999) ? 999 : print_eta;
+            snprintf(eta_line, sizeof(eta_line), "~%dm left", eta2);
+        } else if (print_fname[0]) {
+            strncpy(eta_line, print_fname, sizeof(eta_line) - 1);
+            eta_line[sizeof(eta_line) - 1] = '\0';
+        }
+        if (eta_line[0]) ssd1306_str(0, 48, eta_line);
     } else {
         if (tok_copy[0]) {
             ssd1306_str(0, 40, tok_copy);
         }
 
         /* System stats */
-        uint32_t sram = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        uint32_t sram  = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         uint32_t psram = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
         char stat_line[32];
         snprintf(stat_line, sizeof(stat_line), "S:%luK P:%luM",
-                 (unsigned long)(sram / 1024), (unsigned long)(psram / (1024*1024)));
+                 (unsigned long)(sram / 1024), (unsigned long)(psram / (1024 * 1024)));
         ssd1306_str(0, tok_copy[0] ? 48 : 40, stat_line);
     }
 
@@ -501,10 +539,24 @@ void oled_display_set_channel(const char *channel)
 
 void oled_display_set_rotate_line(int slot, const char *text)
 {
-    if (!text || slot < 0 || slot > 3) return;
+    if (!text || slot < 0 || slot > 5) return;
     portENTER_CRITICAL(&s_mux);
     strncpy(s_rotate_lines[slot], text, 21);
     s_rotate_lines[slot][21] = '\0';
+    portEXIT_CRITICAL(&s_mux);
+}
+
+void oled_display_set_print_progress(int pct, int eta_mins, const char *filename)
+{
+    portENTER_CRITICAL(&s_mux);
+    s_print_pct      = pct;
+    s_print_eta_mins = eta_mins;
+    if (filename && pct >= 0) {
+        strncpy(s_print_fname, filename, sizeof(s_print_fname) - 1);
+        s_print_fname[sizeof(s_print_fname) - 1] = '\0';
+    } else {
+        s_print_fname[0] = '\0';
+    }
     portEXIT_CRITICAL(&s_mux);
 }
 

@@ -31,6 +31,7 @@
 #include "tools/tool_registry.h"
 #include "cron/cron_service.h"
 #include "heartbeat/heartbeat.h"
+#include "monitor/ambient_monitor.h"
 #include "skills/skill_loader.h"
 #include "rules/rule_engine.h"
 #include "telegram/telegram_bot.h"
@@ -603,6 +604,7 @@ void app_main(void)
             cron_service_start();
             heartbeat_start();
             rule_engine_start();
+            ambient_monitor_start();
 
             /* Agent watchdog: lightweight Core 0 task that force-restarts
              * the device if the agent is stuck for >10 min.  Small SRAM

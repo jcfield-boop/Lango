@@ -43,9 +43,20 @@ void oled_display_set_local_status(bool ollama_online, bool audio_online, bool a
  *  Also increments a daily message counter (resets at midnight). */
 void oled_display_set_channel(const char *channel);
 
-/** Set a rotating info line (slot 0-3). Thread-safe.
- *  Slot 0 is auto-set by set_provider. Slots 1-3 free for use. */
+/** Set a rotating info line (slot 0-5, 5s each). Thread-safe.
+ *  Slot 0: provider (auto-set by set_provider).
+ *  Slot 1: next heartbeat task / ctx-bloat warning.
+ *  Slot 2: voice router decision.
+ *  Slot 3: rate limit.
+ *  Slot 4: ARM stock price (set by heartbeat after armpre01).
+ *  Slot 5: Sonos now-playing (set by ambient_monitor). */
 void oled_display_set_rotate_line(int slot, const char *text);
+
+/** Show a 3D print progress bar in the stats row while printing.
+ *  pct: 0-100 (pass -1 to clear and show normal SRAM stats).
+ *  eta_mins: estimated minutes remaining (-1 if unknown).
+ *  filename: current gcode filename (may be NULL). Thread-safe. */
+void oled_display_set_print_progress(int pct, int eta_mins, const char *filename);
 
 /** Temporarily show an alert for `duration_ms` (e.g. cron fire, OTA).
  *  After the duration, reverts to normal display. Thread-safe. */
