@@ -70,6 +70,8 @@ Claude (Cowork) and the ESP32 divide responsibility to avoid duplicate messages 
 | **Intelligence (E5)** | Claude (Cowork) | Morning briefing, ARM digest, Wirecutter deals, weekend planner, memory compaction, web search, content composition |
 | **I/O (E1–E2)** | ESP32 | Email send (SMTP), Telegram send/receive, local sensors (printer, HA, NOAA buoy), audio (I2S, wake word), Frame TV art, ARM stock snapshot |
 
+> Telegram appears here as an I/O endpoint for outbound sends, but inbound Telegram *queries* are a full conversational channel, not just an actuation target — see [Telegram as an Input Channel](#telegram-as-an-input-channel-f1f8) below.
+
 ### Relay Bridge (F4/F8)
 
 The Cowork sandbox is LAN-isolated. A Mac relay daemon bridges the gap:
@@ -132,6 +134,21 @@ The ESP32 agent loop implements a tiered routing model that maps directly onto t
 **Voice (PTT/wake word)** adds `max_tokens=400` + VOICE MODE injection. Voice queries route through the EAGLE voice router (when enabled) before the standard tier chain.
 
 **F7 gate for system channel:** Heartbeat/cron tasks MUST NOT hit Ollama without Pico-style bounded context (≤5K tokens). Until Phase A context compression ships, keep system channel pinned to cloud.
+
+### Telegram as an Input Channel (F1/F8)
+
+Telegram is **not yet covered as an explicit input channel** elsewhere in this codex — only mentioned as an I/O actuation target (table above) and as an ESP32-owned background task ("Telegram polling | Continuous | Receive and respond to messages"). In practice, inbound Telegram messages flow through the exact same agent loop and tiered LLM routing as WebSocket text queries, so this section documents that explicitly.
+
+| Aspect | Detail |
+|--------|--------|
+| **Transport (F1 Perception)** | **Long-polling, not webhook.** `telegram_poll_task` (Core 0, PSRAM-backed stack) loops on `getUpdates?offset=…&timeout=30s` (`LANG_TG_POLL_TIMEOUT_S`); exponential backoff (1s→60s, capped) on failure. No inbound HTTP endpoint is exposed to Telegram's servers. |
+| **Ingestion gate (F7)** | `chat_id_is_allowed()` allowlist (empty list = open to all chats — confirm this is intentional before deploying to a new bot); FNV-1a64 dedup cache (64 entries) drops replayed `update_id`/`message_id` pairs across reconnects. |
+| **Bus hand-off (F8)** | Accepted messages push onto the same `message_bus` inbound queue as WebSocket/system traffic, tagged `channel="telegram"` (`LANG_CHAN_TELEGRAM`). From this point on Telegram is indistinguishable from any other user channel to the agent loop. |
+| **Classification/routing (F3/F8)** | `agent_loop.c` treats `telegram` like `websocket` text — **not** the system channel, **not** voice. It runs the same Apfel → Ollama → cloud tier chain with the same complexity/tool-keyword heuristics (see On-Device LLM Routing above): no-tool chat → Apfel (W2), tool keywords → Ollama (W3), briefing/research/email → cloud (W4). |
+| **Reply UX (F5/F4)** | No WS streaming support — uses placeholder/edit instead: `telegram_send_get_id()` posts a "🤔 thinking..." placeholder, `telegram_edit_message()` replaces it with the final answer once ready (auto-splits >4096-char overflow into continuation messages via `telegram_send_message`). |
+| **Turn timeout** | 5 min (vs 60s for WebSocket) — Telegram is async with no open client connection waiting, so the agent loop can run longer multi-tool chains per turn. |
+
+**F7 gate:** the allowlist is the only access control on this channel — anyone who messages the bot before an allowlist entry is added gets full agent access (tools, memory, relay). Verify `telegram_list_allowed_ids` is non-empty in any externally-reachable deployment.
 
 ### Pico Agent Architecture (Target State)
 
