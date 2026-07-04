@@ -13,6 +13,11 @@ git push
 
 echo ""
 echo "=== 2/4  Build firmware ==="
+# Reinstall ESP-IDF Python env if missing (happens after Python upgrades)
+if [ ! -f "$HOME/.espressif/python_env/idf6.0_py3.14_env/bin/python" ]; then
+    echo "ESP-IDF Python env missing — running install.sh first..."
+    ~/esp/esp-idf/install.sh
+fi
 source ~/esp/esp-idf/export.sh
 idf.py build
 

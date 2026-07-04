@@ -19,7 +19,15 @@ import json
 import sys
 from pathlib import Path
 
-OUTBOX       = Path.home() / "Lango" / "outbox.json"
+# Support running from the Cowork sandbox (mounted Mac path) or directly on Mac
+_SANDBOX_MOUNT = Path("/sessions")
+if _SANDBOX_MOUNT.exists():
+    # Running inside Cowork sandbox — find the Lango mount
+    import glob as _glob
+    _mounts = _glob.glob("/sessions/*/mnt/Lango")
+    OUTBOX = Path(_mounts[0]) / "outbox.json" if _mounts else Path.home() / "Lango" / "outbox.json"
+else:
+    OUTBOX = Path.home() / "Lango" / "outbox.json"
 DEFAULT_TO   = "jcfield@gmail.com"
 DEFAULT_CHAT = "5538967144"
 

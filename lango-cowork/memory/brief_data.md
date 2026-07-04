@@ -1,25 +1,26 @@
 # Brief Data Cache
-Updated: 2026-05-30T00:00:00Z
+Updated: 2026-07-04T15:05:51Z (2026-07-04 08:05 PDT)
 
 ## Weather — SF
-Partly cloudy, typical late-May marine layer. High ~65°F / Low ~52°F. ~9 hrs sunshine, light westerly winds.
+Mostly sunny (patchy morning fog in Richmond/Sunset/Marina). High ~67-70°F / Low ~55°F. Afternoon sea-breeze gusts 15-25 mph.
 
 ## Markets
-ARM: $354.37 (+$19.10 / +5.70%) — record earnings rally; +177% YTD
-NASDAQ: 26,929.29 (+11.82 / +0.04%) — near 52-week highs
-GBP/USD: 1.3417 (-0.20%)
+(US markets closed Jul 3-4 for Independence Day; figures are last close, Thu Jul 2)
+ARM: $316.30 (-6.3%, prev close $337.41; day range $309.91-$358.31)
+NASDAQ: 25,832.67 (-0.80%, -207.36)
+GBP/USD: 1.3344
 
 ## Arm Newsroom
-- Arm delivers record-breaking Q4 FYE26: $1.49B quarterly revenue, $4.92B full year (+20%+ YoY, third straight year)
-- Rene Haas to speak at Computex 2026 (June 2) on agentic AI from cloud to edge
-- TECNO x Arm Edge-Side AIGC concept at MWC 2026: real-time on-device generative AI on mobile
+- Arm delivers a step-change in mobile gaming with Neural Dawn — first use of Arm Neural Technology + Unreal Engine MegaLights on mobile (Jun 10)
+- Oracle Cloud Infrastructure joins the Arm AGI CPU ecosystem as agentic AI accelerates (Jun 2)
+- Arm-based NVIDIA RTX Spark is redefining PCs for the agentic era (Jun 2)
 
 ## HN Headlines
-- I moved my digital stack to Europe (monokai.com) — 956pts
-- Linux gaming is faster because Windows APIs are becoming Linux kernel features — 744pts
-- Restore full BambuNetwork support for Bambu Lab printers (FULU-Foundation/OrcaSlicer) — 653pts
-- Leaving GitHub for Forgejo — 583pts
-- Princeton mandates proctoring for in-person exams, upending 133-year precedent — 329pts
+- Claude for Small Business (anthropic.com, 171 pts)
+- Scorched Earth 2000 – Web (scorch2000.com, 217 pts)
+- Linux gaming is faster because Windows APIs are becoming Linux kernel features (664 pts)
+- Cisco workforce reductions (174 pts)
+- Microsoft BitLocker YellowKey zero-day exploit (tomshardware.com, 126 pts)
 
 ## Printer
-offline
+offline (Chrome extension not connected; Moonraker LAN unreachable from sandbox)
