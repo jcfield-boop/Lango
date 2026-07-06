@@ -543,6 +543,29 @@ The `set_search_key` CLI command accepts either a Tavily key (`tvly-…`) or a B
 
 ## Changelog
 
+### 2026-07-06 — OLED I2C self-healing, cron dedup, ARM stock proxy, update-check fix
+
+**OLED I2C self-healing** (`main/display/oled_display.c`, `main/display/ssd1306.c/.h`)
+- `oled_task` was silently looping with a blank display after I2C bus glitches (e.g. after 170h+ uptime) — `ssd1306_refresh()` was called but its `esp_err_t` return was discarded.
+- New `ssd1306_reinit()` re-runs the full SSD1306 init command sequence without re-allocating the framebuffer or re-adding the I2C device handle.
+- `oled_task` now tracks consecutive refresh failures; after 5 in a row it calls `ssd1306_reinit()`. If reinit also fails, backs off 10 s before the next attempt.
+- Immediate fix for existing devices: `POST /api/reboot`. After this OTA, future I2C glitches self-heal within ~2.5 s without a restart.
+
+**ARM stock proxy reliability** (`main/llm/llm_proxy.c`)
+- Routes ARM stock price fetches through the local Mac proxy server, avoiding sporadic Yahoo Finance 429/403 responses that were causing the OLED ARM-stock header to show stale data.
+
+**Cron dedup — Cowork owns all scheduled intelligence tasks** (`littlefs_data/cron.json`, `littlefs_data/HEARTBEAT.md`)
+- Disabled 11 cron jobs duplicating work already owned by Cowork scheduled tasks (morning briefing, ARM news, surf checks, HA/Klipper updaters, weekend planner, Wirecutter deals).
+- ESP32 cron now only runs hardware-local tasks: `tvart001` (Frame TV art), `prefetch` (briefing data cache), `cmpct006` (memory compaction).
+- HEARTBEAT.md trimmed to a single task: nightly 22:00 system health Telegram ping.
+- Eliminates duplicate Telegram/email notifications that fired when both ESP32 cron and Cowork ran within seconds of each other.
+
+**`check_all_updates.py` false-positive fix** (`scripts/check_all_updates.py`)
+- HA Supervisor returns `update_available=true` with matching `version`/`version_latest` when a restart is pending (update downloaded but not yet activated). Script was treating this as a new update and sending an email.
+- New `_needs_update()` guard requires `version != version_latest`; `_restart_pending()` surfaces "update applied, restart pending" as a warning instead of an alert. Applied to Core, Supervisor, OS, and all add-ons.
+
+---
+
 ### 2026-05-22 — Frame TV tool, tool-call cap raised, docs/plan cleanup
 
 **Samsung Frame TV AI art tool** (`main/tools/tool_frame_tv.c/.h`, `main/tools/tool_registry.c`)
