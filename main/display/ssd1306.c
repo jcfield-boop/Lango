@@ -14,8 +14,10 @@ static const char *TAG = "ssd1306";
 #define PAGES (H / 8)        /* 8   */
 #define FB_SIZE (W * PAGES)  /* 1024 */
 
-static i2c_master_dev_handle_t s_dev = NULL;
-static uint8_t *s_fb = NULL;   /* framebuffer in PSRAM */
+static i2c_master_dev_handle_t  s_dev  = NULL;
+static uint8_t                 *s_fb   = NULL;   /* framebuffer in PSRAM */
+static i2c_master_bus_handle_t  s_bus  = NULL;   /* stored for reinit */
+static uint8_t                  s_addr = 0;
 
 /* ── Built-in 6x8 font (ASCII 32-126) ─────────────────────────── */
 
@@ -157,6 +159,8 @@ esp_err_t ssd1306_init(i2c_master_bus_handle_t bus, uint8_t addr)
         ESP_LOGE(TAG, "I2C add device 0x%02X failed: %s", addr, esp_err_to_name(ret));
         return ret;
     }
+    s_bus  = bus;
+    s_addr = addr;
 
     /* Init sequence for 128x64 SSD1306/SSD1315.
      * SSD1315 is register-compatible but needs different contrast/precharge/VCOMH.
@@ -216,6 +220,47 @@ esp_err_t ssd1306_init(i2c_master_bus_handle_t bus, uint8_t addr)
     }
 
     ESP_LOGI(TAG, "SSD1306 %dx%d OLED ready (I2C addr 0x%02X)", W, H, addr);
+    return ESP_OK;
+}
+
+/* Re-run the init sequence without re-allocating the framebuffer or re-adding
+ * the I2C device — used by oled_task to recover from I2C bus glitches. */
+esp_err_t ssd1306_reinit(void)
+{
+    if (!s_dev || !s_fb) return ESP_ERR_INVALID_STATE;
+
+    ESP_LOGW(TAG, "SSD1306 reinit (I2C recovery)");
+
+    static const uint8_t init1[] = {
+        0xAE,       /* Display OFF */
+        0xD5, 0x80, 0xA8, 0x3F, 0xD3, 0x00, 0x40, 0x8D, 0x14,
+    };
+    esp_err_t ret = cmd_bytes(init1, sizeof(init1));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "reinit phase 1 failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    static const uint8_t init2[] = {
+        0x20, 0x00, 0xA1, 0xC8, 0xDA, 0x12,
+        0x81, 0x7F, 0xD9, 0x22, 0xDB, 0x20, 0xA4, 0xA6,
+    };
+    ret = cmd_bytes(init2, sizeof(init2));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "reinit phase 2 failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ssd1306_clear();
+    ret = ssd1306_refresh();
+    if (ret != ESP_OK) return ret;
+
+    ret = cmd_byte(0xAF);  /* Display ON */
+    if (ret != ESP_OK) return ret;
+
+    ESP_LOGI(TAG, "SSD1306 reinit OK");
     return ESP_OK;
 }
 

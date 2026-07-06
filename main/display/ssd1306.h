@@ -46,3 +46,7 @@ esp_err_t ssd1306_set_contrast(uint8_t val);
 
 /** Fill entire screen white for visual test — call after init. */
 esp_err_t ssd1306_test_pattern(void);
+
+/** Re-run the init command sequence without re-allocating or re-adding the I2C
+ *  device.  Safe to call from the display task to recover after I2C glitches. */
+esp_err_t ssd1306_reinit(void);

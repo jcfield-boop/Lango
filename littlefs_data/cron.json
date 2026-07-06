@@ -3,7 +3,8 @@
     {
       "id": "armpre01",
       "name": "ARM Pre-Market Snapshot",
-      "enabled": true,
+      "enabled": false,
+      "_disabled_reason": "Cowork lango-arm-premarket (daily 06:08) owns this",
       "kind": "every",
       "interval_s": 86400,
       "message": "ARM pre-market snapshot. web_search \"ARM Holdings ARMH stock pre-market today\". Extract pre-market price, % change vs prev close, one headline if notable. write_file /lfs/memory/arm_stock_today.md (overwrite, under 100 words). No email/Telegram — this feeds the 06:20 morning briefing.",
@@ -30,7 +31,8 @@
     {
       "id": "haupd001",
       "name": "HA Update Check",
-      "enabled": true,
+      "enabled": false,
+      "_disabled_reason": "Cowork lango-ha-updater (daily 09:00) owns this",
       "kind": "every",
       "interval_s": 86400,
       "message": "Run ha-updater skill: read /lfs/skills/ha-updater.md FIRST in iteration 1 (alone). Then check HA Core, OS, integration updates per the skill steps. Auto-install integration/device firmware. QUIET-BY-DEFAULT: only email James for HA Core/OS updates needing manual action; only Telegram-notify on auto-installs that ran or errors. If EVERYTHING is current (no Core update, no OS update, no integrations installed), send NOTHING — no email, no Telegram. James does not want a daily \"all good\" ping.",
@@ -43,7 +45,8 @@
     {
       "id": "surf0003",
       "name": "Friday Weekend Surf Outlook",
-      "enabled": true,
+      "enabled": false,
+      "_disabled_reason": "Cowork lango-friday-surf (Fri 17:00) owns this",
       "kind": "every",
       "interval_s": 604800,
       "dow": "fri",
@@ -57,7 +60,8 @@
     {
       "id": "surf0002",
       "name": "Saturday Surf Check",
-      "enabled": true,
+      "enabled": false,
+      "_disabled_reason": "Cowork lango-saturday-surf (Sat 18:00) owns this",
       "kind": "every",
       "interval_s": 604800,
       "dow": "sat",
@@ -102,7 +106,7 @@
       "id": "armnw005",
       "name": "Sunday ARM Ecosystem News",
       "enabled": false,
-      "_disabled_reason": "Claude (Cowork) owns ARM digest; Monday 06:50 HEARTBEAT.md task handles this",
+      "_disabled_reason": "Cowork lango-arm-news (Sun 10:00) owns this",
       "kind": "every",
       "interval_s": 604800,
       "dow": "sun",
@@ -116,7 +120,8 @@
     {
       "id": "148f0222",
       "name": "France Trip Prep Reminder",
-      "enabled": true,
+      "enabled": false,
+      "_disabled_reason": "One-shot fired June 7 via Cowork lango-france-prep",
       "kind": "at",
       "at_epoch": 1780930000,
       "message": "Travel prep reminder: France trip is in 7 days (June 14). Tasks: cancel SF Chronicle newspapers, suspend USPS mail at usps.com/manage/hold-mail.htm, notify bank/credit card of travel to France, check passport expiry (must be valid past Dec 2026). Send James a Telegram message with the full checklist from the travel-prep skill.",
@@ -143,7 +148,8 @@
     {
       "id": "kupd0001",
       "name": "Klipper Update Check",
-      "enabled": true,
+      "enabled": false,
+      "_disabled_reason": "Cowork lango-klipper-updater (daily 10:00) owns this",
       "kind": "every",
       "interval_s": 86400,
       "message": "Run klipper-updater skill: read /lfs/skills/klipper-updater.md FIRST in iteration 1 (alone). Single call to /machine/update/status?refresh=false. QUIET-BY-DEFAULT: email only on klipper/moonraker/system needing manual action; Telegram only on errors. GOLDEN RULE: at most ONE send_email per turn. If everything is current, send NOTHING. If a print is active, skip notifications entirely.",
@@ -169,7 +175,8 @@
     {
       "id": "msbprep1",
       "name": "Microsoft Build Prep (one-shot)",
-      "enabled": true,
+      "enabled": false,
+      "_disabled_reason": "One-shot fired May 26 via Cowork lango-ms-build-prep",
       "kind": "at",
       "at_epoch": 1779811200,
       "message": "MICROSOFT BUILD PREP — Build is in 7 days (Jun 2-3, Seattle). web_search \"Microsoft Build 2026 sessions ARM Snapdragon Windows on Arm\" and pick the top 3-5 sessions James should attend. web_search \"Microsoft Build 2026 keynote agenda\". send_email to: jcfield@gmail.com subject: \"📅 MS Build prep — 7 days out\" with sessions list, key topics to expect, suggested partner meetings (HP/Dell/Lenovo Arm PCs), travel reminder. Under 400 words. Also telegram_send_message chat 5538967144 with a 3-line summary pointing to the email.",

@@ -383,6 +383,7 @@ static void draw_alert_screen(void)
 static void oled_task(void *arg)
 {
     (void)arg;
+    int err_streak = 0;   /* consecutive ssd1306_refresh() failures */
 
     while (1) {
         ssd1306_clear();
@@ -428,7 +429,25 @@ static void oled_task(void *arg)
             }
         }
 
-        ssd1306_refresh();
+        esp_err_t ref_ret = ssd1306_refresh();
+        if (ref_ret != ESP_OK) {
+            err_streak++;
+            ESP_LOGW("oled", "refresh failed (%s), streak=%d",
+                     esp_err_to_name(ref_ret), err_streak);
+            if (err_streak >= 5) {
+                ESP_LOGW("oled", "5 consecutive failures — attempting I2C reinit");
+                if (ssd1306_reinit() == ESP_OK) {
+                    err_streak = 0;
+                    ESP_LOGI("oled", "OLED recovered via reinit");
+                } else {
+                    /* Reinit also failed — back off 10 s before next attempt */
+                    err_streak = 0;
+                    vTaskDelay(pdMS_TO_TICKS(10000));
+                }
+            }
+        } else {
+            err_streak = 0;
+        }
         vTaskDelay(pdMS_TO_TICKS(500));  /* 2 Hz refresh */
     }
 }
