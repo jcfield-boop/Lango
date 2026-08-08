@@ -224,6 +224,14 @@
   .place .rt b { color: var(--ink); font-weight: 700; }
   .place .why { grid-column: 1 / -1; margin: 2px 0 0; font-size: 14.5px; color: var(--accent); }
   .place .why::before { content: "→ "; }
+  .place.added { background: var(--ochre-wash); margin: 4px -14px; padding: 14px; border-radius: 3px; border-bottom: 0; }
+  .place.added .why { color: var(--ochre); }
+  .tag-new {
+    display: inline-block; font-family: var(--sign); text-transform: uppercase;
+    letter-spacing: .09em; font-size: 10px; font-weight: 700; padding: 2px 7px;
+    border-radius: 3px; margin-left: 8px; vertical-align: 2px;
+    background: color-mix(in srgb, var(--ochre) 22%, transparent); color: var(--ochre);
+  }
 
   /* ---------------- gaps ---------------- */
   .gaps { display: grid; gap: 13px; }
@@ -405,8 +413,9 @@
       <div class="stop">
         <div class="t">Morning</div>
         <div>
-          <h4>Bikes from Phat Tire<span class="chip gap">Nothing held</span></h4>
-          <p>This is what the town is for. Slaughter Pen and the Coler preserve start more or less in town, and the Greenway runs from the Square out past Crystal Bridges if anyone would rather roll than climb. Phat Tire is the rental shop on the list — three bikes on a September Saturday want reserving.</p>
+          <h4>E-bikes delivered to the door<span class="chip gap">Nothing held</span></h4>
+          <p>This is what the town is for. Slaughter Pen and the Coler preserve start more or less in town, and the Greenway runs from the Square out past Crystal Bridges if anyone would rather roll than climb. The Bike Wizard of Oz drops full-suspension e-MTBs at the house — no shop trip, and no need for a rack on whatever Steve rents. Phat Tire on the list is the walk-in fallback.</p>
+          <div class="note">Wizard: (479) 974-9492 · free delivery in Bentonville · full day 8–7</div>
         </div>
       </div>
       <div class="stop">
@@ -557,7 +566,7 @@
   <div class="wrap">
     <div class="sec-head">
       <h2>The list</h2>
-      <p>Sixteen places off the shared <em>Bentonville Boys</em> map, with the ratings as saved. Two are already booked; the rest are the raw material for the open slots.</p>
+      <p>Sixteen places off the shared <em>Bentonville Boys</em> map, with the ratings as saved. Two are already booked; the rest are the raw material for the open slots. One addition is marked where it isn't on the map.</p>
     </div>
 
     <div class="lgroup">
@@ -663,12 +672,20 @@
     <div class="lgroup">
       <div class="lgroup-head">
         <svg viewBox="0 0 24 24"><use href="#g-bike"/></svg>
-        <h3>Outdoors &amp; getting around</h3><span class="ct">2 places</span>
+        <h3>Outdoors &amp; getting around</h3><span class="ct">2 places + 1</span>
+      </div>
+      <div class="place added">
+        <div>
+          <div class="nm">The Bike Wizard of Oz<span class="tag-new">Not on the map</span></div>
+          <div class="kind">Mobile e-MTB rental · (479) 974-9492 · bikewizardofoz.com</div>
+        </div>
+        <div class="rt">—</div>
+        <p class="why">Delivers full-suspension e-bikes to the house or the trailhead. Free drop-off and pickup across Bentonville and Bella Vista, full day 8 AM–7 PM, free cancellation up to 48 hours out. No storefront, no rack needed on the rental car.</p>
       </div>
       <div class="place">
         <div><div class="nm">Phat Tire Rental Shop</div><div class="kind">Bicycle rental</div></div>
         <div class="rt"><b>4.5</b> · 64</div>
-        <p class="why">Book three bikes for Saturday morning</p>
+        <p class="why">The walk-in fallback if delivery is booked out</p>
       </div>
       <div class="place">
         <div><div class="nm">Razorback Greenway — Mile 35</div><div class="kind">Hiking &amp; riding</div></div>
@@ -688,10 +705,10 @@
     <div class="gaps">
 
       <div class="gap-row urgent">
-        <div class="rank">Do first</div>
+        <div class="rank">Steve</div>
         <div>
-          <h4>A car</h4>
-          <p>Nothing found in email, and nothing on the list solves it. The airport is a half-hour out, the Momentary is a drive, and the escape room is a drive — this is the one gap that quietly breaks the rest of the plan if it stays open. Late September is not the month to leave it to the counter.</p>
+          <h4>The car</h4>
+          <p>Steve is picking this up, as far as anyone knows — worth confirming out loud, because it's the one thing nothing else routes around. The airport is a half-hour out, the Momentary is a drive and so is the escape room. Nothing on the list solves it, and late September is not the month to leave it to the counter. Assume no bike rack: rental fleets almost never have them, which is what makes delivered bikes the better answer below.</p>
         </div>
       </div>
 
@@ -706,8 +723,8 @@
       <div class="gap-row">
         <div class="rank">Soon</div>
         <div>
-          <h4>Three bikes at Phat Tire</h4>
-          <p>If riding is the reason to come to Bentonville at all, walking in on a peak-season Saturday morning is optimistic. Now that the shop is picked, this is a five-minute phone call.</p>
+          <h4>Three e-bikes from the Wizard</h4>
+          <p>Delivery beats a shop for this trip: the bikes arrive at the Artisan Inn, and nobody has to work out how to move three mountain bikes in a rental car with no rack. Free delivery covers Bentonville, and they'll meet you at Coler or Slaughter Pen instead if you'd rather start from a trailhead. Cancellation is free up to 48 hours out, so booking early costs nothing — and a peak-season Saturday is exactly when a mobile fleet of three runs out.</p>
         </div>
       </div>
 
