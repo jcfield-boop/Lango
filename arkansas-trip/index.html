@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bentonville — 24–27 September 2026</title>
+</head>
+<body>
+<style>
+  :root {
+    --ground: #e7ebe3;
+    --panel: #f4f6f1;
+    --sunk: #dde2d7;
+    --ink: #191f19;
+    --ink-soft: #4b544a;
+    --ink-faint: #7b8479;
+    --rule: #ccd3c4;
+    --rule-soft: #dbe0d3;
+    --accent: #2c6444;
+    --accent-wash: #dde9df;
+    --ochre: #8a6910;
+    --ochre-wash: #f0e8cf;
+    --shadow: 0 1px 2px rgba(25,31,25,.05), 0 10px 30px -18px rgba(25,31,25,.35);
+
+    --sign: "Avenir Next Condensed", "HelveticaNeue-CondensedBold", "Helvetica Neue Condensed",
+            "Roboto Condensed", "Arial Narrow", "Liberation Sans Narrow", sans-serif;
+    --read: "Iowan Old Style", Charter, "Bitstream Charter", "Palatino Linotype", Georgia, serif;
+    --data: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+    --measure: 62ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #131711;
+      --panel: #1d221a;
+      --sunk: #0d100c;
+      --ink: #e8ece3;
+      --ink-soft: #a9b3a5;
+      --ink-faint: #7b8478;
+      --rule: #2e3529;
+      --rule-soft: #262c22;
+      --accent: #7fc194;
+      --accent-wash: #1b2a1f;
+      --ochre: #d3ae5c;
+      --ochre-wash: #2a2314;
+      --shadow: 0 1px 2px rgba(0,0,0,.5), 0 10px 30px -18px rgba(0,0,0,.9);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #131711;
+    --panel: #1d221a;
+    --sunk: #0d100c;
+    --ink: #e8ece3;
+    --ink-soft: #a9b3a5;
+    --ink-faint: #7b8478;
+    --rule: #2e3529;
+    --rule-soft: #262c22;
+    --accent: #7fc194;
+    --accent-wash: #1b2a1f;
+    --ochre: #d3ae5c;
+    --ochre-wash: #2a2314;
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 10px 30px -18px rgba(0,0,0,.9);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--read);
+    font-size: 17px;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 0 22px; }
+
+  .sign {
+    font-family: var(--sign);
+    text-transform: uppercase;
+    letter-spacing: .045em;
+    font-weight: 700;
+  }
+  .mono { font-family: var(--data); font-variant-numeric: tabular-nums; }
+
+  /* ---------------- nav ---------------- */
+  nav {
+    position: sticky; top: 0; z-index: 60;
+    background: color-mix(in srgb, var(--ground) 90%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--rule);
+  }
+  .nav-in { display: flex; align-items: center; gap: 4px; height: 50px; overflow-x: auto; scrollbar-width: none; }
+  .nav-in::-webkit-scrollbar { display: none; }
+  .nav-in .mark {
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .1em;
+    font-weight: 700; font-size: 14px; margin-right: auto; white-space: nowrap;
+  }
+  .nav-in .mark em { font-style: normal; color: var(--accent); }
+  .nav-in a {
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .08em;
+    font-size: 12.5px; font-weight: 600; text-decoration: none; color: var(--ink-soft);
+    padding: 6px 10px; white-space: nowrap; border-radius: 4px;
+  }
+  .nav-in a:hover { color: var(--ink); background: var(--sunk); }
+
+  /* ---------------- hero ---------------- */
+  header { position: relative; padding: 66px 0 52px; border-bottom: 1px solid var(--rule); overflow: hidden; }
+  #contours {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    pointer-events: none; opacity: .5;
+  }
+  header .wrap { position: relative; z-index: 1; }
+
+  .stamp {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .14em;
+    font-size: 12px; font-weight: 700; color: var(--accent);
+    border: 1.5px solid currentColor; padding: 5px 12px; border-radius: 3px;
+    margin-bottom: 24px;
+  }
+  .stamp::before { content: ""; width: 7px; height: 7px; background: currentColor; border-radius: 50%; }
+
+  h1 {
+    font-family: var(--sign);
+    font-size: clamp(52px, 12vw, 122px);
+    line-height: .86; margin: 0; letter-spacing: -.005em;
+    text-transform: uppercase; font-weight: 700; text-wrap: balance;
+  }
+  .h1-sub {
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .1em;
+    font-size: clamp(14px, 2.6vw, 19px); font-weight: 600; color: var(--ink-soft);
+    margin: 18px 0 0;
+  }
+  .h1-rule { height: 3px; background: var(--ink); margin: 22px 0 20px; }
+
+  .roster { display: flex; flex-wrap: wrap; gap: 22px; align-items: baseline; }
+  .roster .n { font-family: var(--sign); text-transform: uppercase; letter-spacing: .09em; font-size: 15px; font-weight: 700; }
+  .roster .d { font-family: var(--data); font-size: 13px; color: var(--ink-faint); }
+
+  .countdown {
+    margin-top: 36px; display: inline-flex; align-items: baseline; gap: 14px;
+    padding: 16px 22px; background: var(--panel);
+    border: 1px solid var(--rule); border-left: 4px solid var(--accent);
+    border-radius: 3px; box-shadow: var(--shadow); max-width: 100%;
+  }
+  .countdown b { font-family: var(--sign); font-size: 40px; line-height: .9; font-weight: 700; letter-spacing: -.01em; }
+  .countdown span { font-size: 15px; color: var(--ink-soft); }
+
+  /* ---------------- sections ---------------- */
+  section { padding: 58px 0; border-bottom: 1px solid var(--rule); }
+  section:last-of-type { border-bottom: 0; }
+  .sec-head { margin-bottom: 34px; }
+  .sec-head h2 {
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .13em;
+    font-size: 13px; font-weight: 700; color: var(--accent); margin: 0 0 10px;
+  }
+  .sec-head p { margin: 0; font-size: 25px; line-height: 1.3; letter-spacing: -.012em; max-width: var(--measure); text-wrap: balance; }
+
+  /* ---------------- days ---------------- */
+  .day { margin-bottom: 40px; }
+  .day:last-child { margin-bottom: 0; }
+  .day-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; padding-bottom: 9px; border-bottom: 2.5px solid var(--ink); }
+  .day-head h3 { font-family: var(--sign); text-transform: uppercase; font-size: 30px; letter-spacing: .01em; font-weight: 700; margin: 0; line-height: 1; }
+  .day-head .dt { font-family: var(--data); font-size: 13px; color: var(--ink-faint); }
+  .day-head .lbl {
+    margin-left: auto; font-family: var(--sign); text-transform: uppercase; letter-spacing: .1em;
+    font-size: 11.5px; font-weight: 700; color: var(--ink-soft);
+  }
+
+  .stop { display: grid; grid-template-columns: 92px 1fr; gap: 20px; padding: 17px 0; border-bottom: 1px solid var(--rule-soft); }
+  .stop:last-child { border-bottom: 0; }
+  .stop .t { font-family: var(--data); font-size: 13px; color: var(--ink-faint); padding-top: 4px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .stop h4 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .05em; font-size: 16px; font-weight: 700; margin: 0 0 6px; }
+  .stop p { margin: 0; font-size: 16px; color: var(--ink-soft); max-width: var(--measure); }
+  .stop .note { font-family: var(--data); font-size: 12.5px; color: var(--ink-faint); margin-top: 8px; }
+
+  .chip {
+    display: inline-block; font-family: var(--sign); text-transform: uppercase;
+    letter-spacing: .09em; font-size: 10.5px; font-weight: 700;
+    padding: 3px 8px; border-radius: 3px; margin-left: 9px; vertical-align: 2px;
+  }
+  .chip.set { background: var(--accent-wash); color: var(--accent); }
+  .chip.gap { background: var(--ochre-wash); color: var(--ochre); }
+  .chip.opt { background: var(--sunk); color: var(--ink-faint); }
+
+  /* ---------------- cards ---------------- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 22px; box-shadow: var(--shadow); }
+  .card.wide { grid-column: 1 / -1; }
+  .card .kick { font-family: var(--sign); text-transform: uppercase; letter-spacing: .13em; font-size: 11px; font-weight: 700; color: var(--accent); margin: 0 0 8px; }
+  .card h3 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .03em; font-size: 21px; font-weight: 700; margin: 0; line-height: 1.1; }
+  .card .addr { margin: 8px 0 0; font-size: 15px; color: var(--ink-soft); }
+  .card dl { margin: 16px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 7px 16px; font-size: 15px; }
+  .card dt { font-family: var(--sign); text-transform: uppercase; letter-spacing: .07em; font-size: 11.5px; font-weight: 700; color: var(--ink-faint); padding-top: 3px; }
+  .card dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .card .fine { margin: 16px 0 0; font-size: 13.5px; color: var(--ink-faint); padding-top: 13px; border-top: 1px solid var(--rule-soft); }
+  code.conf { font-family: var(--data); font-size: 13px; background: var(--sunk); padding: 2px 7px; border-radius: 3px; letter-spacing: .02em; }
+
+  /* ---------------- flight ---------------- */
+  .route { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--rule-soft); }
+  .route + .route { margin-top: 22px; }
+  .route-lbl { font-family: var(--sign); text-transform: uppercase; letter-spacing: .12em; font-size: 11px; font-weight: 700; color: var(--ink-faint); margin-bottom: 12px; }
+  .hop { display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px; align-items: center; }
+  .hop .port { font-family: var(--sign); font-size: 26px; font-weight: 700; letter-spacing: .02em; line-height: 1; }
+  .hop .clk { font-family: var(--data); font-size: 13px; color: var(--ink-soft); margin-top: 5px; font-variant-numeric: tabular-nums; }
+  .hop .to { text-align: right; }
+  .hop .mid { text-align: center; min-width: 92px; }
+  .hop .mid .fl { font-family: var(--data); font-size: 12px; color: var(--ink-faint); }
+  .hop .mid .bar { height: 1px; background: var(--rule); margin: 7px 0; position: relative; }
+  .hop .mid .bar::after {
+    content: ""; position: absolute; right: -1px; top: -2.5px;
+    border-left: 6px solid var(--rule); border-top: 3px solid transparent; border-bottom: 3px solid transparent;
+  }
+  .conn { font-family: var(--data); font-size: 12.5px; color: var(--ink-faint); margin: 12px 0 12px 0; padding-left: 15px; border-left: 2px dashed var(--rule); }
+  .conn.tight { color: var(--ochre); border-left-color: var(--ochre); font-weight: 600; }
+
+  /* ---------------- gaps ---------------- */
+  .gaps { display: grid; gap: 13px; }
+  .gap-row {
+    display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: start;
+    padding: 18px 20px; background: var(--panel); border: 1px solid var(--rule); border-radius: 4px;
+  }
+  .gap-row.urgent { border-color: color-mix(in srgb, var(--ochre) 50%, var(--rule)); background: var(--ochre-wash); }
+  .rank {
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .09em;
+    font-size: 10.5px; font-weight: 700; padding: 4px 9px; border-radius: 3px;
+    background: var(--sunk); color: var(--ink-faint); white-space: nowrap; margin-top: 2px;
+  }
+  .gap-row.urgent .rank { background: color-mix(in srgb, var(--ochre) 22%, transparent); color: var(--ochre); }
+  .gap-row h4 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .05em; font-size: 15.5px; font-weight: 700; margin: 0 0 5px; }
+  .gap-row p { margin: 0; font-size: 15.5px; color: var(--ink-soft); max-width: var(--measure); }
+
+  /* ---------------- facts ---------------- */
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; }
+  .fact { background: var(--panel); padding: 20px; }
+  .fact .k { font-family: var(--sign); text-transform: uppercase; letter-spacing: .12em; font-size: 10.5px; font-weight: 700; color: var(--ink-faint); margin-bottom: 8px; }
+  .fact .v { font-family: var(--sign); text-transform: uppercase; letter-spacing: .02em; font-size: 20px; font-weight: 700; line-height: 1.1; }
+  .fact .n { font-size: 14.5px; color: var(--ink-soft); margin-top: 6px; }
+
+  footer { padding: 44px 0 66px; }
+  footer p { margin: 0 0 10px; font-size: 14.5px; color: var(--ink-faint); max-width: var(--measure); }
+
+  @media (max-width: 600px) {
+    body { font-size: 16px; }
+    .stop { grid-template-columns: 74px 1fr; gap: 14px; }
+    .day-head .lbl { margin-left: 0; width: 100%; }
+    .countdown { display: flex; width: 100%; }
+    .hop .port { font-size: 22px; }
+    .hop .mid { min-width: 70px; }
+  }
+</style>
+
+<nav>
+  <div class="wrap nav-in">
+    <div class="mark">Bentonville <em>/</em> Sept '26</div>
+    <a href="#route">Route</a>
+    <a href="#booked">Booked</a>
+    <a href="#gaps">Gaps</a>
+    <a href="#field">Field notes</a>
+  </div>
+</nav>
+
+<header>
+  <canvas id="contours" aria-hidden="true"></canvas>
+  <div class="wrap">
+    <div class="stamp">Northwest Arkansas · Long weekend</div>
+    <h1>Bentonville</h1>
+    <p class="h1-sub">Thursday 24 — Sunday 27 September 2026</p>
+    <div class="h1-rule"></div>
+    <div class="roster">
+      <span class="n">James</span>
+      <span class="n">Paul</span>
+      <span class="n">Steve</span>
+      <span class="d">3 nights · basecamp on the Square</span>
+    </div>
+    <div class="countdown">
+      <b id="cd-num">—</b>
+      <span id="cd-txt">counting…</span>
+    </div>
+  </div>
+</header>
+
+<section id="route">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>The route</h2>
+      <p>Two dinners are locked in and the beds are paid for. Everything between them is still soft — which is roughly how a weekend like this should be built.</p>
+    </div>
+
+    <div class="day">
+      <div class="day-head">
+        <h3>Thursday</h3>
+        <span class="dt">24 SEP</span>
+        <span class="lbl">Getting there</span>
+      </div>
+      <div class="stop">
+        <div class="t">09:55 PT</div>
+        <div>
+          <h4>SFO → XNA via Salt Lake<span class="chip set">Booked</span></h4>
+          <p>Delta 920 then 3620, landing at Northwest Arkansas National at 5:20 in the afternoon. The connection through Salt Lake is a short one.</p>
+          <div class="note">HQ5AYB · 42 min on the ground at SLC</div>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">~18:00 CT</div>
+        <div>
+          <h4>XNA down to Bentonville<span class="chip gap">Nothing held</span></h4>
+          <p>Twenty to thirty minutes north of the airport. No rental car or transfer turned up in the email trail — the first thing on the gaps list below.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">after 15:00</div>
+        <div>
+          <h4>Check in — Artisan Inn<span class="chip set">Booked</span></h4>
+          <p>The whole place to yourselves, right on the Square and onto the Greenway. Lockbox entry, so arriving after dark is no problem.</p>
+          <div class="note">HMSDZA4DNS · host Connie · stairs to climb</div>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">Evening</div>
+        <div>
+          <h4>First night out<span class="chip gap">Nothing held</span></h4>
+          <p>The one evening with no table. Landing at 5:20 makes 7:30 or 8:00 comfortable, and the walkable options are all a few minutes from the front door — but Bentonville's better rooms do fill on a Thursday.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="day">
+      <div class="day-head">
+        <h3>Friday</h3>
+        <span class="dt">25 SEP</span>
+        <span class="lbl">Art on the ravine</span>
+      </div>
+      <div class="stop">
+        <div class="t">Morning</div>
+        <div>
+          <h4>Crystal Bridges<span class="chip opt">Idea</span></h4>
+          <p>The permanent collection is free to walk into; headline exhibitions are ticketed separately. The Frank Lloyd Wright Bachman-Wilson House stands on the museum grounds — the exact thing Paul dug up for Steve when this trip was first floated.</p>
+          <div class="note">Check what's ticketed nearer the date</div>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">Afternoon</div>
+        <div>
+          <h4>The Momentary<span class="chip opt">Idea</span></h4>
+          <p>Crystal Bridges' contemporary outpost in a converted cheese factory a few minutes south. Rotating installations, and a bar with a view.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">19:00</div>
+        <div>
+          <h4>Dinner — Conifer<span class="chip set">Booked</span></h4>
+          <p>Table for three in the dining room. Ten minutes on foot from the Square.</p>
+          <div class="note">TOCK-R-YC6EZHYN · 479-203-5999 · cancel by Thursday</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="day">
+      <div class="day-head">
+        <h3>Saturday</h3>
+        <span class="dt">26 SEP</span>
+        <span class="lbl">The whole day</span>
+      </div>
+      <div class="stop">
+        <div class="t">Morning</div>
+        <div>
+          <h4>Get on the trails<span class="chip gap">Nothing held</span></h4>
+          <p>This is what the town is for. Slaughter Pen and the Coler preserve start more or less in town, and the paved Razorback Greenway runs from the Square out past Crystal Bridges if anyone would rather roll than climb. Three bikes on a September Saturday want reserving.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">Midday</div>
+        <div>
+          <h4>Back to the Square<span class="chip opt">Idea</span></h4>
+          <p>The farmers market runs Saturday mornings in season, and the Walmart Museum sits right on the Square for anyone who wants the origin story.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">19:00</div>
+        <div>
+          <h4>Dinner — The Preacher's Son<span class="chip set">Booked</span></h4>
+          <p>Three of you, in the restored church. Undercroft is the bar downstairs if you want one before.</p>
+          <div class="note">#138328 · 201 NW A St · (479) 445-6065 · 15 min grace</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="day">
+      <div class="day-head">
+        <h3>Sunday</h3>
+        <span class="dt">27 SEP</span>
+        <span class="lbl">The long wait</span>
+      </div>
+      <div class="stop">
+        <div class="t">by 11:00</div>
+        <div>
+          <h4>Out of the house<span class="chip set">Fixed</span></h4>
+          <p>Checkout is a hard eleven. The flight home isn't until six.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">11:00–16:30</div>
+        <div>
+          <h4>Five and a half hours, bags in tow<span class="chip gap">Open</span></h4>
+          <p>Best spent on something that tolerates luggage in the boot — a last ride, a slow brunch, or whichever of Crystal Bridges and the Momentary didn't happen on Friday.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">18:00 CT</div>
+        <div>
+          <h4>XNA → SFO via Salt Lake<span class="chip set">Booked</span></h4>
+          <p>Delta 3620 then 2762. On the ground in San Francisco at 10:15 at night.</p>
+          <div class="note">Be at XNA by 16:30</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="booked">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>What's booked</h2>
+      <p>Everything confirmed, with the numbers you'd need if something goes sideways at a counter.</p>
+    </div>
+
+    <div class="cards">
+
+      <div class="card wide">
+        <p class="kick">Flights · Delta</p>
+        <h3>SFO ⇄ XNA</h3>
+        <dl>
+          <dt>Reference</dt><dd><code class="conf">HQ5AYB</code></dd>
+          <dt>Travelling</dt><dd>James (1 seat)</dd>
+          <dt>Cabin</dt><dd>Economy · seats unassigned</dd>
+        </dl>
+
+        <div class="route">
+          <div class="route-lbl">Outbound · Thursday 24 September</div>
+          <div class="hop">
+            <div><div class="port">SFO</div><div class="clk">09:55 · San Francisco</div></div>
+            <div class="mid"><div class="fl">DL920</div><div class="bar"></div><div class="fl">1h 55m</div></div>
+            <div class="to"><div class="port">SLC</div><div class="clk">12:50 · Salt Lake</div></div>
+          </div>
+          <div class="conn tight">42 minutes to connect — legal, but there is no slack in it</div>
+          <div class="hop">
+            <div><div class="port">SLC</div><div class="clk">13:32 · Salt Lake</div></div>
+            <div class="mid"><div class="fl">DL3620</div><div class="bar"></div><div class="fl">2h 48m</div></div>
+            <div class="to"><div class="port">XNA</div><div class="clk">17:20 · NW Arkansas</div></div>
+          </div>
+        </div>
+
+        <div class="route">
+          <div class="route-lbl">Home · Sunday 27 September</div>
+          <div class="hop">
+            <div><div class="port">XNA</div><div class="clk">18:00 · NW Arkansas</div></div>
+            <div class="mid"><div class="fl">DL3620</div><div class="bar"></div><div class="fl">2h 57m</div></div>
+            <div class="to"><div class="port">SLC</div><div class="clk">19:57 · Salt Lake</div></div>
+          </div>
+          <div class="conn">1 hour 8 minutes to connect</div>
+          <div class="hop">
+            <div><div class="port">SLC</div><div class="clk">21:05 · Salt Lake</div></div>
+            <div class="mid"><div class="fl">DL2762</div><div class="bar"></div><div class="fl">2h 10m</div></div>
+            <div class="to"><div class="port">SFO</div><div class="clk">22:15 · San Francisco</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <p class="kick">Beds · Airbnb</p>
+        <h3>Artisan Inn at Bentonville Square</h3>
+        <p class="addr">Entire home, on the Greenway. Hosted by Connie.</p>
+        <dl>
+          <dt>Reference</dt><dd><code class="conf">HMSDZA4DNS</code></dd>
+          <dt>In</dt><dd>Thu 24 Sep, after 3 PM</dd>
+          <dt>Out</dt><dd>Sun 27 Sep, by 11 AM</dd>
+          <dt>Guests</dt><dd>3 adults</dd>
+          <dt>Host</dt><dd>234-241-2620</dd>
+          <dt>Total</dt><dd>$1,165.15</dd>
+        </dl>
+        <p class="fine">Free cancellation until 3 PM on 19 September. Self check-in by lockbox. Six guests maximum, and there are stairs.</p>
+      </div>
+
+      <div class="card">
+        <p class="kick">Friday dinner</p>
+        <h3>Conifer</h3>
+        <p class="addr">321 SE 2nd Street, Suite 100, Bentonville</p>
+        <dl>
+          <dt>When</dt><dd>Fri 25 Sep, 7:00 PM</dd>
+          <dt>Party</dt><dd>3 · dining room</dd>
+          <dt>Reference</dt><dd><code class="conf">TOCK-R-YC6EZHYN</code></dd>
+          <dt>Phone</dt><dd>479-203-5999</dd>
+        </dl>
+        <p class="fine">Cancellable up to a day before. After that it's $25 a head for a no-show.</p>
+      </div>
+
+      <div class="card">
+        <p class="kick">Saturday dinner</p>
+        <h3>The Preacher's Son</h3>
+        <p class="addr">201 NW A Street, Bentonville</p>
+        <dl>
+          <dt>When</dt><dd>Sat 26 Sep, 7:00 PM</dd>
+          <dt>Party</dt><dd>3</dd>
+          <dt>Reference</dt><dd><code class="conf">138328</code></dd>
+          <dt>Phone</dt><dd>(479) 445-6065</dd>
+        </dl>
+        <p class="fine">Fifteen minute grace period — ring them if you'll be later than that.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section id="gaps">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Gaps</h2>
+      <p>What isn't booked, ordered by how much it would hurt to leave alone.</p>
+    </div>
+    <div class="gaps">
+
+      <div class="gap-row urgent">
+        <div class="rank">Do first</div>
+        <div>
+          <h4>A car</h4>
+          <p>Nothing found in email. The airport is a half-hour out, and the weekend has you moving between town, the museum and trailheads — this is the one gap that quietly breaks the rest of the plan if it stays open. Late September is not the month to leave it to the counter.</p>
+        </div>
+      </div>
+
+      <div class="gap-row urgent">
+        <div class="rank">Do first</div>
+        <div>
+          <h4>A plan B for Salt Lake</h4>
+          <p>Forty-two minutes is a legal connection and nothing more. If the San Francisco leg pushes back at all, you get rebooked onto a later Salt Lake–XNA flight and Thursday evening disappears. Worth knowing what else Delta runs into XNA that afternoon before you're standing in a terminal finding out.</p>
+        </div>
+      </div>
+
+      <div class="gap-row">
+        <div class="rank">Soon</div>
+        <div>
+          <h4>Thursday's table</h4>
+          <p>The only night without one. A 7:30 booking made now costs nothing and saves three hungry men negotiating on a pavement.</p>
+        </div>
+      </div>
+
+      <div class="gap-row">
+        <div class="rank">Soon</div>
+        <div>
+          <h4>Three bikes for Saturday</h4>
+          <p>If riding is the reason to come to Bentonville at all, walking into a shop on a peak-season Saturday morning is optimistic. The Square has rental outfits doing trail bikes and e-bikes both.</p>
+        </div>
+      </div>
+
+      <div class="gap-row">
+        <div class="rank">Check</div>
+        <div>
+          <h4>Whether Crystal Bridges has a ticketed show</h4>
+          <p>Walking into the permanent collection is free, but whatever headline exhibition is running in September will be ticketed and can sell out. Worth a look closer to the date.</p>
+        </div>
+      </div>
+
+      <div class="gap-row">
+        <div class="rank">Confirm</div>
+        <div>
+          <h4>When Paul and Steve actually land</h4>
+          <p>Only James's booking is in this inbox. Everything on Thursday hangs on the latest of the three arrivals, so that's worth pinning down before a table gets booked around it.</p>
+        </div>
+      </div>
+
+      <div class="gap-row">
+        <div class="rank">Nice to have</div>
+        <div>
+          <h4>Something for Sunday</h4>
+          <p>Eleven o'clock checkout, six o'clock flight. Five and a half hours is a long time to improvise with three sets of luggage.</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section id="field">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Field notes</h2>
+      <p>The things worth having on a phone.</p>
+    </div>
+    <div class="facts">
+      <div class="fact"><div class="k">Airport</div><div class="v">XNA</div><div class="n">Northwest Arkansas National, twenty to thirty minutes south of town</div></div>
+      <div class="fact"><div class="k">Clocks</div><div class="v">Central</div><div class="n">Two hours ahead of San Francisco</div></div>
+      <div class="fact"><div class="k">Basecamp</div><div class="v">The Square</div><div class="n">Walkable to dinner, and straight onto the Greenway</div></div>
+      <div class="fact"><div class="k">Late September</div><div class="v">Shoulder</div><div class="n">Mild days, cool evenings — bring a layer for sitting outside</div></div>
+      <div class="fact"><div class="k">Host</div><div class="v">Connie</div><div class="n">234-241-2620 · lockbox code comes from her</div></div>
+      <div class="fact"><div class="k">Last free cancel</div><div class="v">19 Sept</div><div class="n">Airbnb, 3 PM. After that it's partial refund only</div></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>Assembled from confirmation emails. The flights, the house, Conifer and The Preacher's Son are all as booked — references above match the originals.</p>
+    <p>Anything marked <em>Idea</em> is a suggestion, not a reservation, and wasn't found in email. Check hours and ticketing before building a day around one.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  /* ---------- countdown ---------- */
+  var departure = new Date("2026-09-24T09:55:00-07:00");
+  var numEl = document.getElementById("cd-num");
+  var txtEl = document.getElementById("cd-txt");
+
+  function tick() {
+    var ms = departure - new Date();
+    if (ms <= 0) {
+      numEl.textContent = "—";
+      txtEl.textContent = "Wheels up. Have a good one.";
+      return;
+    }
+    var days = Math.floor(ms / 86400000);
+    var hours = Math.floor((ms % 86400000) / 3600000);
+    if (days > 0) {
+      numEl.textContent = days;
+      txtEl.textContent = (days === 1 ? "day" : "days") + " until wheels up, give or take "
+        + hours + (hours === 1 ? " hour" : " hours");
+    } else {
+      numEl.textContent = hours;
+      txtEl.textContent = (hours === 1 ? "hour" : "hours") + " until wheels up";
+    }
+  }
+  tick();
+  setInterval(tick, 60000);
+
+  /* ---------- contour lines ---------- */
+  var cv = document.getElementById("contours");
+  if (!cv || !cv.getContext) return;
+  var ctx = cv.getContext("2d");
+
+  function ridge(x, seed) {
+    // layered sines -> a plausible ridgeline profile
+    return Math.sin(x * 0.9 + seed) * 0.55
+         + Math.sin(x * 2.1 + seed * 1.7) * 0.26
+         + Math.sin(x * 4.3 + seed * 0.6) * 0.12
+         + Math.sin(x * 8.1 + seed * 2.3) * 0.05;
+  }
+
+  function draw() {
+    var host = cv.parentElement;
+    var w = host.offsetWidth, h = host.offsetHeight;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    cv.width = w * dpr; cv.height = h * dpr;
+    cv.style.width = w + "px"; cv.style.height = h + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    var stroke = getComputedStyle(document.documentElement)
+      .getPropertyValue("--ink-faint").trim() || "#7b8479";
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1;
+
+    var lines = 26;
+    for (var i = 0; i < lines; i++) {
+      var t = i / (lines - 1);
+      // tighter contour spacing toward the top = steeper ground
+      var baseY = h * (0.06 + Math.pow(t, 1.35) * 1.02);
+      var amp = h * (0.16 + t * 0.10);
+      ctx.globalAlpha = 0.05 + (1 - t) * 0.16;
+      ctx.beginPath();
+      for (var px = -20; px <= w + 20; px += 5) {
+        var nx = px / w * 3.4;
+        var y = baseY + ridge(nx, i * 0.42) * amp;
+        if (px === -20) ctx.moveTo(px, y); else ctx.lineTo(px, y);
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  draw();
+  var t;
+  window.addEventListener("resize", function () {
+    clearTimeout(t);
+    t = setTimeout(draw, 150);
+  });
+  // theme flips change --ink-faint; repaint if the OS scheme changes
+  if (window.matchMedia) {
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (mq.addEventListener) mq.addEventListener("change", function () { setTimeout(draw, 50); });
+  }
+})();
+</script>
+</body>
+</html>
