@@ -79,13 +79,6 @@
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
 
   .wrap { max-width: 1000px; margin: 0 auto; padding: 0 22px; }
-
-  .sign {
-    font-family: var(--sign);
-    text-transform: uppercase;
-    letter-spacing: .045em;
-    font-weight: 700;
-  }
   .mono { font-family: var(--data); font-variant-numeric: tabular-nums; }
 
   /* ---------------- nav ---------------- */
@@ -111,10 +104,7 @@
 
   /* ---------------- hero ---------------- */
   header { position: relative; padding: 66px 0 52px; border-bottom: 1px solid var(--rule); overflow: hidden; }
-  #contours {
-    position: absolute; inset: 0; width: 100%; height: 100%;
-    pointer-events: none; opacity: .5;
-  }
+  #contours { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: .5; }
   header .wrap { position: relative; z-index: 1; }
 
   .stamp {
@@ -127,15 +117,13 @@
   .stamp::before { content: ""; width: 7px; height: 7px; background: currentColor; border-radius: 50%; }
 
   h1 {
-    font-family: var(--sign);
-    font-size: clamp(52px, 12vw, 122px);
+    font-family: var(--sign); font-size: clamp(52px, 12vw, 122px);
     line-height: .86; margin: 0; letter-spacing: -.005em;
     text-transform: uppercase; font-weight: 700; text-wrap: balance;
   }
   .h1-sub {
     font-family: var(--sign); text-transform: uppercase; letter-spacing: .1em;
-    font-size: clamp(14px, 2.6vw, 19px); font-weight: 600; color: var(--ink-soft);
-    margin: 18px 0 0;
+    font-size: clamp(14px, 2.6vw, 19px); font-weight: 600; color: var(--ink-soft); margin: 18px 0 0;
   }
   .h1-rule { height: 3px; background: var(--ink); margin: 22px 0 20px; }
 
@@ -217,15 +205,29 @@
     content: ""; position: absolute; right: -1px; top: -2.5px;
     border-left: 6px solid var(--rule); border-top: 3px solid transparent; border-bottom: 3px solid transparent;
   }
-  .conn { font-family: var(--data); font-size: 12.5px; color: var(--ink-faint); margin: 12px 0 12px 0; padding-left: 15px; border-left: 2px dashed var(--rule); }
+  .conn { font-family: var(--data); font-size: 12.5px; color: var(--ink-faint); margin: 12px 0; padding-left: 15px; border-left: 2px dashed var(--rule); }
   .conn.tight { color: var(--ochre); border-left-color: var(--ochre); font-weight: 600; }
+
+  /* ---------------- the list ---------------- */
+  .lgroup { margin-bottom: 34px; }
+  .lgroup:last-child { margin-bottom: 0; }
+  .lgroup-head { display: flex; align-items: center; gap: 11px; padding-bottom: 9px; margin-bottom: 4px; border-bottom: 2px solid var(--ink); }
+  .lgroup-head svg { width: 21px; height: 21px; flex: none; color: var(--accent); }
+  .lgroup-head h3 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .06em; font-size: 18px; font-weight: 700; margin: 0; }
+  .lgroup-head .ct { margin-left: auto; font-family: var(--data); font-size: 12px; color: var(--ink-faint); }
+
+  .place { display: grid; grid-template-columns: 1fr auto; gap: 8px 18px; align-items: baseline; padding: 12px 0; border-bottom: 1px solid var(--rule-soft); }
+  .place:last-child { border-bottom: 0; }
+  .place .nm { font-family: var(--sign); text-transform: uppercase; letter-spacing: .04em; font-size: 15.5px; font-weight: 700; }
+  .place .kind { font-size: 14.5px; color: var(--ink-soft); }
+  .place .rt { font-family: var(--data); font-size: 13px; color: var(--ink-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .place .rt b { color: var(--ink); font-weight: 700; }
+  .place .why { grid-column: 1 / -1; margin: 2px 0 0; font-size: 14.5px; color: var(--accent); }
+  .place .why::before { content: "→ "; }
 
   /* ---------------- gaps ---------------- */
   .gaps { display: grid; gap: 13px; }
-  .gap-row {
-    display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: start;
-    padding: 18px 20px; background: var(--panel); border: 1px solid var(--rule); border-radius: 4px;
-  }
+  .gap-row { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: start; padding: 18px 20px; background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; }
   .gap-row.urgent { border-color: color-mix(in srgb, var(--ochre) 50%, var(--rule)); background: var(--ochre-wash); }
   .rank {
     font-family: var(--sign); text-transform: uppercase; letter-spacing: .09em;
@@ -236,12 +238,36 @@
   .gap-row h4 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .05em; font-size: 15.5px; font-weight: 700; margin: 0 0 5px; }
   .gap-row p { margin: 0; font-size: 15.5px; color: var(--ink-soft); max-width: var(--measure); }
 
+  /* ---------------- orientation map ---------------- */
+  .mapbox { background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 8px; box-shadow: var(--shadow); overflow-x: auto; }
+  .mapbox svg { display: block; width: 100%; min-width: 560px; height: auto; }
+  .maplbl { font-family: var(--sign); text-transform: uppercase; letter-spacing: .1em; font-size: 10.5px; font-weight: 700; }
+  .mapname { font-family: var(--sign); text-transform: uppercase; letter-spacing: .04em; font-size: 12.5px; font-weight: 700; }
+  .mapnote { font-family: var(--data); font-size: 10.5px; }
+  .map-cap { margin: 12px 0 0; font-size: 14px; color: var(--ink-faint); }
+
   /* ---------------- facts ---------------- */
-  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; margin-top: 34px; }
   .fact { background: var(--panel); padding: 20px; }
   .fact .k { font-family: var(--sign); text-transform: uppercase; letter-spacing: .12em; font-size: 10.5px; font-weight: 700; color: var(--ink-faint); margin-bottom: 8px; }
   .fact .v { font-family: var(--sign); text-transform: uppercase; letter-spacing: .02em; font-size: 20px; font-weight: 700; line-height: 1.1; }
   .fact .n { font-size: 14.5px; color: var(--ink-soft); margin-top: 6px; }
+
+  /* ---------------- photos ---------------- */
+  .photo-panel {
+    background: var(--panel); border: 1px solid var(--rule); border-left: 4px solid var(--accent);
+    border-radius: 4px; padding: 26px; box-shadow: var(--shadow);
+  }
+  .photo-panel h3 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .05em; font-size: 19px; font-weight: 700; margin: 0 0 12px; }
+  .photo-panel p { margin: 0 0 14px; font-size: 16px; color: var(--ink-soft); max-width: var(--measure); }
+  .photo-panel p:last-child { margin-bottom: 0; }
+  .frames { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 24px 0 0; }
+  .frame {
+    aspect-ratio: 4 / 3; border: 1.5px dashed var(--rule); border-radius: 3px;
+    display: grid; place-items: center; background: var(--sunk);
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .1em;
+    font-size: 10.5px; font-weight: 700; color: var(--ink-faint); text-align: center; padding: 10px;
+  }
 
   footer { padding: 44px 0 66px; }
   footer p { margin: 0 0 10px; font-size: 14.5px; color: var(--ink-faint); max-width: var(--measure); }
@@ -253,16 +279,29 @@
     .countdown { display: flex; width: 100%; }
     .hop .port { font-size: 22px; }
     .hop .mid { min-width: 70px; }
+    .place { grid-template-columns: 1fr; }
+    .place .rt { grid-row: 1; }
   }
 </style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <g id="g-fork"><path d="M7 3v7a2 2 0 0 0 4 0V3M9 12v9M17 3c-1.7 1-2.5 3-2.5 5.5S15.3 13 17 14v7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <g id="g-beer"><path d="M5 8h10v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8zM15 11h3a2 2 0 0 1 0 6h-3M6 8c0-2 1-3 2-3.5S9 3 10 3s2 .5 2.5 1.5S15 6 15 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <g id="g-glass"><path d="M4 4h16l-8 8zM12 12v8M8 20h8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <g id="g-art"><path d="M4 20V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14M4 20h16M8 20v-6l3-3 3 4 2-2 2 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="8.5" r="1.4" fill="none" stroke="currentColor" stroke-width="1.7"/></g>
+  <g id="g-well"><path d="M12 21s-7-4.4-7-9.4A4.1 4.1 0 0 1 12 8a4.1 4.1 0 0 1 7 3.6c0 5-7 9.4-7 9.4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <g id="g-bike"><circle cx="5.5" cy="17" r="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="18.5" cy="17" r="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M5.5 17l4-8h5l4 8M9.5 9h6M12 17l2.5-8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></g>
+</defs></svg>
 
 <nav>
   <div class="wrap nav-in">
     <div class="mark">Bentonville <em>/</em> Sept '26</div>
     <a href="#route">Route</a>
     <a href="#booked">Booked</a>
+    <a href="#list">The list</a>
     <a href="#gaps">Gaps</a>
-    <a href="#field">Field notes</a>
+    <a href="#bearings">Bearings</a>
+    <a href="#photos">Photos</a>
   </div>
 </nav>
 
@@ -295,9 +334,7 @@
 
     <div class="day">
       <div class="day-head">
-        <h3>Thursday</h3>
-        <span class="dt">24 SEP</span>
-        <span class="lbl">Getting there</span>
+        <h3>Thursday</h3><span class="dt">24 SEP</span><span class="lbl">Getting there</span>
       </div>
       <div class="stop">
         <div class="t">09:55 PT</div>
@@ -311,7 +348,7 @@
         <div class="t">~18:00 CT</div>
         <div>
           <h4>XNA down to Bentonville<span class="chip gap">Nothing held</span></h4>
-          <p>Twenty to thirty minutes north of the airport. No rental car or transfer turned up in the email trail — the first thing on the gaps list below.</p>
+          <p>Twenty to thirty minutes north. No rental car or transfer turned up in the email trail — still the first thing on the gaps list.</p>
         </div>
       </div>
       <div class="stop">
@@ -325,38 +362,37 @@
       <div class="stop">
         <div class="t">Evening</div>
         <div>
-          <h4>First night out<span class="chip gap">Nothing held</span></h4>
-          <p>The one evening with no table. Landing at 5:20 makes 7:30 or 8:00 comfortable, and the walkable options are all a few minutes from the front door — but Bentonville's better rooms do fill on a Thursday.</p>
+          <h4>First night — The HUB Bike Lounge?<span class="chip gap">Nothing held</span></h4>
+          <p>The one evening without a table. The HUB is on the list, it's casual, and a bike-shop-bar is about the most Bentonville way to start the weekend. Landing at 5:20 makes 7:30 comfortable — but it wants booking rather than chancing.</p>
+          <div class="note">Callisto or Bentonville Brewing after, both on the list</div>
         </div>
       </div>
     </div>
 
     <div class="day">
       <div class="day-head">
-        <h3>Friday</h3>
-        <span class="dt">25 SEP</span>
-        <span class="lbl">Art on the ravine</span>
+        <h3>Friday</h3><span class="dt">25 SEP</span><span class="lbl">Art on the ravine</span>
       </div>
       <div class="stop">
         <div class="t">Morning</div>
         <div>
-          <h4>Crystal Bridges<span class="chip opt">Idea</span></h4>
-          <p>The permanent collection is free to walk into; headline exhibitions are ticketed separately. The Frank Lloyd Wright Bachman-Wilson House stands on the museum grounds — the exact thing Paul dug up for Steve when this trip was first floated.</p>
+          <h4>Crystal Bridges &amp; the Bachman-Wilson House<span class="chip opt">On the list</span></h4>
+          <p>The permanent collection is free to walk into; headline exhibitions are ticketed separately. The Frank Lloyd Wright house sits on the museum grounds — Paul dug it out for Steve when this trip was first floated in 2024, and it's still on the list two years later.</p>
           <div class="note">Check what's ticketed nearer the date</div>
         </div>
       </div>
       <div class="stop">
         <div class="t">Afternoon</div>
         <div>
-          <h4>The Momentary<span class="chip opt">Idea</span></h4>
-          <p>Crystal Bridges' contemporary outpost in a converted cheese factory a few minutes south. Rotating installations, and a bar with a view.</p>
+          <h4>The Momentary — Buckyball<span class="chip opt">On the list</span></h4>
+          <p>Crystal Bridges' contemporary outpost in a converted cheese factory a few minutes south. Buckyball is the light installation, and it reads far better after dark than at noon — worth timing late if you can.</p>
         </div>
       </div>
       <div class="stop">
         <div class="t">19:00</div>
         <div>
           <h4>Dinner — Conifer<span class="chip set">Booked</span></h4>
-          <p>Table for three in the dining room. Ten minutes on foot from the Square.</p>
+          <p>Table for three in the dining room. Ten minutes on foot from the Square. Worth noting it's the one booked thing that never made the list.</p>
           <div class="note">TOCK-R-YC6EZHYN · 479-203-5999 · cancel by Thursday</div>
         </div>
       </div>
@@ -364,39 +400,42 @@
 
     <div class="day">
       <div class="day-head">
-        <h3>Saturday</h3>
-        <span class="dt">26 SEP</span>
-        <span class="lbl">The whole day</span>
+        <h3>Saturday</h3><span class="dt">26 SEP</span><span class="lbl">The whole day</span>
       </div>
       <div class="stop">
         <div class="t">Morning</div>
         <div>
-          <h4>Get on the trails<span class="chip gap">Nothing held</span></h4>
-          <p>This is what the town is for. Slaughter Pen and the Coler preserve start more or less in town, and the paved Razorback Greenway runs from the Square out past Crystal Bridges if anyone would rather roll than climb. Three bikes on a September Saturday want reserving.</p>
+          <h4>Bikes from Phat Tire<span class="chip gap">Nothing held</span></h4>
+          <p>This is what the town is for. Slaughter Pen and the Coler preserve start more or less in town, and the Greenway runs from the Square out past Crystal Bridges if anyone would rather roll than climb. Phat Tire is the rental shop on the list — three bikes on a September Saturday want reserving.</p>
         </div>
       </div>
       <div class="stop">
         <div class="t">Midday</div>
         <div>
-          <h4>Back to the Square<span class="chip opt">Idea</span></h4>
-          <p>The farmers market runs Saturday mornings in season, and the Walmart Museum sits right on the Square for anyone who wants the origin story.</p>
+          <h4>Brewery crawl<span class="chip opt">On the list</span></h4>
+          <p>Four of them made the list: Bentonville Brewing, Bike Rack, Social Project and Stoic Brews. Bike Rack is the one that pairs naturally with a morning on the trails.</p>
         </div>
       </div>
       <div class="stop">
         <div class="t">19:00</div>
         <div>
           <h4>Dinner — The Preacher's Son<span class="chip set">Booked</span></h4>
-          <p>Three of you, in the restored church. Undercroft is the bar downstairs if you want one before.</p>
+          <p>Three of you, in the restored church. Undercroft is the bar downstairs — also on the list, so have the drink before rather than hunting elsewhere.</p>
           <div class="note">#138328 · 201 NW A St · (479) 445-6065 · 15 min grace</div>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">Late</div>
+        <div>
+          <h4>Callisto<span class="chip opt">On the list</span></h4>
+          <p>Highest-rated thing on the whole list at 4.9 across 470 reviews. If there's one nightcap on the trip, this is the one that earns it.</p>
         </div>
       </div>
     </div>
 
     <div class="day">
       <div class="day-head">
-        <h3>Sunday</h3>
-        <span class="dt">27 SEP</span>
-        <span class="lbl">The long wait</span>
+        <h3>Sunday</h3><span class="dt">27 SEP</span><span class="lbl">The long wait</span>
       </div>
       <div class="stop">
         <div class="t">by 11:00</div>
@@ -408,8 +447,8 @@
       <div class="stop">
         <div class="t">11:00–16:30</div>
         <div>
-          <h4>Five and a half hours, bags in tow<span class="chip gap">Open</span></h4>
-          <p>Best spent on something that tolerates luggage in the boot — a last ride, a slow brunch, or whichever of Crystal Bridges and the Momentary didn't happen on Friday.</p>
+          <h4>Escape room, then whatever's left<span class="chip opt">On the list</span></h4>
+          <p>The five-hour gap needs something that tolerates luggage in the car, and NWA Escape Room is the one thing on the list that's indoors, bookable, roughly an hour, and doesn't care that you're checked out. Fills the dead middle of the day neatly.</p>
         </div>
       </div>
       <div class="stop">
@@ -432,7 +471,6 @@
     </div>
 
     <div class="cards">
-
       <div class="card wide">
         <p class="kick">Flights · Delta</p>
         <h3>SFO ⇄ XNA</h3>
@@ -441,7 +479,6 @@
           <dt>Travelling</dt><dd>James (1 seat)</dd>
           <dt>Cabin</dt><dd>Economy · seats unassigned</dd>
         </dl>
-
         <div class="route">
           <div class="route-lbl">Outbound · Thursday 24 September</div>
           <div class="hop">
@@ -456,7 +493,6 @@
             <div class="to"><div class="port">XNA</div><div class="clk">17:20 · NW Arkansas</div></div>
           </div>
         </div>
-
         <div class="route">
           <div class="route-lbl">Home · Sunday 27 September</div>
           <div class="hop">
@@ -513,7 +549,132 @@
         </dl>
         <p class="fine">Fifteen minute grace period — ring them if you'll be later than that.</p>
       </div>
+    </div>
+  </div>
+</section>
 
+<section id="list">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>The list</h2>
+      <p>Sixteen places off the shared <em>Bentonville Boys</em> map, with the ratings as saved. Two are already booked; the rest are the raw material for the open slots.</p>
+    </div>
+
+    <div class="lgroup">
+      <div class="lgroup-head">
+        <svg viewBox="0 0 24 24"><use href="#g-fork"/></svg>
+        <h3>Food</h3><span class="ct">2 places</span>
+      </div>
+      <div class="place">
+        <div><div class="nm">The HUB Bike Lounge</div><div class="kind">Restaurant · $20–30</div></div>
+        <div class="rt"><b>4.6</b> · 186</div>
+        <p class="why">Best candidate for the unbooked Thursday night</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">The Preacher's Son</div><div class="kind">Eclectic · $40–100</div></div>
+        <div class="rt"><b>4.5</b> · 1,090</div>
+        <p class="why">Booked — Saturday, 7 PM</p>
+      </div>
+    </div>
+
+    <div class="lgroup">
+      <div class="lgroup-head">
+        <svg viewBox="0 0 24 24"><use href="#g-beer"/></svg>
+        <h3>Breweries</h3><span class="ct">4 places</span>
+      </div>
+      <div class="place">
+        <div><div class="nm">Bentonville Brewing Company</div><div class="kind">Brewery</div></div>
+        <div class="rt"><b>4.8</b> · 1,137</div>
+      </div>
+      <div class="place">
+        <div><div class="nm">Stoic Brews Alternative</div><div class="kind">Brewpub · $10–20</div></div>
+        <div class="rt"><b>4.8</b> · 110</div>
+      </div>
+      <div class="place">
+        <div><div class="nm">Social Project Brewing Co.</div><div class="kind">Brewery</div></div>
+        <div class="rt"><b>4.7</b> · 152</div>
+      </div>
+      <div class="place">
+        <div><div class="nm">Bike Rack Brewing Co.</div><div class="kind">Brewery</div></div>
+        <div class="rt"><b>4.7</b> · 414</div>
+        <p class="why">The natural stop straight off the trails</p>
+      </div>
+    </div>
+
+    <div class="lgroup">
+      <div class="lgroup-head">
+        <svg viewBox="0 0 24 24"><use href="#g-glass"/></svg>
+        <h3>Bars</h3><span class="ct">3 places</span>
+      </div>
+      <div class="place">
+        <div><div class="nm">Callisto Cocktail Bar</div><div class="kind">Bar · $30–80</div></div>
+        <div class="rt"><b>4.9</b> · 470</div>
+        <p class="why">Highest-rated thing on the entire list</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">Undercroft</div><div class="kind">Bar · $20–30</div></div>
+        <div class="rt"><b>4.3</b> · 286</div>
+        <p class="why">Downstairs at The Preacher's Son — drink before Saturday dinner</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">The Barber</div><div class="kind">Bar · $10–20</div></div>
+        <div class="rt"><b>3.2</b> · 121</div>
+        <p class="why">The weak link — 3.2 is well below everything else here</p>
+      </div>
+    </div>
+
+    <div class="lgroup">
+      <div class="lgroup-head">
+        <svg viewBox="0 0 24 24"><use href="#g-art"/></svg>
+        <h3>Arts &amp; culture</h3><span class="ct">2 places</span>
+      </div>
+      <div class="place">
+        <div><div class="nm">Buckyball at The Momentary</div><div class="kind">Museum installation</div></div>
+        <div class="rt"><b>4.7</b> · 357</div>
+        <p class="why">Better after dark — time Friday accordingly</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">Bachman-Wilson House</div><div class="kind">Frank Lloyd Wright · landmark</div></div>
+        <div class="rt"><b>4.7</b> · 423</div>
+        <p class="why">On the Crystal Bridges grounds — Paul's original pitch to Steve</p>
+      </div>
+    </div>
+
+    <div class="lgroup">
+      <div class="lgroup-head">
+        <svg viewBox="0 0 24 24"><use href="#g-well"/></svg>
+        <h3>Activities</h3><span class="ct">3 places</span>
+      </div>
+      <div class="place">
+        <div><div class="nm">NWA Escape Room</div><div class="kind">Escape room</div></div>
+        <div class="rt"><b>4.7</b> · 345</div>
+        <p class="why">The obvious answer to Sunday's dead five hours</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">Innova Collective</div><div class="kind">Wellness centre</div></div>
+        <div class="rt"><b>5.0</b> · 9</div>
+      </div>
+      <div class="place">
+        <div><div class="nm">san studio bentonville</div><div class="kind">Pilates studio</div></div>
+        <div class="rt"><b>5.0</b> · 38</div>
+      </div>
+    </div>
+
+    <div class="lgroup">
+      <div class="lgroup-head">
+        <svg viewBox="0 0 24 24"><use href="#g-bike"/></svg>
+        <h3>Outdoors &amp; getting around</h3><span class="ct">2 places</span>
+      </div>
+      <div class="place">
+        <div><div class="nm">Phat Tire Rental Shop</div><div class="kind">Bicycle rental</div></div>
+        <div class="rt"><b>4.5</b> · 64</div>
+        <p class="why">Book three bikes for Saturday morning</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">Razorback Greenway — Mile 35</div><div class="kind">Hiking &amp; riding</div></div>
+        <div class="rt">—</div>
+        <p class="why">Runs past the front door</p>
+      </div>
     </div>
   </div>
 </section>
@@ -522,7 +683,7 @@
   <div class="wrap">
     <div class="sec-head">
       <h2>Gaps</h2>
-      <p>What isn't booked, ordered by how much it would hurt to leave alone.</p>
+      <p>What isn't booked, ordered by how much it would hurt to leave alone. The list has narrowed most of these to a specific place — they just need someone to actually reserve them.</p>
     </div>
     <div class="gaps">
 
@@ -530,7 +691,7 @@
         <div class="rank">Do first</div>
         <div>
           <h4>A car</h4>
-          <p>Nothing found in email. The airport is a half-hour out, and the weekend has you moving between town, the museum and trailheads — this is the one gap that quietly breaks the rest of the plan if it stays open. Late September is not the month to leave it to the counter.</p>
+          <p>Nothing found in email, and nothing on the list solves it. The airport is a half-hour out, the Momentary is a drive, and the escape room is a drive — this is the one gap that quietly breaks the rest of the plan if it stays open. Late September is not the month to leave it to the counter.</p>
         </div>
       </div>
 
@@ -538,23 +699,31 @@
         <div class="rank">Do first</div>
         <div>
           <h4>A plan B for Salt Lake</h4>
-          <p>Forty-two minutes is a legal connection and nothing more. If the San Francisco leg pushes back at all, you get rebooked onto a later Salt Lake–XNA flight and Thursday evening disappears. Worth knowing what else Delta runs into XNA that afternoon before you're standing in a terminal finding out.</p>
+          <p>Forty-two minutes is a legal connection and nothing more. If the San Francisco leg pushes back at all you get rebooked onto a later Salt Lake–XNA flight, and Thursday evening disappears. Worth knowing what else Delta runs into XNA that afternoon before you're standing in a terminal finding out.</p>
         </div>
       </div>
 
       <div class="gap-row">
         <div class="rank">Soon</div>
         <div>
-          <h4>Thursday's table</h4>
-          <p>The only night without one. A 7:30 booking made now costs nothing and saves three hungry men negotiating on a pavement.</p>
+          <h4>Three bikes at Phat Tire</h4>
+          <p>If riding is the reason to come to Bentonville at all, walking in on a peak-season Saturday morning is optimistic. Now that the shop is picked, this is a five-minute phone call.</p>
         </div>
       </div>
 
       <div class="gap-row">
         <div class="rank">Soon</div>
         <div>
-          <h4>Three bikes for Saturday</h4>
-          <p>If riding is the reason to come to Bentonville at all, walking into a shop on a peak-season Saturday morning is optimistic. The Square has rental outfits doing trail bikes and e-bikes both.</p>
+          <h4>Thursday at The HUB</h4>
+          <p>The only night without a table, and the list has already chosen the place. A 7:30 booking costs nothing and saves three hungry men negotiating on a pavement.</p>
+        </div>
+      </div>
+
+      <div class="gap-row">
+        <div class="rank">Worth it</div>
+        <div>
+          <h4>The escape room slot</h4>
+          <p>Sunday's five-hour gap has an answer now, but escape rooms run on fixed hourly slots and sell out at weekends. Book a 12:00 or 13:00 and the day plans itself.</p>
         </div>
       </div>
 
@@ -562,7 +731,7 @@
         <div class="rank">Check</div>
         <div>
           <h4>Whether Crystal Bridges has a ticketed show</h4>
-          <p>Walking into the permanent collection is free, but whatever headline exhibition is running in September will be ticketed and can sell out. Worth a look closer to the date.</p>
+          <p>Walking into the permanent collection is free, and the Bachman-Wilson House is on the grounds — but whatever headline exhibition is running in September will be ticketed and can sell out.</p>
         </div>
       </div>
 
@@ -570,15 +739,7 @@
         <div class="rank">Confirm</div>
         <div>
           <h4>When Paul and Steve actually land</h4>
-          <p>Only James's booking is in this inbox. Everything on Thursday hangs on the latest of the three arrivals, so that's worth pinning down before a table gets booked around it.</p>
-        </div>
-      </div>
-
-      <div class="gap-row">
-        <div class="rank">Nice to have</div>
-        <div>
-          <h4>Something for Sunday</h4>
-          <p>Eleven o'clock checkout, six o'clock flight. Five and a half hours is a long time to improvise with three sets of luggage.</p>
+          <p>Only James's booking is in this inbox. Everything on Thursday hangs on the latest of the three arrivals, so pin that down before booking a table around it.</p>
         </div>
       </div>
 
@@ -586,12 +747,79 @@
   </div>
 </section>
 
-<section id="field">
+<section id="bearings">
   <div class="wrap">
     <div class="sec-head">
-      <h2>Field notes</h2>
-      <p>The things worth having on a phone.</p>
+      <h2>Bearings</h2>
+      <p>Roughly how the weekend sits around the Square. Schematic, not to scale — for a sense of what's walkable and what needs the car.</p>
     </div>
+
+    <div class="mapbox">
+      <svg viewBox="0 0 800 470" role="img" aria-label="Schematic diagram showing Bentonville Square at the centre, with Crystal Bridges and the trails to the north and east, the Momentary to the south, and the airport off to the south-west.">
+        <!-- greenway -->
+        <path d="M300 20 C 340 110, 330 180, 372 232 C 415 285, 430 350, 415 455"
+              fill="none" stroke="var(--accent)" stroke-width="3" stroke-dasharray="1 7"
+              stroke-linecap="round" opacity=".75"/>
+        <text class="mapnote" x="288" y="46" fill="var(--accent)" text-anchor="end">Razorback</text>
+        <text class="mapnote" x="288" y="60" fill="var(--accent)" text-anchor="end">Greenway</text>
+
+        <!-- trail areas -->
+        <path d="M120 60 q 55 -22 105 6 q 30 40 -12 74 q -70 26 -104 -18 z"
+              fill="var(--accent)" opacity=".13"/>
+        <text class="maplbl" x="172" y="108" fill="var(--accent)" text-anchor="middle">Coler</text>
+        <path d="M470 34 q 78 -14 118 26 q 16 46 -40 62 q -80 12 -100 -34 z"
+              fill="var(--accent)" opacity=".13"/>
+        <text class="maplbl" x="529" y="90" fill="var(--accent)" text-anchor="middle">Slaughter Pen</text>
+
+        <!-- connector: square to crystal bridges -->
+        <path d="M392 226 L 556 168" fill="none" stroke="var(--ink-faint)" stroke-width="1.5" stroke-dasharray="4 5"/>
+        <text class="mapnote" x="474" y="186" fill="var(--ink-faint)" text-anchor="middle">~15 min walk</text>
+
+        <!-- connector: square to momentary -->
+        <path d="M382 250 L 432 372" fill="none" stroke="var(--ink-faint)" stroke-width="1.5" stroke-dasharray="4 5"/>
+        <text class="mapnote" x="382" y="322" fill="var(--ink-faint)" text-anchor="end">drive / ride</text>
+
+        <!-- the square -->
+        <rect x="352" y="212" width="40" height="28" rx="2" fill="var(--accent)"/>
+        <text class="mapname" x="372" y="266" fill="var(--ink)" text-anchor="middle">The Square</text>
+        <text class="mapnote" x="372" y="281" fill="var(--ink-faint)" text-anchor="middle">basecamp · Artisan Inn</text>
+
+        <!-- preacher's son -->
+        <circle cx="286" cy="196" r="5" fill="var(--ink)"/>
+        <text class="mapname" x="274" y="192" fill="var(--ink)" text-anchor="end">Preacher's Son</text>
+        <text class="mapnote" x="274" y="206" fill="var(--ink-faint)" text-anchor="end">+ Undercroft · 5 min</text>
+
+        <!-- conifer -->
+        <circle cx="446" cy="278" r="5" fill="var(--ink)"/>
+        <text class="mapname" x="458" y="276" fill="var(--ink)">Conifer</text>
+        <text class="mapnote" x="458" y="290" fill="var(--ink-faint)">10 min walk</text>
+
+        <!-- crystal bridges -->
+        <circle cx="562" cy="166" r="7" fill="none" stroke="var(--ink)" stroke-width="2.5"/>
+        <text class="mapname" x="576" y="162" fill="var(--ink)">Crystal Bridges</text>
+        <text class="mapnote" x="576" y="176" fill="var(--ink-faint)">Bachman-Wilson House</text>
+
+        <!-- momentary -->
+        <circle cx="438" cy="384" r="7" fill="none" stroke="var(--ink)" stroke-width="2.5"/>
+        <text class="mapname" x="452" y="380" fill="var(--ink)">The Momentary</text>
+        <text class="mapnote" x="452" y="394" fill="var(--ink-faint)">Buckyball · after dark</text>
+
+        <!-- airport -->
+        <path d="M96 392 l 26 -9 l -7 9 l 7 9 z" fill="var(--ochre)"/>
+        <text class="mapname" x="96" y="424" fill="var(--ochre)">XNA</text>
+        <text class="mapnote" x="96" y="438" fill="var(--ink-faint)">20–30 min south-west</text>
+        <path d="M136 392 L 344 300" fill="none" stroke="var(--ochre)" stroke-width="1.5" stroke-dasharray="4 5"/>
+
+        <!-- compass -->
+        <g transform="translate(736 400)">
+          <circle r="24" fill="none" stroke="var(--rule)" stroke-width="1.5"/>
+          <path d="M0 -17 L 5 3 L 0 -1 L -5 3 Z" fill="var(--ink)"/>
+          <text class="mapnote" x="0" y="-27" fill="var(--ink-faint)" text-anchor="middle">N</text>
+        </g>
+      </svg>
+    </div>
+    <p class="map-cap">Everything with a filled dot is walkable from the front door. The two hollow rings and the escape room are why the car matters.</p>
+
     <div class="facts">
       <div class="fact"><div class="k">Airport</div><div class="v">XNA</div><div class="n">Northwest Arkansas National, twenty to thirty minutes south of town</div></div>
       <div class="fact"><div class="k">Clocks</div><div class="v">Central</div><div class="n">Two hours ahead of San Francisco</div></div>
@@ -603,10 +831,32 @@
   </div>
 </section>
 
+<section id="photos">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Photos</h2>
+      <p>A place for the pictures — with one honest caveat about how they get here.</p>
+    </div>
+
+    <div class="photo-panel">
+      <h3>This page can't take uploads</h3>
+      <p>A published page like this one is served as a fixed file. It has no storage behind it, so there's nowhere for a photo to go and no way for something Steve uploads to reach Paul. Anything that looked like an upload button would quietly save into whichever phone pressed it and vanish on the next refresh.</p>
+      <p><strong>During the trip:</strong> make a shared album — Google Photos or iCloud — and drop the link in the group thread. Everyone contributes from their own phone, nobody needs this page, and it keeps working long after the weekend.</p>
+      <p><strong>Before the trip:</strong> send photos over and they get embedded here properly, in the frames below. The page redeploys to the same address, so the link never changes.</p>
+      <div class="frames">
+        <div class="frame">The Square</div>
+        <div class="frame">The house</div>
+        <div class="frame">Crystal Bridges</div>
+        <div class="frame">The trails</div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <footer>
   <div class="wrap">
-    <p>Assembled from confirmation emails. The flights, the house, Conifer and The Preacher's Son are all as booked — references above match the originals.</p>
-    <p>Anything marked <em>Idea</em> is a suggestion, not a reservation, and wasn't found in email. Check hours and ticketing before building a day around one.</p>
+    <p>Bookings assembled from confirmation emails — flights, the house, Conifer and The Preacher's Son are all as booked, and the references above match the originals.</p>
+    <p>The sixteen places come from the shared <em>Bentonville Boys</em> map, ratings as saved there. Opening hours, ticketing and availability are worth checking before building a day around any of them.</p>
   </div>
 </footer>
 
@@ -644,7 +894,6 @@
   var ctx = cv.getContext("2d");
 
   function ridge(x, seed) {
-    // layered sines -> a plausible ridgeline profile
     return Math.sin(x * 0.9 + seed) * 0.55
          + Math.sin(x * 2.1 + seed * 1.7) * 0.26
          + Math.sin(x * 4.3 + seed * 0.6) * 0.12
@@ -668,7 +917,6 @@
     var lines = 26;
     for (var i = 0; i < lines; i++) {
       var t = i / (lines - 1);
-      // tighter contour spacing toward the top = steeper ground
       var baseY = h * (0.06 + Math.pow(t, 1.35) * 1.02);
       var amp = h * (0.16 + t * 0.10);
       ctx.globalAlpha = 0.05 + (1 - t) * 0.16;
@@ -689,7 +937,6 @@
     clearTimeout(t);
     t = setTimeout(draw, 150);
   });
-  // theme flips change --ink-faint; repaint if the OS scheme changes
   if (window.matchMedia) {
     var mq = window.matchMedia("(prefers-color-scheme: dark)");
     if (mq.addEventListener) mq.addEventListener("change", function () { setTimeout(draw, 50); });
