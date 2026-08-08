@@ -232,6 +232,13 @@
     border-radius: 3px; margin-left: 8px; vertical-align: 2px;
     background: color-mix(in srgb, var(--ochre) 22%, transparent); color: var(--ochre);
   }
+  .place.pick { background: var(--accent-wash); margin: 4px -14px; padding: 14px; border-radius: 3px; border-bottom: 0; }
+  .tag-pick {
+    display: inline-block; font-family: var(--sign); text-transform: uppercase;
+    letter-spacing: .09em; font-size: 10px; font-weight: 700; padding: 2px 7px;
+    border-radius: 3px; margin-left: 8px; vertical-align: 2px;
+    background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent);
+  }
 
   /* ---------------- gaps ---------------- */
   .gaps { display: grid; gap: 13px; }
@@ -444,20 +451,35 @@
 
     <div class="day">
       <div class="day-head">
-        <h3>Sunday</h3><span class="dt">27 SEP</span><span class="lbl">The long wait</span>
+        <h3>Sunday</h3><span class="dt">27 SEP</span><span class="lbl">Sam Walton, then home</span>
       </div>
       <div class="stop">
         <div class="t">by 11:00</div>
         <div>
           <h4>Out of the house<span class="chip set">Fixed</span></h4>
-          <p>Checkout is a hard eleven. The flight home isn't until six.</p>
+          <p>Checkout is a hard eleven. Bags into the car, which can stay parked on the Square — everything below is on foot from there.</p>
         </div>
       </div>
       <div class="stop">
-        <div class="t">11:00–16:30</div>
+        <div class="t">11:00</div>
         <div>
-          <h4>Escape room, then whatever's left<span class="chip opt">On the list</span></h4>
-          <p>The five-hour gap needs something that tolerates luggage in the car, and NWA Escape Room is the one thing on the list that's indoors, bookable, roughly an hour, and doesn't care that you're checked out. Fills the dead middle of the day neatly.</p>
+          <h4>Coffee on the Square<span class="chip opt">Idea</span></h4>
+          <p>An hour to fill before the museum opens. The Spark Café is inside the museum building itself, so it's the path of least resistance.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">12:00</div>
+        <div>
+          <h4>The Walmart Museum<span class="chip opt">Steve's pick</span></h4>
+          <p>Opens at noon on a Sunday, which lines up almost suspiciously well with an eleven o'clock checkout. Free, self-guided, on the Square, and reopened in 2025 at more than twice its old size — exhibit gallery, the original 5&amp;10, and a Sam Walton hologram that takes questions. Two hours covers it comfortably.</p>
+          <div class="note">Sun 12:00–18:00 · free · no booking needed</div>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">~14:30</div>
+        <div>
+          <h4>Drive to XNA<span class="chip gap">Depends on the car</span></h4>
+          <p>Half an hour south-west, plus whatever the rental return takes. If there's still slack, NWA Escape Room is the other list item that tolerates luggage — but it needs booking and the museum doesn't.</p>
         </div>
       </div>
       <div class="stop">
@@ -635,7 +657,15 @@
     <div class="lgroup">
       <div class="lgroup-head">
         <svg viewBox="0 0 24 24"><use href="#g-art"/></svg>
-        <h3>Arts &amp; culture</h3><span class="ct">2 places</span>
+        <h3>Arts &amp; culture</h3><span class="ct">2 places + 1</span>
+      </div>
+      <div class="place pick">
+        <div>
+          <div class="nm">The Walmart Museum<span class="tag-pick">Steve's pick</span></div>
+          <div class="kind">Museum · on the Square · free admission</div>
+        </div>
+        <div class="rt">—</div>
+        <p class="why">Reopened in 2025 after a two-year rebuild — more than double the old size, a Sam Walton hologram you can put questions to, and the original Walton's 5&amp;10 downstairs. Sunday hours are noon–6, which is exactly the shape of the gap after checkout.</p>
       </div>
       <div class="place">
         <div><div class="nm">Buckyball at The Momentary</div><div class="kind">Museum installation</div></div>
@@ -737,10 +767,10 @@
       </div>
 
       <div class="gap-row">
-        <div class="rank">Worth it</div>
+        <div class="rank">Optional</div>
         <div>
-          <h4>The escape room slot</h4>
-          <p>Sunday's five-hour gap has an answer now, but escape rooms run on fixed hourly slots and sell out at weekends. Book a 12:00 or 13:00 and the day plans itself.</p>
+          <h4>The escape room, if you still want it</h4>
+          <p>Sunday no longer needs rescuing — the Walmart Museum is free, opens at noon and needs no booking. The escape room is now a want rather than a fix, and it runs on fixed hourly slots that sell out at weekends, so it only works if someone books it in advance.</p>
         </div>
       </div>
 
@@ -800,6 +830,11 @@
         <rect x="352" y="212" width="40" height="28" rx="2" fill="var(--accent)"/>
         <text class="mapname" x="372" y="266" fill="var(--ink)" text-anchor="middle">The Square</text>
         <text class="mapnote" x="372" y="281" fill="var(--ink-faint)" text-anchor="middle">basecamp · Artisan Inn</text>
+
+        <!-- walmart museum -->
+        <circle cx="344" cy="178" r="5" fill="var(--ink)"/>
+        <text class="mapname" x="356" y="174" fill="var(--ink)">Walmart Museum</text>
+        <text class="mapnote" x="356" y="188" fill="var(--ink-faint)">on the Square · free · Sun 12–6</text>
 
         <!-- preacher's son -->
         <circle cx="286" cy="196" r="5" fill="var(--ink)"/>
