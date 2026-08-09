@@ -240,6 +240,20 @@
     background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent);
   }
 
+  /* ---------------- open-in link ---------------- */
+  .openin {
+    display: inline-flex; align-items: center; gap: 10px; margin-top: 20px;
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .08em;
+    font-size: 13px; font-weight: 700; text-decoration: none;
+    color: var(--accent); background: var(--accent-wash);
+    border: 1.5px solid color-mix(in srgb, var(--accent) 40%, transparent);
+    padding: 11px 18px; border-radius: 4px;
+    transition: background .15s ease, border-color .15s ease;
+  }
+  .openin:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: var(--accent); }
+  .openin svg { width: 17px; height: 17px; flex: none; }
+  .openin .arrow { font-family: var(--data); font-weight: 400; opacity: .7; }
+
   /* ---------------- mecca ---------------- */
   .mecca-lead { display: grid; grid-template-columns: 1.35fr 1fr; gap: 28px; align-items: start; }
   .mecca-lead p { margin: 0 0 16px; font-size: 16.5px; color: var(--ink-soft); }
@@ -630,7 +644,15 @@
   <div class="wrap">
     <div class="sec-head">
       <h2>The list</h2>
-      <p>Sixteen places off the shared <em>Bentonville Boys</em> map, with the ratings as saved. Two are already booked; the rest are the raw material for the open slots. One addition is marked where it isn't on the map.</p>
+      <p>Sixteen places off the shared <em>Bentonville Boys</em> map, with the ratings as saved. Two are already booked; the rest are the raw material for the open slots. Additions are marked where they aren't on the map.</p>
+      <a class="openin" href="https://maps.app.goo.gl/7bdWGTrgkcuX9uYe6" target="_blank" rel="noopener noreferrer">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 21s-7-5.6-7-11a7 7 0 1 1 14 0c0 5.4-7 11-7 11z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+          <circle cx="12" cy="10" r="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        </svg>
+        Open the list in Google Maps
+        <span class="arrow">↗</span>
+      </a>
     </div>
 
     <div class="lgroup">
@@ -966,7 +988,15 @@
         </g>
       </svg>
     </div>
-    <p class="map-cap">Everything with a filled dot is walkable from the front door. The two hollow rings and the escape room are why the car matters.</p>
+    <p class="map-cap">Everything with a filled dot is walkable from the front door. The two hollow rings and the escape room are why the car matters. For anything you actually need to navigate to, use the real map:</p>
+    <a class="openin" href="https://maps.app.goo.gl/7bdWGTrgkcuX9uYe6" target="_blank" rel="noopener noreferrer">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 21s-7-5.6-7-11a7 7 0 1 1 14 0c0 5.4-7 11-7 11z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        <circle cx="12" cy="10" r="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      </svg>
+      Bentonville Boys on Google Maps
+      <span class="arrow">↗</span>
+    </a>
 
     <div class="facts">
       <div class="fact"><div class="k">Airport</div><div class="v">XNA</div><div class="n">Northwest Arkansas National, twenty to thirty minutes south of town</div></div>
