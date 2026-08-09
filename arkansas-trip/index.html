@@ -240,6 +240,47 @@
     background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent);
   }
 
+  /* ---------------- mecca ---------------- */
+  .mecca-lead { display: grid; grid-template-columns: 1.35fr 1fr; gap: 28px; align-items: start; }
+  .mecca-lead p { margin: 0 0 16px; font-size: 16.5px; color: var(--ink-soft); }
+  .mecca-lead p:last-child { margin-bottom: 0; }
+  .mecca-lead .pull {
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .03em;
+    font-size: 22px; font-weight: 700; color: var(--ink); line-height: 1.2;
+    border-left: 4px solid var(--accent); padding-left: 18px; margin: 0;
+  }
+  .mecca-lead .pull span { display: block; font-family: var(--read); text-transform: none; letter-spacing: 0; font-size: 15px; font-weight: 400; color: var(--ink-faint); margin-top: 12px; }
+
+  .three { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; margin-top: 30px; }
+  .third { background: var(--panel); border: 1px solid var(--rule); border-top: 3px solid var(--accent); border-radius: 4px; padding: 20px; }
+  .third h4 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .04em; font-size: 16px; font-weight: 700; margin: 0 0 6px; }
+  .third p { margin: 0; font-size: 14.5px; color: var(--ink-soft); }
+
+  .tl { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-top: 30px; position: relative; }
+  .tl::before { content: ""; position: absolute; left: 6%; right: 6%; top: 7px; height: 2px; background: var(--rule); }
+  .tl-pt { text-align: center; position: relative; padding: 0 6px; }
+  .tl-pt .dot { width: 15px; height: 15px; border-radius: 50%; background: var(--ground); border: 3px solid var(--rule); margin: 0 auto 12px; position: relative; }
+  .tl-pt.on .dot { border-color: var(--accent); background: var(--accent); }
+  .tl-pt .yr { font-family: var(--sign); font-size: 19px; font-weight: 700; letter-spacing: .01em; }
+  .tl-pt .ev { font-size: 13.5px; color: var(--ink-soft); margin-top: 4px; }
+
+  .mecca-when {
+    margin-top: 30px; background: var(--accent-wash);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--rule));
+    border-radius: 4px; padding: 22px 24px;
+  }
+  .mecca-when h4 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .05em; font-size: 15px; font-weight: 700; margin: 0 0 10px; color: var(--accent); }
+  .mecca-when p { margin: 0; font-size: 16px; color: var(--ink-soft); max-width: var(--measure); }
+  .hours { display: flex; flex-wrap: wrap; gap: 8px 26px; margin-top: 16px; padding-top: 14px; border-top: 1px solid color-mix(in srgb, var(--accent) 25%, transparent); }
+  .hours div { font-family: var(--data); font-size: 13px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .hours b { font-family: var(--sign); text-transform: uppercase; letter-spacing: .07em; font-size: 11px; color: var(--ink-faint); display: block; font-weight: 700; margin-bottom: 2px; }
+
+  @media (max-width: 720px) {
+    .mecca-lead { grid-template-columns: 1fr; }
+    .tl { grid-template-columns: repeat(2, 1fr); gap: 26px 0; }
+    .tl::before { display: none; }
+  }
+
   /* ---------------- gaps ---------------- */
   .gaps { display: grid; gap: 13px; }
   .gap-row { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: start; padding: 18px 20px; background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; }
@@ -314,6 +355,7 @@
     <a href="#route">Route</a>
     <a href="#booked">Booked</a>
     <a href="#list">The list</a>
+    <a href="#mecca">Steve's Mecca</a>
     <a href="#gaps">Gaps</a>
     <a href="#bearings">Bearings</a>
     <a href="#photos">Photos</a>
@@ -721,6 +763,60 @@
         <div><div class="nm">Razorback Greenway — Mile 35</div><div class="kind">Hiking &amp; riding</div></div>
         <div class="rt">—</div>
         <p class="why">Runs past the front door</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="mecca">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Steve's Mecca</h2>
+      <p>The Walmart Museum. Top of Steve's list, and — inconveniently for anyone hoping to mock it — genuinely the right call.</p>
+    </div>
+
+    <div class="mecca-lead">
+      <div>
+        <p>Three men fly to Arkansas and one of them wants to see where Sam Walton sold his first pair of socks. It is exactly the sort of thing a weekend like this exists to indulge, and it would be an easy target if the museum hadn't just spent two years and a great deal of money making itself worth the trip.</p>
+        <p>It closed in 2022, moved to a temporary space, and reopened on the Square in early 2025 at more than double its old size. The building itself is the point: the Terry Block building of 1888, housing the five-and-dime Walton opened in 1950. The rebuild added a second floor, a third-floor space overlooking the Square, interactive exhibits, and a hologram of Walton that answers questions put to it.</p>
+        <p>The construction was managed almost entirely behind a replica facade — cranes assembled and taken down overnight — so that daily life on the Square never noticed. Which is, whatever you think of the company, a fairly Walmart way to run a building site.</p>
+      </div>
+      <p class="pull">Free, self-guided, and open until ten on a Saturday night.
+        <span>No ticket, no booking, no queue to plan around. The only constraint is Sunday's noon opening, and that happens to be the one that suits.</span>
+      </p>
+    </div>
+
+    <div class="three">
+      <div class="third">
+        <h4>The exhibit gallery</h4>
+        <p>The main event, and the bit that doubled in size. Interactive displays and the Walton hologram.</p>
+      </div>
+      <div class="third">
+        <h4>Walton's 5&amp;10</h4>
+        <p>The original store, downstairs, restored. This is the actual room the whole thing started in.</p>
+      </div>
+      <div class="third">
+        <h4>The Spark Café</h4>
+        <p>Soda fountain in the building. Convenient, given you'll be killing an hour before it opens on Sunday.</p>
+      </div>
+    </div>
+
+    <div class="tl">
+      <div class="tl-pt"><div class="dot"></div><div class="yr">1888</div><div class="ev">Terry Block building goes up on the Square</div></div>
+      <div class="tl-pt"><div class="dot"></div><div class="yr">1950</div><div class="ev">Sam Walton opens Walton's 5&amp;10 in it</div></div>
+      <div class="tl-pt"><div class="dot"></div><div class="yr">2022</div><div class="ev">Closes for a full rebuild, moves to a temporary space</div></div>
+      <div class="tl-pt on"><div class="dot"></div><div class="yr">2025</div><div class="ev">Reopens at more than twice the size</div></div>
+    </div>
+
+    <div class="mecca-when">
+      <h4>When to go</h4>
+      <p>Sunday at noon, straight after checkout. It opens exactly when you need somewhere to be, it's a two-minute walk from where the car will be parked, and two hours in it still leaves a comfortable run at the 6 PM flight. If Steve can't wait that long, Friday and Saturday both run late.</p>
+      <div class="hours">
+        <div><b>Mon–Thu</b>10:00 – 21:00</div>
+        <div><b>Fri &amp; Sat</b>10:00 – 22:00</div>
+        <div><b>Sunday</b>12:00 – 18:00</div>
+        <div><b>Admission</b>Free</div>
+        <div><b>Where</b>On the Square</div>
       </div>
     </div>
   </div>
