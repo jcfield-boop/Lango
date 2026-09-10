@@ -1,0 +1,1241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bentonville — 24–27 September 2026</title>
+</head>
+<body>
+<style>
+  :root {
+    --ground: #e7ebe3;
+    --panel: #f4f6f1;
+    --sunk: #dde2d7;
+    --ink: #191f19;
+    --ink-soft: #4b544a;
+    --ink-faint: #7b8479;
+    --rule: #ccd3c4;
+    --rule-soft: #dbe0d3;
+    --accent: #2c6444;
+    --accent-wash: #dde9df;
+    --ochre: #8a6910;
+    --ochre-wash: #f0e8cf;
+    --shadow: 0 1px 2px rgba(25,31,25,.05), 0 10px 30px -18px rgba(25,31,25,.35);
+
+    --sign: "Avenir Next Condensed", "HelveticaNeue-CondensedBold", "Helvetica Neue Condensed",
+            "Roboto Condensed", "Arial Narrow", "Liberation Sans Narrow", sans-serif;
+    --read: "Iowan Old Style", Charter, "Bitstream Charter", "Palatino Linotype", Georgia, serif;
+    --data: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+    --measure: 62ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #131711;
+      --panel: #1d221a;
+      --sunk: #0d100c;
+      --ink: #e8ece3;
+      --ink-soft: #a9b3a5;
+      --ink-faint: #7b8478;
+      --rule: #2e3529;
+      --rule-soft: #262c22;
+      --accent: #7fc194;
+      --accent-wash: #1b2a1f;
+      --ochre: #d3ae5c;
+      --ochre-wash: #2a2314;
+      --shadow: 0 1px 2px rgba(0,0,0,.5), 0 10px 30px -18px rgba(0,0,0,.9);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #131711;
+    --panel: #1d221a;
+    --sunk: #0d100c;
+    --ink: #e8ece3;
+    --ink-soft: #a9b3a5;
+    --ink-faint: #7b8478;
+    --rule: #2e3529;
+    --rule-soft: #262c22;
+    --accent: #7fc194;
+    --accent-wash: #1b2a1f;
+    --ochre: #d3ae5c;
+    --ochre-wash: #2a2314;
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 10px 30px -18px rgba(0,0,0,.9);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--read);
+    font-size: 17px;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 0 22px; }
+  .mono { font-family: var(--data); font-variant-numeric: tabular-nums; }
+
+  /* ---------------- nav ---------------- */
+  nav {
+    position: sticky; top: 0; z-index: 60;
+    background: color-mix(in srgb, var(--ground) 90%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--rule);
+  }
+  .nav-in { display: flex; align-items: center; gap: 4px; height: 50px; overflow-x: auto; scrollbar-width: none; }
+  .nav-in::-webkit-scrollbar { display: none; }
+  .nav-in .mark {
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .1em;
+    font-weight: 700; font-size: 14px; margin-right: auto; white-space: nowrap;
+  }
+  .nav-in .mark em { font-style: normal; color: var(--accent); }
+  .nav-in a {
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .08em;
+    font-size: 12.5px; font-weight: 600; text-decoration: none; color: var(--ink-soft);
+    padding: 6px 10px; white-space: nowrap; border-radius: 4px;
+  }
+  .nav-in a:hover { color: var(--ink); background: var(--sunk); }
+
+  /* ---------------- hero ---------------- */
+  header { position: relative; padding: 66px 0 52px; border-bottom: 1px solid var(--rule); overflow: hidden; }
+  #contours { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: .5; }
+  header .wrap { position: relative; z-index: 1; }
+
+  .stamp {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .14em;
+    font-size: 12px; font-weight: 700; color: var(--accent);
+    border: 1.5px solid currentColor; padding: 5px 12px; border-radius: 3px;
+    margin-bottom: 24px;
+  }
+  .stamp::before { content: ""; width: 7px; height: 7px; background: currentColor; border-radius: 50%; }
+
+  h1 {
+    font-family: var(--sign); font-size: clamp(52px, 12vw, 122px);
+    line-height: .86; margin: 0; letter-spacing: -.005em;
+    text-transform: uppercase; font-weight: 700; text-wrap: balance;
+  }
+  .h1-sub {
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .1em;
+    font-size: clamp(14px, 2.6vw, 19px); font-weight: 600; color: var(--ink-soft); margin: 18px 0 0;
+  }
+  .h1-rule { height: 3px; background: var(--ink); margin: 22px 0 20px; }
+
+  .roster { display: flex; flex-wrap: wrap; gap: 22px; align-items: baseline; }
+  .roster .n { font-family: var(--sign); text-transform: uppercase; letter-spacing: .09em; font-size: 15px; font-weight: 700; }
+  .roster .d { font-family: var(--data); font-size: 13px; color: var(--ink-faint); }
+
+  .countdown {
+    margin-top: 36px; display: inline-flex; align-items: baseline; gap: 14px;
+    padding: 16px 22px; background: var(--panel);
+    border: 1px solid var(--rule); border-left: 4px solid var(--accent);
+    border-radius: 3px; box-shadow: var(--shadow); max-width: 100%;
+  }
+  .countdown b { font-family: var(--sign); font-size: 40px; line-height: .9; font-weight: 700; letter-spacing: -.01em; }
+  .countdown span { font-size: 15px; color: var(--ink-soft); }
+
+  /* ---------------- sections ---------------- */
+  section { padding: 58px 0; border-bottom: 1px solid var(--rule); }
+  section:last-of-type { border-bottom: 0; }
+  .sec-head { margin-bottom: 34px; }
+  .sec-head h2 {
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .13em;
+    font-size: 13px; font-weight: 700; color: var(--accent); margin: 0 0 10px;
+  }
+  .sec-head p { margin: 0; font-size: 25px; line-height: 1.3; letter-spacing: -.012em; max-width: var(--measure); text-wrap: balance; }
+
+  /* ---------------- days ---------------- */
+  .day { margin-bottom: 40px; }
+  .day:last-child { margin-bottom: 0; }
+  .day-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; padding-bottom: 9px; border-bottom: 2.5px solid var(--ink); }
+  .day-head h3 { font-family: var(--sign); text-transform: uppercase; font-size: 30px; letter-spacing: .01em; font-weight: 700; margin: 0; line-height: 1; }
+  .day-head .dt { font-family: var(--data); font-size: 13px; color: var(--ink-faint); }
+  .day-head .lbl {
+    margin-left: auto; font-family: var(--sign); text-transform: uppercase; letter-spacing: .1em;
+    font-size: 11.5px; font-weight: 700; color: var(--ink-soft);
+  }
+
+  .stop { display: grid; grid-template-columns: 92px 1fr; gap: 20px; padding: 17px 0; border-bottom: 1px solid var(--rule-soft); }
+  .stop:last-child { border-bottom: 0; }
+  .stop .t { font-family: var(--data); font-size: 13px; color: var(--ink-faint); padding-top: 4px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .stop h4 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .05em; font-size: 16px; font-weight: 700; margin: 0 0 6px; }
+  .stop p { margin: 0; font-size: 16px; color: var(--ink-soft); max-width: var(--measure); }
+  .stop .note { font-family: var(--data); font-size: 12.5px; color: var(--ink-faint); margin-top: 8px; }
+
+  .chip {
+    display: inline-block; font-family: var(--sign); text-transform: uppercase;
+    letter-spacing: .09em; font-size: 10.5px; font-weight: 700;
+    padding: 3px 8px; border-radius: 3px; margin-left: 9px; vertical-align: 2px;
+  }
+  .chip.set { background: var(--accent-wash); color: var(--accent); }
+  .chip.gap { background: var(--ochre-wash); color: var(--ochre); }
+  .chip.opt { background: var(--sunk); color: var(--ink-faint); }
+
+  /* ---------------- cards ---------------- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 22px; box-shadow: var(--shadow); }
+  .card.wide { grid-column: 1 / -1; }
+  .card .kick { font-family: var(--sign); text-transform: uppercase; letter-spacing: .13em; font-size: 11px; font-weight: 700; color: var(--accent); margin: 0 0 8px; }
+  .card h3 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .03em; font-size: 21px; font-weight: 700; margin: 0; line-height: 1.1; }
+  .card .addr { margin: 8px 0 0; font-size: 15px; color: var(--ink-soft); }
+  .card dl { margin: 16px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 7px 16px; font-size: 15px; }
+  .card dt { font-family: var(--sign); text-transform: uppercase; letter-spacing: .07em; font-size: 11.5px; font-weight: 700; color: var(--ink-faint); padding-top: 3px; }
+  .card dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .card .fine { margin: 16px 0 0; font-size: 13.5px; color: var(--ink-faint); padding-top: 13px; border-top: 1px solid var(--rule-soft); }
+  code.conf { font-family: var(--data); font-size: 13px; background: var(--sunk); padding: 2px 7px; border-radius: 3px; letter-spacing: .02em; }
+
+  /* ---------------- flight ---------------- */
+  .route { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--rule-soft); }
+  .route + .route { margin-top: 22px; }
+  .route-lbl { font-family: var(--sign); text-transform: uppercase; letter-spacing: .12em; font-size: 11px; font-weight: 700; color: var(--ink-faint); margin-bottom: 12px; }
+  .hop { display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px; align-items: center; }
+  .hop .port { font-family: var(--sign); font-size: 26px; font-weight: 700; letter-spacing: .02em; line-height: 1; }
+  .hop .clk { font-family: var(--data); font-size: 13px; color: var(--ink-soft); margin-top: 5px; font-variant-numeric: tabular-nums; }
+  .hop .to { text-align: right; }
+  .hop .mid { text-align: center; min-width: 92px; }
+  .hop .mid .fl { font-family: var(--data); font-size: 12px; color: var(--ink-faint); }
+  .hop .mid .bar { height: 1px; background: var(--rule); margin: 7px 0; position: relative; }
+  .hop .mid .bar::after {
+    content: ""; position: absolute; right: -1px; top: -2.5px;
+    border-left: 6px solid var(--rule); border-top: 3px solid transparent; border-bottom: 3px solid transparent;
+  }
+  .conn { font-family: var(--data); font-size: 12.5px; color: var(--ink-faint); margin: 12px 0; padding-left: 15px; border-left: 2px dashed var(--rule); }
+  .conn.tight { color: var(--ochre); border-left-color: var(--ochre); font-weight: 600; }
+
+  /* ---------------- the list ---------------- */
+  .lgroup { margin-bottom: 34px; }
+  .lgroup:last-child { margin-bottom: 0; }
+  .lgroup-head { display: flex; align-items: center; gap: 11px; padding-bottom: 9px; margin-bottom: 4px; border-bottom: 2px solid var(--ink); }
+  .lgroup-head svg { width: 21px; height: 21px; flex: none; color: var(--accent); }
+  .lgroup-head h3 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .06em; font-size: 18px; font-weight: 700; margin: 0; }
+  .lgroup-head .ct { margin-left: auto; font-family: var(--data); font-size: 12px; color: var(--ink-faint); }
+
+  .place { display: grid; grid-template-columns: 1fr auto; gap: 8px 18px; align-items: baseline; padding: 12px 0; border-bottom: 1px solid var(--rule-soft); }
+  .place:last-child { border-bottom: 0; }
+  .place .nm { font-family: var(--sign); text-transform: uppercase; letter-spacing: .04em; font-size: 15.5px; font-weight: 700; }
+  .place .kind { font-size: 14.5px; color: var(--ink-soft); }
+  .place .rt { font-family: var(--data); font-size: 13px; color: var(--ink-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .place .rt b { color: var(--ink); font-weight: 700; }
+  .place .why { grid-column: 1 / -1; margin: 2px 0 0; font-size: 14.5px; color: var(--accent); }
+  .place .why::before { content: "→ "; }
+  .place.added { background: var(--ochre-wash); margin: 4px -14px; padding: 14px; border-radius: 3px; border-bottom: 0; }
+  .place.added .why { color: var(--ochre); }
+  .tag-new {
+    display: inline-block; font-family: var(--sign); text-transform: uppercase;
+    letter-spacing: .09em; font-size: 10px; font-weight: 700; padding: 2px 7px;
+    border-radius: 3px; margin-left: 8px; vertical-align: 2px;
+    background: color-mix(in srgb, var(--ochre) 22%, transparent); color: var(--ochre);
+  }
+  .place.pick { background: var(--accent-wash); margin: 4px -14px; padding: 14px; border-radius: 3px; border-bottom: 0; }
+  .tag-pick {
+    display: inline-block; font-family: var(--sign); text-transform: uppercase;
+    letter-spacing: .09em; font-size: 10px; font-weight: 700; padding: 2px 7px;
+    border-radius: 3px; margin-left: 8px; vertical-align: 2px;
+    background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent);
+  }
+
+  /* ---------------- bag box ---------------- */
+  .bagbox {
+    margin-top: 30px; background: var(--panel);
+    border: 1px solid var(--rule); border-left: 4px solid var(--ochre);
+    border-radius: 4px; padding: 24px 26px; box-shadow: var(--shadow);
+  }
+  .bagbox h3 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .05em; font-size: 18px; font-weight: 700; margin: 0 0 10px; }
+  .bagbox > p { margin: 0 0 20px; font-size: 16px; color: var(--ink-soft); max-width: var(--measure); }
+  .bagopt { display: grid; grid-template-columns: auto 1fr; gap: 16px; padding: 15px 0; border-top: 1px solid var(--rule-soft); align-items: start; }
+  .bagopt .ord {
+    font-family: var(--sign); font-size: 15px; font-weight: 700; color: var(--ochre);
+    background: color-mix(in srgb, var(--ochre) 16%, transparent);
+    width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; margin-top: 1px;
+  }
+  .bagopt h4 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .04em; font-size: 15px; font-weight: 700; margin: 0 0 5px; }
+  .bagopt p { margin: 0; font-size: 15px; color: var(--ink-soft); max-width: var(--measure); }
+  .bagopt .tag {
+    font-family: var(--data); font-size: 11.5px; color: var(--ink-faint);
+    display: block; margin-top: 6px;
+  }
+
+  /* ---------------- open-in link ---------------- */
+  .openin {
+    display: inline-flex; align-items: center; gap: 10px; margin-top: 20px;
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .08em;
+    font-size: 13px; font-weight: 700; text-decoration: none;
+    color: var(--accent); background: var(--accent-wash);
+    border: 1.5px solid color-mix(in srgb, var(--accent) 40%, transparent);
+    padding: 11px 18px; border-radius: 4px;
+    transition: background .15s ease, border-color .15s ease;
+  }
+  .openin:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: var(--accent); }
+  .openin svg { width: 17px; height: 17px; flex: none; }
+  .openin .arrow { font-family: var(--data); font-weight: 400; opacity: .7; }
+
+  /* ---------------- mecca ---------------- */
+  .mecca-lead { display: grid; grid-template-columns: 1.35fr 1fr; gap: 28px; align-items: start; }
+  .mecca-lead p { margin: 0 0 16px; font-size: 16.5px; color: var(--ink-soft); }
+  .mecca-lead p:last-child { margin-bottom: 0; }
+  .mecca-lead .pull {
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .03em;
+    font-size: 22px; font-weight: 700; color: var(--ink); line-height: 1.2;
+    border-left: 4px solid var(--accent); padding-left: 18px; margin: 0;
+  }
+  .mecca-lead .pull span { display: block; font-family: var(--read); text-transform: none; letter-spacing: 0; font-size: 15px; font-weight: 400; color: var(--ink-faint); margin-top: 12px; }
+
+  .three { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; margin-top: 30px; }
+  .third { background: var(--panel); border: 1px solid var(--rule); border-top: 3px solid var(--accent); border-radius: 4px; padding: 20px; }
+  .third h4 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .04em; font-size: 16px; font-weight: 700; margin: 0 0 6px; }
+  .third p { margin: 0; font-size: 14.5px; color: var(--ink-soft); }
+
+  .tl { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-top: 30px; position: relative; }
+  .tl::before { content: ""; position: absolute; left: 6%; right: 6%; top: 7px; height: 2px; background: var(--rule); }
+  .tl-pt { text-align: center; position: relative; padding: 0 6px; }
+  .tl-pt .dot { width: 15px; height: 15px; border-radius: 50%; background: var(--ground); border: 3px solid var(--rule); margin: 0 auto 12px; position: relative; }
+  .tl-pt.on .dot { border-color: var(--accent); background: var(--accent); }
+  .tl-pt .yr { font-family: var(--sign); font-size: 19px; font-weight: 700; letter-spacing: .01em; }
+  .tl-pt .ev { font-size: 13.5px; color: var(--ink-soft); margin-top: 4px; }
+
+  .mecca-when {
+    margin-top: 30px; background: var(--accent-wash);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--rule));
+    border-radius: 4px; padding: 22px 24px;
+  }
+  .mecca-when h4 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .05em; font-size: 15px; font-weight: 700; margin: 0 0 10px; color: var(--accent); }
+  .mecca-when p { margin: 0; font-size: 16px; color: var(--ink-soft); max-width: var(--measure); }
+  .hours { display: flex; flex-wrap: wrap; gap: 8px 26px; margin-top: 16px; padding-top: 14px; border-top: 1px solid color-mix(in srgb, var(--accent) 25%, transparent); }
+  .hours div { font-family: var(--data); font-size: 13px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .hours b { font-family: var(--sign); text-transform: uppercase; letter-spacing: .07em; font-size: 11px; color: var(--ink-faint); display: block; font-weight: 700; margin-bottom: 2px; }
+
+  @media (max-width: 720px) {
+    .mecca-lead { grid-template-columns: 1fr; }
+    .tl { grid-template-columns: repeat(2, 1fr); gap: 26px 0; }
+    .tl::before { display: none; }
+  }
+
+  /* ---------------- gaps ---------------- */
+  .gaps { display: grid; gap: 13px; }
+  .gap-row { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: start; padding: 18px 20px; background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; }
+  .gap-row.urgent { border-color: color-mix(in srgb, var(--ochre) 50%, var(--rule)); background: var(--ochre-wash); }
+  .rank {
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .09em;
+    font-size: 10.5px; font-weight: 700; padding: 4px 9px; border-radius: 3px;
+    background: var(--sunk); color: var(--ink-faint); white-space: nowrap; margin-top: 2px;
+  }
+  .gap-row.urgent .rank { background: color-mix(in srgb, var(--ochre) 22%, transparent); color: var(--ochre); }
+  .gap-row h4 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .05em; font-size: 15.5px; font-weight: 700; margin: 0 0 5px; }
+  .gap-row p { margin: 0; font-size: 15.5px; color: var(--ink-soft); max-width: var(--measure); }
+
+  /* ---------------- orientation map ---------------- */
+  .mapbox { background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 8px; box-shadow: var(--shadow); overflow-x: auto; }
+  .mapbox svg { display: block; width: 100%; min-width: 560px; height: auto; }
+  .maplbl { font-family: var(--sign); text-transform: uppercase; letter-spacing: .1em; font-size: 10.5px; font-weight: 700; }
+  .mapname { font-family: var(--sign); text-transform: uppercase; letter-spacing: .04em; font-size: 12.5px; font-weight: 700; }
+  .mapnote { font-family: var(--data); font-size: 10.5px; }
+  .map-cap { margin: 12px 0 0; font-size: 14px; color: var(--ink-faint); }
+
+  /* ---------------- facts ---------------- */
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; margin-top: 34px; }
+  .fact { background: var(--panel); padding: 20px; }
+  .fact .k { font-family: var(--sign); text-transform: uppercase; letter-spacing: .12em; font-size: 10.5px; font-weight: 700; color: var(--ink-faint); margin-bottom: 8px; }
+  .fact .v { font-family: var(--sign); text-transform: uppercase; letter-spacing: .02em; font-size: 20px; font-weight: 700; line-height: 1.1; }
+  .fact .n { font-size: 14.5px; color: var(--ink-soft); margin-top: 6px; }
+
+  /* ---------------- photos ---------------- */
+  .photo-panel {
+    background: var(--panel); border: 1px solid var(--rule); border-left: 4px solid var(--accent);
+    border-radius: 4px; padding: 26px; box-shadow: var(--shadow);
+  }
+  .photo-panel h3 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .05em; font-size: 19px; font-weight: 700; margin: 0 0 12px; }
+  .photo-panel p { margin: 0 0 14px; font-size: 16px; color: var(--ink-soft); max-width: var(--measure); }
+  .photo-panel p:last-child { margin-bottom: 0; }
+  .frames { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 24px 0 0; }
+  .frame {
+    aspect-ratio: 4 / 3; border: 1.5px dashed var(--rule); border-radius: 3px;
+    display: grid; place-items: center; background: var(--sunk);
+    font-family: var(--sign); text-transform: uppercase; letter-spacing: .1em;
+    font-size: 10.5px; font-weight: 700; color: var(--ink-faint); text-align: center; padding: 10px;
+  }
+
+  footer { padding: 44px 0 66px; }
+  footer p { margin: 0 0 10px; font-size: 14.5px; color: var(--ink-faint); max-width: var(--measure); }
+
+  @media (max-width: 600px) {
+    body { font-size: 16px; }
+    .stop { grid-template-columns: 74px 1fr; gap: 14px; }
+    .day-head .lbl { margin-left: 0; width: 100%; }
+    .countdown { display: flex; width: 100%; }
+    .hop .port { font-size: 22px; }
+    .hop .mid { min-width: 70px; }
+    .place { grid-template-columns: 1fr; }
+    .place .rt { grid-row: 1; }
+  }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <g id="g-fork"><path d="M7 3v7a2 2 0 0 0 4 0V3M9 12v9M17 3c-1.7 1-2.5 3-2.5 5.5S15.3 13 17 14v7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <g id="g-beer"><path d="M5 8h10v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8zM15 11h3a2 2 0 0 1 0 6h-3M6 8c0-2 1-3 2-3.5S9 3 10 3s2 .5 2.5 1.5S15 6 15 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <g id="g-glass"><path d="M4 4h16l-8 8zM12 12v8M8 20h8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <g id="g-art"><path d="M4 20V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14M4 20h16M8 20v-6l3-3 3 4 2-2 2 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="8.5" r="1.4" fill="none" stroke="currentColor" stroke-width="1.7"/></g>
+  <g id="g-well"><path d="M12 21s-7-4.4-7-9.4A4.1 4.1 0 0 1 12 8a4.1 4.1 0 0 1 7 3.6c0 5-7 9.4-7 9.4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <g id="g-bike"><circle cx="5.5" cy="17" r="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="18.5" cy="17" r="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M5.5 17l4-8h5l4 8M9.5 9h6M12 17l2.5-8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></g>
+</defs></svg>
+
+<nav>
+  <div class="wrap nav-in">
+    <div class="mark">Bentonville <em>/</em> Sept '26</div>
+    <a href="#route">Route</a>
+    <a href="#booked">Booked</a>
+    <a href="#list">The list</a>
+    <a href="#mecca">Steve's Mecca</a>
+    <a href="#gaps">Gaps</a>
+    <a href="#bearings">Bearings</a>
+    <a href="#photos">Photos</a>
+  </div>
+</nav>
+
+<header>
+  <canvas id="contours" aria-hidden="true"></canvas>
+  <div class="wrap">
+    <div class="stamp">Northwest Arkansas · Long weekend</div>
+    <h1>Bentonville</h1>
+    <p class="h1-sub">Thursday 24 — Sunday 27 September 2026</p>
+    <div class="h1-rule"></div>
+    <div class="roster">
+      <span class="n">James</span>
+      <span class="n">Paul</span>
+      <span class="n">Steve</span>
+      <span class="d">3 nights · basecamp on the Square</span>
+    </div>
+    <div class="countdown">
+      <b id="cd-num">—</b>
+      <span id="cd-txt">counting…</span>
+    </div>
+  </div>
+</header>
+
+<section id="route">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>The route</h2>
+      <p>Two dinners are locked in and the beds are paid for. Everything between them is still soft — which is roughly how a weekend like this should be built.</p>
+    </div>
+
+    <div class="day">
+      <div class="day-head">
+        <h3>Thursday</h3><span class="dt">24 SEP</span><span class="lbl">Getting there</span>
+      </div>
+      <div class="stop">
+        <div class="t">09:55 PT</div>
+        <div>
+          <h4>SFO → XNA via Salt Lake<span class="chip set">Booked</span></h4>
+          <p>Delta 920 then 3620, landing at Northwest Arkansas National at 5:20 in the afternoon. The connection through Salt Lake is a short one.</p>
+          <div class="note">HQ5AYB · 42 min on the ground at SLC</div>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">~18:00 CT</div>
+        <div>
+          <h4>Uber up to Bentonville<span class="chip opt">No booking needed</span></h4>
+          <p>Twenty to thirty minutes north. No hire car this trip — it's Ubers and feet, which for a weekend spent almost entirely inside a few blocks is the cheaper call anyway.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">after 15:00</div>
+        <div>
+          <h4>Check in — Artisan Inn<span class="chip set">Booked</span></h4>
+          <p>The whole place to yourselves, right on the Square and onto the Greenway. Lockbox entry, so arriving after dark is no problem.</p>
+          <div class="note">HMSDZA4DNS · host Connie · stairs to climb</div>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">20:00</div>
+        <div>
+          <h4>Dinner — Bar Cleeta<span class="chip set">Booked</span></h4>
+          <p>Paul squared this away directly with the proprietor: three guests at eight. 110 NW 2nd Street, a couple of minutes off the Square. It does mean the evening starts firm, which puts more weight on that Salt Lake connection holding.</p>
+          <div class="note">Booked by Paul · 479-553-7006 · barcleeta.com</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="day">
+      <div class="day-head">
+        <h3>Friday</h3><span class="dt">25 SEP</span><span class="lbl">Art on the ravine</span>
+      </div>
+      <div class="stop">
+        <div class="t">Morning</div>
+        <div>
+          <h4>Crystal Bridges &amp; the Bachman-Wilson House<span class="chip opt">On the list</span></h4>
+          <p>The permanent collection is free to walk into; headline exhibitions are ticketed separately. The Frank Lloyd Wright house sits on the museum grounds — Paul dug it out for Steve when this trip was first floated in 2024, and it's still on the list two years later.</p>
+          <div class="note">Check what's ticketed nearer the date</div>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">Afternoon</div>
+        <div>
+          <h4>The Momentary — Buckyball<span class="chip opt">On the list</span></h4>
+          <p>Crystal Bridges' contemporary outpost in a converted cheese factory a few minutes south. Buckyball is the light installation, and it reads far better after dark than at noon — worth timing late if you can.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">19:00</div>
+        <div>
+          <h4>Dinner — Conifer<span class="chip set">Booked</span></h4>
+          <p>Table for three in the dining room. Ten minutes on foot from the Square. Worth noting it's the one booked thing that never made the list.</p>
+          <div class="note">TOCK-R-YC6EZHYN · 479-203-5999 · cancel by Thursday</div>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">22:00</div>
+        <div>
+          <h4>Loveless Cocktail Club<span class="chip set">Booked</span></h4>
+          <p>Paul's again — a table for three at ten, which turns Friday into a proper night rather than dinner and bed. 215 NW A Street, the same street as Saturday's dinner, so it's a short walk from Conifer.</p>
+          <div class="note">TOCK-R-HO2UCX75 · 479-553-7098 · booked by Paul</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="day">
+      <div class="day-head">
+        <h3>Saturday</h3><span class="dt">26 SEP</span><span class="lbl">The whole day</span>
+      </div>
+      <div class="stop">
+        <div class="t">Morning</div>
+        <div>
+          <h4>Three e-bikes, delivered<span class="chip set">Booked</span></h4>
+          <p>Done — the Bike Wizard has you down for three full-suspension e-MTBs, one medium and two large, from eight in the morning until seven at night. They come to the house, which matters rather more now there is no car to hang a rack off. Slaughter Pen and Coler both start more or less in town; the Greenway runs past the front door if anyone would rather roll than climb.</p>
+          <div class="note">$410.62 inc. tax · 08:00–19:00 · (479) 974-9492</div>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">Midday</div>
+        <div>
+          <h4>Brewery crawl<span class="chip opt">On the list</span></h4>
+          <p>Four of them made the list: Bentonville Brewing, Bike Rack, Social Project and Stoic Brews. Bike Rack is the one that pairs naturally with a morning on the trails.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">19:00</div>
+        <div>
+          <h4>Dinner — The Preacher's Son<span class="chip set">Booked</span></h4>
+          <p>Three of you, in the restored church. Undercroft is the bar downstairs — also on the list, so have the drink before rather than hunting elsewhere.</p>
+          <div class="note">#138328 · 201 NW A St · (479) 445-6065 · 15 min grace</div>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">Late</div>
+        <div>
+          <h4>Callisto<span class="chip opt">On the list</span></h4>
+          <p>Highest-rated thing on the whole list at 4.9 across 470 reviews. If there's one nightcap on the trip, this is the one that earns it.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="day">
+      <div class="day-head">
+        <h3>Sunday</h3><span class="dt">27 SEP</span><span class="lbl">Sam Walton, then home</span>
+      </div>
+      <div class="stop">
+        <div class="t">by 11:00</div>
+        <div>
+          <h4>Out of the house<span class="chip set">Fixed</span></h4>
+          <p>Checkout is a hard eleven, and with no car there's nowhere to put three sets of luggage. Ask Connie whether bags can stay at the house until the afternoon — it's the single question that decides whether Sunday is relaxed or awkward.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">11:00</div>
+        <div>
+          <h4>Coffee on the Square<span class="chip opt">Idea</span></h4>
+          <p>An hour to fill before the museum opens. The Spark Café is inside the museum building itself, so it's the path of least resistance.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">12:00</div>
+        <div>
+          <h4>The Walmart Museum<span class="chip opt">Steve's pick</span></h4>
+          <p>Opens at noon on a Sunday, which lines up almost suspiciously well with an eleven o'clock checkout. Free, self-guided, on the Square, and reopened in 2025 at more than twice its old size — exhibit gallery, the original 5&amp;10, and a Sam Walton hologram that takes questions. Two hours covers it comfortably.</p>
+          <div class="note">Sun 12:00–18:00 · free · no booking needed</div>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">~14:30</div>
+        <div>
+          <h4>Uber to XNA<span class="chip gap">Order early</span></h4>
+          <p>Half an hour south-west, and no rental desk to queue at — but this is the one ride worth ordering with room to spare. Bentonville is a small market and a Sunday-afternoon airport run is exactly when a car takes a while to turn up.</p>
+        </div>
+      </div>
+      <div class="stop">
+        <div class="t">18:00 CT</div>
+        <div>
+          <h4>XNA → SFO via Salt Lake<span class="chip set">Booked</span></h4>
+          <p>Delta 3620 then 2762. On the ground in San Francisco at 10:15 at night.</p>
+          <div class="note">Be at XNA by 16:30</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bagbox">
+      <h3>Sunday: where the wheelie bags go</h3>
+      <p>Checkout is eleven and the flight is six, with no car boot to hide three bags in. The good news is that Sunday already happens inside two minutes of the Square, so this only needs solving once. Options, best first.</p>
+
+      <div class="bagopt">
+        <div class="ord">1</div>
+        <div>
+          <h4>Ask Connie</h4>
+          <p>Free, and by far the most likely yes. Hosts with lockbox entry are often relaxed about bags sitting in the hall until the afternoon, especially with no same-day turnover. One message settles the whole thing — worth sending before booking anything else.</p>
+          <span class="tag">234-241-2620 · ask now, not on the day</span>
+        </div>
+      </div>
+
+      <div class="bagopt">
+        <div class="ord">2</div>
+        <div>
+          <h4>Stasher or Bounce</h4>
+          <p>App-based bag drop hosted by local shops and hotels — you book online, leave the bags, collect later. Stasher lists Bentonville coverage at a few dollars per bag per day with insurance included. Which venues are actually live changes, so check the app nearer the date rather than assuming.</p>
+          <span class="tag">stasher.com · bounce.com · book the morning of, at the latest</span>
+        </div>
+      </div>
+
+      <div class="bagopt">
+        <div class="ord">3</div>
+        <div>
+          <h4>The 21c Museum Hotel</h4>
+          <p>On the north-east corner of the Square, two minutes from the house, with a bell desk and luggage storage. You won't be guests, so it's a favour rather than a right — but it's also a free public art museum with a restaurant attached, and asking over lunch at The Hive is a much easier conversation than asking cold.</p>
+          <span class="tag">200 NE A Street · worth a call ahead</span>
+        </div>
+      </div>
+
+      <div class="bagopt">
+        <div class="ord">4</div>
+        <div>
+          <h4>Take them with you</h4>
+          <p>The fallback, and not a disaster. The Walmart Museum is free, self-guided and on the Square; the Spark Café inside it is a fine place to sit with bags at your feet. What this rules out is the Momentary and the escape room — both are Ubers, and neither is worth doing with luggage in tow.</p>
+          <span class="tag">Crystal Bridges has free lockers, but they are backpack-sized — call (479) 657-2335 before counting on them</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="booked">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>What's booked</h2>
+      <p>Everything confirmed, with the numbers you'd need if something goes sideways at a counter.</p>
+    </div>
+
+    <div class="cards">
+      <div class="card wide">
+        <p class="kick">Flights · Delta</p>
+        <h3>SFO ⇄ XNA</h3>
+        <dl>
+          <dt>Reference</dt><dd><code class="conf">HQ5AYB</code></dd>
+          <dt>Travelling</dt><dd>James (1 seat)</dd>
+          <dt>Cabin</dt><dd>Economy · seats unassigned</dd>
+        </dl>
+        <div class="route">
+          <div class="route-lbl">Outbound · Thursday 24 September</div>
+          <div class="hop">
+            <div><div class="port">SFO</div><div class="clk">09:55 · San Francisco</div></div>
+            <div class="mid"><div class="fl">DL920</div><div class="bar"></div><div class="fl">1h 55m</div></div>
+            <div class="to"><div class="port">SLC</div><div class="clk">12:50 · Salt Lake</div></div>
+          </div>
+          <div class="conn tight">42 minutes to connect — legal, but there is no slack in it</div>
+          <div class="hop">
+            <div><div class="port">SLC</div><div class="clk">13:32 · Salt Lake</div></div>
+            <div class="mid"><div class="fl">DL3620</div><div class="bar"></div><div class="fl">2h 48m</div></div>
+            <div class="to"><div class="port">XNA</div><div class="clk">17:20 · NW Arkansas</div></div>
+          </div>
+        </div>
+        <div class="route">
+          <div class="route-lbl">Home · Sunday 27 September</div>
+          <div class="hop">
+            <div><div class="port">XNA</div><div class="clk">18:00 · NW Arkansas</div></div>
+            <div class="mid"><div class="fl">DL3620</div><div class="bar"></div><div class="fl">2h 57m</div></div>
+            <div class="to"><div class="port">SLC</div><div class="clk">19:57 · Salt Lake</div></div>
+          </div>
+          <div class="conn">1 hour 8 minutes to connect</div>
+          <div class="hop">
+            <div><div class="port">SLC</div><div class="clk">21:05 · Salt Lake</div></div>
+            <div class="mid"><div class="fl">DL2762</div><div class="bar"></div><div class="fl">2h 10m</div></div>
+            <div class="to"><div class="port">SFO</div><div class="clk">22:15 · San Francisco</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <p class="kick">Beds · Airbnb</p>
+        <h3>Artisan Inn at Bentonville Square</h3>
+        <p class="addr">Entire home, on the Greenway. Hosted by Connie.</p>
+        <dl>
+          <dt>Reference</dt><dd><code class="conf">HMSDZA4DNS</code></dd>
+          <dt>In</dt><dd>Thu 24 Sep, after 3 PM</dd>
+          <dt>Out</dt><dd>Sun 27 Sep, by 11 AM</dd>
+          <dt>Guests</dt><dd>3 adults</dd>
+          <dt>Host</dt><dd>234-241-2620</dd>
+          <dt>Total</dt><dd>$1,165.15</dd>
+        </dl>
+        <p class="fine">Balance charged 11 September. Free cancellation until 3 PM on 19 September, partial refund after that. Self check-in by lockbox. Six guests maximum, and there are stairs.</p>
+      </div>
+
+      <div class="card">
+        <p class="kick">Friday dinner</p>
+        <h3>Conifer</h3>
+        <p class="addr">321 SE 2nd Street, Suite 100, Bentonville</p>
+        <dl>
+          <dt>When</dt><dd>Fri 25 Sep, 7:00 PM</dd>
+          <dt>Party</dt><dd>3 · dining room</dd>
+          <dt>Reference</dt><dd><code class="conf">TOCK-R-YC6EZHYN</code></dd>
+          <dt>Phone</dt><dd>479-203-5999</dd>
+        </dl>
+        <p class="fine">Cancellable up to a day before. After that it's $25 a head for a no-show.</p>
+      </div>
+
+      <div class="card">
+        <p class="kick">Saturday dinner</p>
+        <h3>The Preacher's Son</h3>
+        <p class="addr">201 NW A Street, Bentonville</p>
+        <dl>
+          <dt>When</dt><dd>Sat 26 Sep, 7:00 PM</dd>
+          <dt>Party</dt><dd>3</dd>
+          <dt>Reference</dt><dd><code class="conf">138328</code></dd>
+          <dt>Phone</dt><dd>(479) 445-6065</dd>
+        </dl>
+        <p class="fine">Fifteen minute grace period — ring them if you'll be later than that.</p>
+      </div>
+
+      <div class="card">
+        <p class="kick">Thursday dinner · booked by Paul</p>
+        <h3>Bar Cleeta</h3>
+        <p class="addr">110 NW 2nd Street #110, Bentonville</p>
+        <dl>
+          <dt>When</dt><dd>Thu 24 Sep, 8:00 PM</dd>
+          <dt>Party</dt><dd>3</dd>
+          <dt>Held by</dt><dd>Paul Ranger</dd>
+          <dt>Phone</dt><dd>479-553-7006</dd>
+        </dl>
+        <p class="fine">Arranged by email with the proprietor rather than a booking system, so there's no reference number — the restaurant has it under Paul's name.</p>
+      </div>
+
+      <div class="card">
+        <p class="kick">Friday nightcap · booked by Paul</p>
+        <h3>Loveless Cocktail Club</h3>
+        <p class="addr">215 NW A Street Unit 170, Bentonville</p>
+        <dl>
+          <dt>When</dt><dd>Fri 25 Sep, 10:00 PM</dd>
+          <dt>Party</dt><dd>3 · table</dd>
+          <dt>Reference</dt><dd><code class="conf">TOCK-R-HO2UCX75</code></dd>
+          <dt>Held by</dt><dd>Paul Ranger</dd>
+          <dt>Phone</dt><dd>479-553-7098</dd>
+        </dl>
+        <p class="fine">Cancellable any time, though they ask for 24 hours' notice. The 90-minute limit they mention applies to parties of two, not three.</p>
+      </div>
+
+      <div class="card">
+        <p class="kick">Saturday · bikes</p>
+        <h3>The Bike Wizard of Oz</h3>
+        <p class="addr">Mobile e-MTB rental — delivered to the house</p>
+        <dl>
+          <dt>When</dt><dd>Sat 26 Sep, 08:00–19:00</dd>
+          <dt>Bikes</dt><dd>3 · one M, two L</dd>
+          <dt>Rate</dt><dd>$125.00 each</dd>
+          <dt>Total</dt><dd>$410.62 inc. tax</dd>
+          <dt>Phone</dt><dd>(479) 974-9492</dd>
+        </dl>
+        <p class="fine">Free delivery and collection across Bentonville. They'll meet you at Coler or Slaughter Pen instead if you'd rather start from a trailhead — worth a call the day before to say which.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="list">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>The list</h2>
+      <p>Sixteen places off the shared <em>Bentonville Boys</em> map, with the ratings as saved. Two are already booked; the rest are the raw material for the open slots. Additions are marked where they aren't on the map.</p>
+      <a class="openin" href="https://maps.app.goo.gl/7bdWGTrgkcuX9uYe6" target="_blank" rel="noopener noreferrer">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 21s-7-5.6-7-11a7 7 0 1 1 14 0c0 5.4-7 11-7 11z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+          <circle cx="12" cy="10" r="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        </svg>
+        Open the list in Google Maps
+        <span class="arrow">↗</span>
+      </a>
+    </div>
+
+    <div class="lgroup">
+      <div class="lgroup-head">
+        <svg viewBox="0 0 24 24"><use href="#g-fork"/></svg>
+        <h3>Food</h3><span class="ct">2 places + 1</span>
+      </div>
+      <div class="place pick">
+        <div>
+          <div class="nm">Bar Cleeta<span class="tag-pick">Paul's booking</span></div>
+          <div class="kind">110 NW 2nd St · 479-553-7006</div>
+        </div>
+        <div class="rt">—</div>
+        <p class="why">Booked — Thursday, 8 PM, party of three</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">The HUB Bike Lounge</div><div class="kind">Restaurant · $20–30</div></div>
+        <div class="rt"><b>4.6</b> · 186</div>
+        <p class="why">Still unclaimed — the spare option for a loose lunch</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">The Preacher's Son</div><div class="kind">Eclectic · $40–100</div></div>
+        <div class="rt"><b>4.5</b> · 1,090</div>
+        <p class="why">Booked — Saturday, 7 PM</p>
+      </div>
+    </div>
+
+    <div class="lgroup">
+      <div class="lgroup-head">
+        <svg viewBox="0 0 24 24"><use href="#g-beer"/></svg>
+        <h3>Breweries</h3><span class="ct">4 places</span>
+      </div>
+      <div class="place">
+        <div><div class="nm">Bentonville Brewing Company</div><div class="kind">Brewery</div></div>
+        <div class="rt"><b>4.8</b> · 1,137</div>
+      </div>
+      <div class="place">
+        <div><div class="nm">Stoic Brews Alternative</div><div class="kind">Brewpub · $10–20</div></div>
+        <div class="rt"><b>4.8</b> · 110</div>
+      </div>
+      <div class="place">
+        <div><div class="nm">Social Project Brewing Co.</div><div class="kind">Brewery</div></div>
+        <div class="rt"><b>4.7</b> · 152</div>
+      </div>
+      <div class="place">
+        <div><div class="nm">Bike Rack Brewing Co.</div><div class="kind">Brewery</div></div>
+        <div class="rt"><b>4.7</b> · 414</div>
+        <p class="why">The natural stop straight off the trails</p>
+      </div>
+    </div>
+
+    <div class="lgroup">
+      <div class="lgroup-head">
+        <svg viewBox="0 0 24 24"><use href="#g-glass"/></svg>
+        <h3>Bars</h3><span class="ct">3 places + 1</span>
+      </div>
+      <div class="place pick">
+        <div>
+          <div class="nm">Loveless Cocktail Club<span class="tag-pick">Paul's booking</span></div>
+          <div class="kind">215 NW A St · 479-553-7098</div>
+        </div>
+        <div class="rt">—</div>
+        <p class="why">Booked — Friday, 10 PM, table for three</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">Callisto Cocktail Bar</div><div class="kind">Bar · $30–80</div></div>
+        <div class="rt"><b>4.9</b> · 470</div>
+        <p class="why">Highest-rated thing on the list — save it for Saturday</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">Undercroft</div><div class="kind">Bar · $20–30</div></div>
+        <div class="rt"><b>4.3</b> · 286</div>
+        <p class="why">Downstairs at The Preacher's Son — drink before Saturday dinner</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">The Barber</div><div class="kind">Bar · $10–20</div></div>
+        <div class="rt"><b>3.2</b> · 121</div>
+        <p class="why">The weak link — 3.2 is well below everything else here</p>
+      </div>
+    </div>
+
+    <div class="lgroup">
+      <div class="lgroup-head">
+        <svg viewBox="0 0 24 24"><use href="#g-art"/></svg>
+        <h3>Arts &amp; culture</h3><span class="ct">2 places + 1</span>
+      </div>
+      <div class="place pick">
+        <div>
+          <div class="nm">The Walmart Museum<span class="tag-pick">Steve's pick</span></div>
+          <div class="kind">Museum · on the Square · free admission</div>
+        </div>
+        <div class="rt">—</div>
+        <p class="why">Reopened in 2025 after a two-year rebuild — more than double the old size, a Sam Walton hologram you can put questions to, and the original Walton's 5&amp;10 downstairs. Sunday hours are noon–6, which is exactly the shape of the gap after checkout.</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">Buckyball at The Momentary</div><div class="kind">Museum installation</div></div>
+        <div class="rt"><b>4.7</b> · 357</div>
+        <p class="why">Better after dark — time Friday accordingly</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">Bachman-Wilson House</div><div class="kind">Frank Lloyd Wright · landmark</div></div>
+        <div class="rt"><b>4.7</b> · 423</div>
+        <p class="why">On the Crystal Bridges grounds — Paul's original pitch to Steve</p>
+      </div>
+    </div>
+
+    <div class="lgroup">
+      <div class="lgroup-head">
+        <svg viewBox="0 0 24 24"><use href="#g-well"/></svg>
+        <h3>Activities</h3><span class="ct">3 places</span>
+      </div>
+      <div class="place">
+        <div><div class="nm">NWA Escape Room</div><div class="kind">Escape room</div></div>
+        <div class="rt"><b>4.7</b> · 345</div>
+        <p class="why">The obvious answer to Sunday's dead five hours</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">Innova Collective</div><div class="kind">Wellness centre</div></div>
+        <div class="rt"><b>5.0</b> · 9</div>
+      </div>
+      <div class="place">
+        <div><div class="nm">san studio bentonville</div><div class="kind">Pilates studio</div></div>
+        <div class="rt"><b>5.0</b> · 38</div>
+      </div>
+    </div>
+
+    <div class="lgroup">
+      <div class="lgroup-head">
+        <svg viewBox="0 0 24 24"><use href="#g-bike"/></svg>
+        <h3>Outdoors &amp; getting around</h3><span class="ct">2 places + 1</span>
+      </div>
+      <div class="place added">
+        <div>
+          <div class="nm">The Bike Wizard of Oz<span class="tag-new">Not on the map</span></div>
+          <div class="kind">Mobile e-MTB rental · (479) 974-9492 · bikewizardofoz.com</div>
+        </div>
+        <div class="rt">—</div>
+        <p class="why">Booked — three bikes, Saturday 8 to 7, delivered to the house</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">Phat Tire Rental Shop</div><div class="kind">Bicycle rental</div></div>
+        <div class="rt"><b>4.5</b> · 64</div>
+        <p class="why">No longer needed, now the Wizard is confirmed</p>
+      </div>
+      <div class="place">
+        <div><div class="nm">Razorback Greenway — Mile 35</div><div class="kind">Hiking &amp; riding</div></div>
+        <div class="rt">—</div>
+        <p class="why">Runs past the front door</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="mecca">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Steve's Mecca</h2>
+      <p>The Walmart Museum. Top of Steve's list, and — inconveniently for anyone hoping to mock it — genuinely the right call.</p>
+    </div>
+
+    <div class="mecca-lead">
+      <div>
+        <p>Three men fly to Arkansas and one of them wants to see where Sam Walton sold his first pair of socks. It is exactly the sort of thing a weekend like this exists to indulge, and it would be an easy target if the museum hadn't just spent two years and a great deal of money making itself worth the trip.</p>
+        <p>It closed in 2022, moved to a temporary space, and reopened on the Square in early 2025 at more than double its old size. The building itself is the point: the Terry Block building of 1888, housing the five-and-dime Walton opened in 1950. The rebuild added a second floor, a third-floor space overlooking the Square, interactive exhibits, and a hologram of Walton that answers questions put to it.</p>
+        <p>The construction was managed almost entirely behind a replica facade — cranes assembled and taken down overnight — so that daily life on the Square never noticed. Which is, whatever you think of the company, a fairly Walmart way to run a building site.</p>
+      </div>
+      <p class="pull">Free, self-guided, and open until ten on a Saturday night.
+        <span>No ticket, no booking, no queue to plan around. The only constraint is Sunday's noon opening, and that happens to be the one that suits.</span>
+      </p>
+    </div>
+
+    <div class="three">
+      <div class="third">
+        <h4>The exhibit gallery</h4>
+        <p>The main event, and the bit that doubled in size. Interactive displays and the Walton hologram.</p>
+      </div>
+      <div class="third">
+        <h4>Walton's 5&amp;10</h4>
+        <p>The original store, downstairs, restored. This is the actual room the whole thing started in.</p>
+      </div>
+      <div class="third">
+        <h4>The Spark Café</h4>
+        <p>Soda fountain in the building. Convenient, given you'll be killing an hour before it opens on Sunday.</p>
+      </div>
+    </div>
+
+    <div class="tl">
+      <div class="tl-pt"><div class="dot"></div><div class="yr">1888</div><div class="ev">Terry Block building goes up on the Square</div></div>
+      <div class="tl-pt"><div class="dot"></div><div class="yr">1950</div><div class="ev">Sam Walton opens Walton's 5&amp;10 in it</div></div>
+      <div class="tl-pt"><div class="dot"></div><div class="yr">2022</div><div class="ev">Closes for a full rebuild, moves to a temporary space</div></div>
+      <div class="tl-pt on"><div class="dot"></div><div class="yr">2025</div><div class="ev">Reopens at more than twice the size</div></div>
+    </div>
+
+    <div class="mecca-when">
+      <h4>When to go</h4>
+      <p>Sunday at noon, straight after checkout. It opens exactly when you need somewhere to be, it's a two-minute walk from where the car will be parked, and two hours in it still leaves a comfortable run at the 6 PM flight. If Steve can't wait that long, Friday and Saturday both run late.</p>
+      <div class="hours">
+        <div><b>Mon–Thu</b>10:00 – 21:00</div>
+        <div><b>Fri &amp; Sat</b>10:00 – 22:00</div>
+        <div><b>Sunday</b>12:00 – 18:00</div>
+        <div><b>Admission</b>Free</div>
+        <div><b>Where</b>On the Square</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="gaps">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Gaps</h2>
+      <p>Two weeks out and most of this has closed — bikes, Thursday dinner and Friday's nightcap are all held, and dropping the hire car took the biggest item off the list entirely. What's left, worst first.</p>
+    </div>
+    <div class="gaps">
+
+      <div class="gap-row urgent">
+        <div class="rank">Ask Connie</div>
+        <div>
+          <h4>Where the bags go on Sunday</h4>
+          <p>Checkout is eleven, the flight is six, and there's no boot to throw three bags into. Four ways out of it are set out under Sunday above, but they all start with the same free move: message Connie and ask whether bags can stay past checkout. Everything else is contingency.</p>
+        </div>
+      </div>
+
+      <div class="gap-row urgent">
+        <div class="rank">Do first</div>
+        <div>
+          <h4>A plan B for Salt Lake</h4>
+          <p>Forty-two minutes is a legal connection and nothing more, and it now has a dinner riding on it. If the San Francisco leg pushes back at all you get rebooked onto a later Salt Lake–XNA flight and the eight o'clock at Bar Cleeta goes with it. Worth knowing what else Delta runs into XNA that afternoon — and worth having Paul's number to hand so someone can move the table rather than lose it.</p>
+        </div>
+      </div>
+
+      <div class="gap-row">
+        <div class="rank">Optional</div>
+        <div>
+          <h4>The escape room, if you still want it</h4>
+          <p>Sunday no longer needs rescuing — the Walmart Museum is free, opens at noon and needs no booking. The escape room is now a want rather than a fix, and it runs on fixed hourly slots that sell out at weekends, so it only works if someone books it in advance.</p>
+        </div>
+      </div>
+
+      <div class="gap-row">
+        <div class="rank">Check</div>
+        <div>
+          <h4>Whether Crystal Bridges has a ticketed show</h4>
+          <p>Walking into the permanent collection is free, and the Bachman-Wilson House is on the grounds — but whatever headline exhibition is running in September will be ticketed and can sell out.</p>
+        </div>
+      </div>
+
+      <div class="gap-row">
+        <div class="rank">Confirm</div>
+        <div>
+          <h4>When Paul and Steve actually land</h4>
+          <p>Only James's booking is in this inbox. Everything on Thursday hangs on the latest of the three arrivals, so pin that down before booking a table around it.</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section id="bearings">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Bearings</h2>
+      <p>Roughly how the weekend sits around the Square. Schematic, not to scale — for a sense of what's walkable and what needs the car.</p>
+    </div>
+
+    <div class="mapbox">
+      <svg viewBox="0 0 800 470" role="img" aria-label="Schematic diagram showing Bentonville Square at the centre, with Crystal Bridges and the trails to the north and east, the Momentary to the south, and the airport off to the south-west.">
+        <!-- greenway -->
+        <path d="M300 20 C 340 110, 330 180, 372 232 C 415 285, 430 350, 415 455"
+              fill="none" stroke="var(--accent)" stroke-width="3" stroke-dasharray="1 7"
+              stroke-linecap="round" opacity=".75"/>
+        <text class="mapnote" x="288" y="46" fill="var(--accent)" text-anchor="end">Razorback</text>
+        <text class="mapnote" x="288" y="60" fill="var(--accent)" text-anchor="end">Greenway</text>
+
+        <!-- trail areas -->
+        <path d="M120 60 q 55 -22 105 6 q 30 40 -12 74 q -70 26 -104 -18 z"
+              fill="var(--accent)" opacity=".13"/>
+        <text class="maplbl" x="172" y="108" fill="var(--accent)" text-anchor="middle">Coler</text>
+        <path d="M470 34 q 78 -14 118 26 q 16 46 -40 62 q -80 12 -100 -34 z"
+              fill="var(--accent)" opacity=".13"/>
+        <text class="maplbl" x="529" y="90" fill="var(--accent)" text-anchor="middle">Slaughter Pen</text>
+
+        <!-- connector: square to crystal bridges -->
+        <path d="M392 226 L 556 168" fill="none" stroke="var(--ink-faint)" stroke-width="1.5" stroke-dasharray="4 5"/>
+        <text class="mapnote" x="474" y="186" fill="var(--ink-faint)" text-anchor="middle">~15 min walk</text>
+
+        <!-- connector: square to momentary -->
+        <path d="M382 250 L 432 372" fill="none" stroke="var(--ink-faint)" stroke-width="1.5" stroke-dasharray="4 5"/>
+        <text class="mapnote" x="382" y="322" fill="var(--ink-faint)" text-anchor="end">Uber or ride</text>
+
+        <!-- the square -->
+        <rect x="352" y="212" width="40" height="28" rx="2" fill="var(--accent)"/>
+        <text class="mapname" x="372" y="266" fill="var(--ink)" text-anchor="middle">The Square</text>
+        <text class="mapnote" x="372" y="281" fill="var(--ink-faint)" text-anchor="middle">basecamp · Artisan Inn</text>
+
+        <!-- walmart museum -->
+        <circle cx="344" cy="178" r="5" fill="var(--ink)"/>
+        <text class="mapname" x="356" y="174" fill="var(--ink)">Walmart Museum</text>
+        <text class="mapnote" x="356" y="188" fill="var(--ink-faint)">on the Square · free · Sun 12–6</text>
+
+        <!-- preacher's son -->
+        <circle cx="286" cy="196" r="5" fill="var(--ink)"/>
+        <text class="mapname" x="274" y="192" fill="var(--ink)" text-anchor="end">Preacher's Son</text>
+        <text class="mapnote" x="274" y="206" fill="var(--ink-faint)" text-anchor="end">+ Undercroft &amp; Loveless · NW A St</text>
+
+        <!-- bar cleeta -->
+        <circle cx="300" cy="242" r="5" fill="var(--ink)"/>
+        <text class="mapname" x="288" y="238" fill="var(--ink)" text-anchor="end">Bar Cleeta</text>
+        <text class="mapnote" x="288" y="252" fill="var(--ink-faint)" text-anchor="end">Thu · NW 2nd St</text>
+
+        <!-- conifer -->
+        <circle cx="446" cy="278" r="5" fill="var(--ink)"/>
+        <text class="mapname" x="458" y="276" fill="var(--ink)">Conifer</text>
+        <text class="mapnote" x="458" y="290" fill="var(--ink-faint)">10 min walk</text>
+
+        <!-- crystal bridges -->
+        <circle cx="562" cy="166" r="7" fill="none" stroke="var(--ink)" stroke-width="2.5"/>
+        <text class="mapname" x="576" y="162" fill="var(--ink)">Crystal Bridges</text>
+        <text class="mapnote" x="576" y="176" fill="var(--ink-faint)">Bachman-Wilson House</text>
+
+        <!-- momentary -->
+        <circle cx="438" cy="384" r="7" fill="none" stroke="var(--ink)" stroke-width="2.5"/>
+        <text class="mapname" x="452" y="380" fill="var(--ink)">The Momentary</text>
+        <text class="mapnote" x="452" y="394" fill="var(--ink-faint)">Buckyball · after dark</text>
+
+        <!-- airport -->
+        <path d="M96 392 l 26 -9 l -7 9 l 7 9 z" fill="var(--ochre)"/>
+        <text class="mapname" x="96" y="424" fill="var(--ochre)">XNA</text>
+        <text class="mapnote" x="96" y="438" fill="var(--ink-faint)">20–30 min south-west</text>
+        <path d="M136 392 L 344 300" fill="none" stroke="var(--ochre)" stroke-width="1.5" stroke-dasharray="4 5"/>
+
+        <!-- compass -->
+        <g transform="translate(736 400)">
+          <circle r="24" fill="none" stroke="var(--rule)" stroke-width="1.5"/>
+          <path d="M0 -17 L 5 3 L 0 -1 L -5 3 Z" fill="var(--ink)"/>
+          <text class="mapnote" x="0" y="-27" fill="var(--ink-faint)" text-anchor="middle">N</text>
+        </g>
+      </svg>
+    </div>
+    <p class="map-cap">Everything with a filled dot is a fifteen-minute walk or less from the front door — which is most of the weekend. The two hollow rings and the escape room are the Uber jobs, along with both airport runs. For anything you actually need to navigate to, use the real map:</p>
+    <a class="openin" href="https://maps.app.goo.gl/7bdWGTrgkcuX9uYe6" target="_blank" rel="noopener noreferrer">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 21s-7-5.6-7-11a7 7 0 1 1 14 0c0 5.4-7 11-7 11z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        <circle cx="12" cy="10" r="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      </svg>
+      Bentonville Boys on Google Maps
+      <span class="arrow">↗</span>
+    </a>
+
+    <div class="facts">
+      <div class="fact"><div class="k">Airport</div><div class="v">XNA</div><div class="n">Northwest Arkansas National, twenty to thirty minutes south of town</div></div>
+      <div class="fact"><div class="k">Clocks</div><div class="v">Central</div><div class="n">Two hours ahead of San Francisco</div></div>
+      <div class="fact"><div class="k">Basecamp</div><div class="v">The Square</div><div class="n">Walkable to dinner, and straight onto the Greenway</div></div>
+      <div class="fact"><div class="k">Late September</div><div class="v">Shoulder</div><div class="n">Mild days, cool evenings — bring a layer for sitting outside</div></div>
+      <div class="fact"><div class="k">Host</div><div class="v">Connie</div><div class="n">234-241-2620 · lockbox code comes from her</div></div>
+      <div class="fact"><div class="k">Last free cancel</div><div class="v">19 Sept</div><div class="n">Airbnb, 3 PM. After that it's partial refund only</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="photos">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Photos</h2>
+      <p>A place for the pictures — with one honest caveat about how they get here.</p>
+    </div>
+
+    <div class="photo-panel">
+      <h3>This page can't take uploads</h3>
+      <p>A published page like this one is served as a fixed file. It has no storage behind it, so there's nowhere for a photo to go and no way for something Steve uploads to reach Paul. Anything that looked like an upload button would quietly save into whichever phone pressed it and vanish on the next refresh.</p>
+      <p><strong>During the trip:</strong> make a shared album — Google Photos or iCloud — and drop the link in the group thread. Everyone contributes from their own phone, nobody needs this page, and it keeps working long after the weekend.</p>
+      <p><strong>Before the trip:</strong> send photos over and they get embedded here properly, in the frames below. The page redeploys to the same address, so the link never changes.</p>
+      <div class="frames">
+        <div class="frame">The Square</div>
+        <div class="frame">The house</div>
+        <div class="frame">Crystal Bridges</div>
+        <div class="frame">The trails</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>Bookings assembled from confirmation emails — flights, the house, Conifer and The Preacher's Son are all as booked, and the references above match the originals.</p>
+    <p>The sixteen places come from the shared <em>Bentonville Boys</em> map, ratings as saved there. Opening hours, ticketing and availability are worth checking before building a day around any of them.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  /* ---------- countdown ---------- */
+  var departure = new Date("2026-09-24T09:55:00-07:00");
+  var numEl = document.getElementById("cd-num");
+  var txtEl = document.getElementById("cd-txt");
+
+  function tick() {
+    var ms = departure - new Date();
+    if (ms <= 0) {
+      numEl.textContent = "—";
+      txtEl.textContent = "Wheels up. Have a good one.";
+      return;
+    }
+    var days = Math.floor(ms / 86400000);
+    var hours = Math.floor((ms % 86400000) / 3600000);
+    if (days > 0) {
+      numEl.textContent = days;
+      txtEl.textContent = (days === 1 ? "day" : "days") + " until wheels up, give or take "
+        + hours + (hours === 1 ? " hour" : " hours");
+    } else {
+      numEl.textContent = hours;
+      txtEl.textContent = (hours === 1 ? "hour" : "hours") + " until wheels up";
+    }
+  }
+  tick();
+  setInterval(tick, 60000);
+
+  /* ---------- contour lines ---------- */
+  var cv = document.getElementById("contours");
+  if (!cv || !cv.getContext) return;
+  var ctx = cv.getContext("2d");
+
+  function ridge(x, seed) {
+    return Math.sin(x * 0.9 + seed) * 0.55
+         + Math.sin(x * 2.1 + seed * 1.7) * 0.26
+         + Math.sin(x * 4.3 + seed * 0.6) * 0.12
+         + Math.sin(x * 8.1 + seed * 2.3) * 0.05;
+  }
+
+  function draw() {
+    var host = cv.parentElement;
+    var w = host.offsetWidth, h = host.offsetHeight;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    cv.width = w * dpr; cv.height = h * dpr;
+    cv.style.width = w + "px"; cv.style.height = h + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    var stroke = getComputedStyle(document.documentElement)
+      .getPropertyValue("--ink-faint").trim() || "#7b8479";
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1;
+
+    var lines = 26;
+    for (var i = 0; i < lines; i++) {
+      var t = i / (lines - 1);
+      var baseY = h * (0.06 + Math.pow(t, 1.35) * 1.02);
+      var amp = h * (0.16 + t * 0.10);
+      ctx.globalAlpha = 0.05 + (1 - t) * 0.16;
+      ctx.beginPath();
+      for (var px = -20; px <= w + 20; px += 5) {
+        var nx = px / w * 3.4;
+        var y = baseY + ridge(nx, i * 0.42) * amp;
+        if (px === -20) ctx.moveTo(px, y); else ctx.lineTo(px, y);
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  draw();
+  var t;
+  window.addEventListener("resize", function () {
+    clearTimeout(t);
+    t = setTimeout(draw, 150);
+  });
+  if (window.matchMedia) {
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (mq.addEventListener) mq.addEventListener("change", function () { setTimeout(draw, 50); });
+  }
+})();
+</script>
+</body>
+</html>
