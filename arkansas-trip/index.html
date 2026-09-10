@@ -240,6 +240,27 @@
     background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent);
   }
 
+  /* ---------------- bag box ---------------- */
+  .bagbox {
+    margin-top: 30px; background: var(--panel);
+    border: 1px solid var(--rule); border-left: 4px solid var(--ochre);
+    border-radius: 4px; padding: 24px 26px; box-shadow: var(--shadow);
+  }
+  .bagbox h3 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .05em; font-size: 18px; font-weight: 700; margin: 0 0 10px; }
+  .bagbox > p { margin: 0 0 20px; font-size: 16px; color: var(--ink-soft); max-width: var(--measure); }
+  .bagopt { display: grid; grid-template-columns: auto 1fr; gap: 16px; padding: 15px 0; border-top: 1px solid var(--rule-soft); align-items: start; }
+  .bagopt .ord {
+    font-family: var(--sign); font-size: 15px; font-weight: 700; color: var(--ochre);
+    background: color-mix(in srgb, var(--ochre) 16%, transparent);
+    width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; margin-top: 1px;
+  }
+  .bagopt h4 { font-family: var(--sign); text-transform: uppercase; letter-spacing: .04em; font-size: 15px; font-weight: 700; margin: 0 0 5px; }
+  .bagopt p { margin: 0; font-size: 15px; color: var(--ink-soft); max-width: var(--measure); }
+  .bagopt .tag {
+    font-family: var(--data); font-size: 11.5px; color: var(--ink-faint);
+    display: block; margin-top: 6px;
+  }
+
   /* ---------------- open-in link ---------------- */
   .openin {
     display: inline-flex; align-items: center; gap: 10px; margin-top: 20px;
@@ -552,6 +573,47 @@
           <h4>XNA → SFO via Salt Lake<span class="chip set">Booked</span></h4>
           <p>Delta 3620 then 2762. On the ground in San Francisco at 10:15 at night.</p>
           <div class="note">Be at XNA by 16:30</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bagbox">
+      <h3>Sunday: where the wheelie bags go</h3>
+      <p>Checkout is eleven and the flight is six, with no car boot to hide three bags in. The good news is that Sunday already happens inside two minutes of the Square, so this only needs solving once. Options, best first.</p>
+
+      <div class="bagopt">
+        <div class="ord">1</div>
+        <div>
+          <h4>Ask Connie</h4>
+          <p>Free, and by far the most likely yes. Hosts with lockbox entry are often relaxed about bags sitting in the hall until the afternoon, especially with no same-day turnover. One message settles the whole thing — worth sending before booking anything else.</p>
+          <span class="tag">234-241-2620 · ask now, not on the day</span>
+        </div>
+      </div>
+
+      <div class="bagopt">
+        <div class="ord">2</div>
+        <div>
+          <h4>Stasher or Bounce</h4>
+          <p>App-based bag drop hosted by local shops and hotels — you book online, leave the bags, collect later. Stasher lists Bentonville coverage at a few dollars per bag per day with insurance included. Which venues are actually live changes, so check the app nearer the date rather than assuming.</p>
+          <span class="tag">stasher.com · bounce.com · book the morning of, at the latest</span>
+        </div>
+      </div>
+
+      <div class="bagopt">
+        <div class="ord">3</div>
+        <div>
+          <h4>The 21c Museum Hotel</h4>
+          <p>On the north-east corner of the Square, two minutes from the house, with a bell desk and luggage storage. You won't be guests, so it's a favour rather than a right — but it's also a free public art museum with a restaurant attached, and asking over lunch at The Hive is a much easier conversation than asking cold.</p>
+          <span class="tag">200 NE A Street · worth a call ahead</span>
+        </div>
+      </div>
+
+      <div class="bagopt">
+        <div class="ord">4</div>
+        <div>
+          <h4>Take them with you</h4>
+          <p>The fallback, and not a disaster. The Walmart Museum is free, self-guided and on the Square; the Spark Café inside it is a fine place to sit with bags at your feet. What this rules out is the Momentary and the escape room — both are Ubers, and neither is worth doing with luggage in tow.</p>
+          <span class="tag">Crystal Bridges has free lockers, but they are backpack-sized — call (479) 657-2335 before counting on them</span>
         </div>
       </div>
     </div>
@@ -921,7 +983,7 @@
         <div class="rank">Ask Connie</div>
         <div>
           <h4>Where the bags go on Sunday</h4>
-          <p>Checkout is eleven, the flight is six, and without a car there's no boot to throw three bags into. Everything else about Sunday works beautifully — the museum opens at noon two minutes away — but only if the luggage is somewhere. One message to the host asking whether bags can stay past checkout settles it. If the answer is no, the fallback is an Uber straight to XNA after the museum and a long sit airside.</p>
+          <p>Checkout is eleven, the flight is six, and there's no boot to throw three bags into. Four ways out of it are set out under Sunday above, but they all start with the same free move: message Connie and ask whether bags can stay past checkout. Everything else is contingency.</p>
         </div>
       </div>
 
